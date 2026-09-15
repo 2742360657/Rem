@@ -75,6 +75,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     private val retentionDays = MutableStateFlow(preferences.getInt("trash_retention_days", 30))
     private val _organizationPlan = MutableStateFlow<OrganizationPlan?>(null)
     val organizationPlan: StateFlow<OrganizationPlan?> = _organizationPlan
+    private val _duplicateGroups = MutableStateFlow<List<List<MediaItem>>>(emptyList())
+    val duplicateGroups: StateFlow<List<List<MediaItem>>> = _duplicateGroups
 
     val uiState: StateFlow<GalleryUiState> = combine(
         repository.libraries,
@@ -124,8 +126,10 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 val library = repository.attach(uri, suggestedName)
                 activeLibraryId.value = library.libraryId
                 screen.value = AppScreen.INBOX
+                val recovered = repository.recoverInterruptedTransactions(library.libraryId)
+                if (recovered > 0) message.value = "已恢复 $recovered 个未完成整理事务"
                 if (autoScan.value) scan(library.libraryId)
-                else message.value = "已接入 ${library.name}"
+                else if (recovered == 0) message.value = "已接入 ${library.name}"
             }.onFailure(::showError)
         }
     }
@@ -321,6 +325,52 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 message.value = "已导入 ${result.imported} 项，跳过 ${result.skipped} 项" +
                     if (result.warnings.isEmpty()) "" else "，${result.warnings.size} 条警告"
             }.onFailure(::showError)
+        }
+    }
+
+    fun deriveImage(item: MediaItem) {
+        viewModelScope.launch {
+            runCatching {
+                val target = repository.deriveImage(item.id)
+                repository.scan(item.libraryId)
+                target
+            }.onSuccess { message.value = "已复制派生为 $it" }
+                .onFailure(::showError)
+        }
+    }
+
+    fun derivePage(item: MediaItem, pageNumber: Int) {
+        viewModelScope.launch {
+            runCatching {
+                val target = repository.derivePage(item.id, pageNumber - 1)
+                repository.scan(item.libraryId)
+                target
+            }.onSuccess { message.value = "已复制页面为 $it" }
+                .onFailure(::showError)
+        }
+    }
+
+    fun createImageSet(itemIds: List<String>, title: String) {
+        val libraryId = activeLibraryId.value ?: return
+        viewModelScope.launch {
+            runCatching {
+                val target = repository.createImageSet(libraryId, itemIds, title)
+                repository.scan(libraryId)
+                target
+            }.onSuccess { message.value = "已创建 ImageSet：$it" }
+                .onFailure(::showError)
+        }
+    }
+
+    fun findDuplicates() {
+        val libraryId = activeLibraryId.value ?: return
+        viewModelScope.launch {
+            runCatching { repository.findDuplicates(libraryId) }
+                .onSuccess {
+                    _duplicateGroups.value = it
+                    message.value = if (it.isEmpty()) "未发现内容完全相同的文件" else "发现 ${it.size} 组重复内容；不会自动删除"
+                }
+                .onFailure(::showError)
         }
     }
 

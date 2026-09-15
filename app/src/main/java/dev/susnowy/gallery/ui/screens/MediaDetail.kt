@@ -20,6 +20,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.DeleteOutline
+import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
@@ -77,6 +78,7 @@ fun MediaDetail(
 ) {
     var showEditor by remember { mutableStateOf(false) }
     var confirmTrash by remember { mutableStateOf(false) }
+    var showDerivePage by remember { mutableStateOf(false) }
     Scaffold(
         topBar = {
             TopAppBar(
@@ -87,6 +89,12 @@ fun MediaDetail(
                     }
                 },
                 actions = {
+                    IconButton(onClick = {
+                        if (item.kind == MediaKind.IMAGE_SET) showDerivePage = true
+                        else viewModel.deriveImage(item)
+                    }) {
+                        Icon(Icons.Rounded.ContentCopy, contentDescription = "复制派生")
+                    }
                     IconButton(onClick = {
                         viewModel.saveMetadata(
                             item,
@@ -160,6 +168,31 @@ fun MediaDetail(
                 }) { Text("移入回收站") }
             },
             dismissButton = { TextButton(onClick = { confirmTrash = false }) { Text("取消") } },
+        )
+    }
+    if (showDerivePage) {
+        var pageText by remember { mutableStateOf("1") }
+        AlertDialog(
+            onDismissRequest = { showDerivePage = false },
+            title = { Text("复制漫画页为普通图片") },
+            text = {
+                OutlinedTextField(
+                    value = pageText,
+                    onValueChange = { pageText = it.filter(Char::isDigit).take(6) },
+                    label = { Text("页码（1–${item.pageCount ?: "?"}）") },
+                    singleLine = true,
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        pageText.toIntOrNull()?.let { viewModel.derivePage(item, it) }
+                        showDerivePage = false
+                    },
+                    enabled = pageText.toIntOrNull()?.let { it >= 1 && (item.pageCount == null || it <= item.pageCount) } == true,
+                ) { Text("复制") }
+            },
+            dismissButton = { TextButton(onClick = { showDerivePage = false }) { Text("取消") } },
         )
     }
 }

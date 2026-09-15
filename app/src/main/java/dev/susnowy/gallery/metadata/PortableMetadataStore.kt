@@ -138,6 +138,26 @@ class PortableMetadataStore(
         }
     }
 
+    fun relocateItem(libraryId: String, itemId: String, source: String, target: String): Boolean {
+        val catalog = loadCatalog(libraryId)
+        val existing = catalog.items.firstOrNull { it.id == itemId } ?: return false
+        val now = Instant.now().toString()
+        val relocated = existing.copy(
+            relativePath = target,
+            coverPath = existing.coverPath?.replacePathPrefix(source, target),
+            secondaryPath = existing.secondaryPath?.replacePathPrefix(source, target),
+            revision = existing.revision + 1,
+            updatedAt = now,
+        )
+        val updated = catalog.copy(
+            revision = catalog.revision + 1,
+            updatedAt = now,
+            items = catalog.items.map { if (it.id == itemId) relocated else it },
+        )
+        writeSafely(CATALOG_PATH, json.encodeToString(updated), "application/json")
+        return true
+    }
+
     private fun read(path: String): String? {
         val document = access.find(path) ?: return null
         return access.openInput(document).bufferedReader(Charsets.UTF_8).use { it.readText() }
@@ -184,6 +204,12 @@ class PortableMetadataStore(
             revision = revision,
             updatedAt = updatedAt,
         )
+
+    private fun String.replacePathPrefix(source: String, target: String): String = when {
+        this == source -> target
+        startsWith("$source/") -> target + removePrefix(source)
+        else -> this
+    }
 
     companion object {
         const val CATALOG_PATH = ".gallery/items/catalog.json"

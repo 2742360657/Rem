@@ -5,6 +5,9 @@ import androidx.exifinterface.media.ExifInterface
 import dev.susnowy.gallery.library.LibraryDocument
 import dev.susnowy.gallery.model.MediaKind
 import dev.susnowy.gallery.model.SourceKind
+import dev.susnowy.gallery.metadata.ComicInfoReader
+import dev.susnowy.gallery.metadata.FilenameMetadataParser
+import dev.susnowy.gallery.metadata.RecognizedMetadata
 import dev.susnowy.gallery.storage.DocumentTreeStorage
 import dev.susnowy.gallery.storage.StorageEntry
 import java.util.Locale
@@ -30,6 +33,7 @@ data class ScanCandidate(
     val pageCount: Int? = null,
     val coverPath: String? = null,
     val secondaryPath: String? = null,
+    val recognizedMetadata: RecognizedMetadata? = null,
 )
 
 data class ScanResult(
@@ -39,6 +43,7 @@ data class ScanResult(
 )
 
 class LibraryScanner {
+    private val comicInfo = ComicInfoReader()
     suspend fun scan(storage: DocumentTreeStorage): ScanResult = withContext(Dispatchers.IO) {
         val candidates = mutableListOf<ScanCandidate>()
         val ambiguous = mutableListOf<String>()
@@ -91,6 +96,8 @@ class LibraryScanner {
                     modifiedAt = maxOf(directory.lastModified, images.maxOfOrNull(StorageEntry::lastModified) ?: 0),
                     pageCount = images.size,
                     coverPath = sortedPages.firstOrNull()?.relativePath,
+                    recognizedMetadata = comicInfo.fromDirectory(storage, path)
+                        ?: FilenameMetadataParser.parse(path.substringAfterLast('/')),
                 )
             }
         } else {
@@ -133,6 +140,8 @@ class LibraryScanner {
                 kind = MediaKind.IMAGE_SET,
                 sourceKind = SourceKind.ARCHIVE,
                 pageCount = count,
+                recognizedMetadata = comicInfo.fromArchive(storage, archive.relativePath)
+                    ?: FilenameMetadataParser.parse(archive.name),
             )
         }
 
@@ -162,6 +171,7 @@ class LibraryScanner {
         pageCount: Int? = null,
         secondaryPath: String? = null,
         capturedAt: Long? = null,
+        recognizedMetadata: RecognizedMetadata? = null,
     ) = ScanCandidate(
         relativePath = relativePath,
         uri = uri,
@@ -174,6 +184,7 @@ class LibraryScanner {
         capturedAt = capturedAt,
         pageCount = pageCount,
         secondaryPath = secondaryPath,
+        recognizedMetadata = recognizedMetadata,
     )
 
     private fun readCapturedAt(storage: DocumentTreeStorage, entry: StorageEntry): Long? = when {

@@ -42,7 +42,7 @@ data class OrganizationPlan(
 }
 
 @Serializable
-private data class TransactionDocument(
+data class TransactionDocument(
     @SerialName("operation_id") val operationId: String,
     @SerialName("created_at") val createdAt: String,
     val status: String,
@@ -52,7 +52,7 @@ private data class TransactionDocument(
 )
 
 @Serializable
-private data class TransactionStep(
+data class TransactionStep(
     @SerialName("item_id") val itemId: String,
     val source: String,
     val target: String,
@@ -152,6 +152,92 @@ class OrganizerService {
         }
     }
 
+    suspend fun recoverInterrupted(
+        libraryId: String,
+        storage: DocumentTreeStorage,
+    ): Int = withContext(Dispatchers.IO) {
+        val metadata = PortableMetadataStore(storage)
+        val transactions = storage.list(".gallery/transactions")
+            .filter {
+                !it.isDirectory && (it.name.endsWith(".json", ignoreCase = true) ||
+                    it.name.endsWith(".tmp", ignoreCase = true) ||
+                    it.name.endsWith(".bak", ignoreCase = true))
+            }
+            .mapNotNull { entry ->
+                runCatching {
+                    val document = storage.find(entry.relativePath) ?: return@runCatching null
+                    storage.openInput(document).bufferedReader(Charsets.UTF_8).use {
+                        JSON.decodeFromString<TransactionDocument>(it.readText())
+                    }
+                }.getOrNull()
+            }
+            .groupBy(TransactionDocument::operationId)
+            .mapNotNull { (_, versions) ->
+                versions.maxWithOrNull(
+                    compareBy<TransactionDocument> { document ->
+                        document.steps.count { it.status == "completed" }
+                    }.thenBy { document ->
+                        document.steps.fold(0) { total, step ->
+                            total + when (step.status) {
+                                "source_deleted" -> 2
+                                "copied" -> 1
+                                else -> 0
+                            }
+                        }
+                    },
+                )
+            }
+            .filter { it.status == "running" || it.status == "interrupted" }
+        var recovered = 0
+        transactions.forEach { original ->
+            var transaction = original.copy(status = "running", error = null)
+            writeTransaction(storage, transaction)
+            try {
+                transaction.steps.forEachIndexed { index, step ->
+                    if (step.status == "completed") return@forEachIndexed
+                    coroutineContext.ensureActive()
+                    var source = storage.entry(step.source)
+                    var target = storage.entry(step.target)
+                    check(source != null || target != null) {
+                        "事务 ${transaction.operationId} 的源和目标都不存在"
+                    }
+                    if (source != null && target == null) {
+                        if (source.isDirectory) storage.copyDirectory(step.source, step.target)
+                        else storage.copyFile(source, step.target)
+                        target = storage.entry(step.target) ?: error("恢复复制后目标不存在")
+                    }
+                    if (source != null && target != null) {
+                        check(storage.treeStats(step.source) == storage.treeStats(step.target)) {
+                            "事务 ${transaction.operationId} 的源与目标不一致，已停止恢复"
+                        }
+                        transaction = transaction.updateStep(index, "copied")
+                        writeTransaction(storage, transaction)
+                        val sourceDocument = storage.find(step.source) ?: error("恢复时源文件丢失")
+                        check(storage.delete(sourceDocument)) { "恢复时无法删除已校验源文件" }
+                        source = null
+                    }
+                    if (source == null && target != null) {
+                        transaction = transaction.updateStep(index, "source_deleted")
+                        writeTransaction(storage, transaction)
+                        check(metadata.relocateItem(libraryId, step.itemId, step.source, step.target)) {
+                            "事务项目 ${step.itemId} 缺少便携元数据"
+                        }
+                        transaction = transaction.updateStep(index, "completed")
+                        writeTransaction(storage, transaction)
+                    }
+                }
+                writeTransaction(storage, transaction.copy(status = "completed", error = null))
+                recovered++
+            } catch (error: Exception) {
+                writeTransaction(
+                    storage,
+                    transaction.copy(status = "interrupted", error = error.message ?: error.javaClass.simpleName),
+                )
+            }
+        }
+        recovered
+    }
+
     fun targetPath(item: MediaItem, template: OrganizerTemplate): String? {
         val author = item.authors.firstOrNull()?.safeSegment()
         val series = item.series?.title?.safeSegment()
@@ -182,10 +268,23 @@ class OrganizerService {
 
     private fun writeTransaction(storage: DocumentTreeStorage, transaction: TransactionDocument) {
         val path = ".gallery/transactions/${transaction.operationId}.json"
-        val document = storage.find(path) ?: storage.createFile(path, "application/json")
-        storage.openOutput(document).bufferedWriter(Charsets.UTF_8).use {
+        val temporaryPath = ".gallery/transactions/.${transaction.operationId}.tmp"
+        val backupPath = ".gallery/transactions/.${transaction.operationId}.bak"
+        storage.find(temporaryPath)?.let(storage::delete)
+        storage.find(backupPath)?.let(storage::delete)
+        val temporary = storage.createFile(temporaryPath, "application/json")
+        storage.openOutput(temporary).bufferedWriter(Charsets.UTF_8).use {
             it.write(JSON.encodeToString(transaction))
         }
+        val current = storage.find(path)
+        if (current != null) check(storage.rename(current, ".${transaction.operationId}.bak")) {
+            "无法备份 Organizer 事务日志"
+        }
+        if (!storage.rename(temporary, "${transaction.operationId}.json")) {
+            storage.find(backupPath)?.let { storage.rename(it, "${transaction.operationId}.json") }
+            error("无法提交 Organizer 事务日志")
+        }
+        storage.find(backupPath)?.let(storage::delete)
     }
 
     private fun TransactionDocument.updateStep(index: Int, status: String) = copy(

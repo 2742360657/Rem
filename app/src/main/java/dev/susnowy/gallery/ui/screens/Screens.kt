@@ -26,6 +26,7 @@ import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -103,11 +104,7 @@ fun GalleryScreenContent(
             viewModel = viewModel,
             emptyText = "从系统相册导入，或在 Library 的 Photos 目录中放入媒体",
         )
-        AppScreen.IMAGES -> MediaCollectionScreen(
-            items = visible.filter { it.kind == MediaKind.IMAGE },
-            viewModel = viewModel,
-            emptyText = "Library 中的独立图片会显示在这里",
-        )
+        AppScreen.IMAGES -> ImagesScreen(visible.filter { it.kind == MediaKind.IMAGE }, viewModel)
         AppScreen.IMAGE_SETS -> MediaCollectionScreen(
             items = visible.filter { it.kind == MediaKind.IMAGE_SET },
             viewModel = viewModel,
@@ -256,6 +253,84 @@ private fun MediaCollectionScreen(
     } else {
         MediaGrid(items = items, viewModel = viewModel, onOpen = viewModel::open)
     }
+}
+
+@Composable
+private fun ImagesScreen(items: List<MediaItem>, viewModel: GalleryViewModel) {
+    var showCreateDialog by remember { mutableStateOf(false) }
+    Column(Modifier.fillMaxSize()) {
+        if (items.size >= 2) {
+            FilledTonalButton(
+                onClick = { showCreateDialog = true },
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            ) { Text("从多张图片创建 ImageSet") }
+        }
+        if (items.isEmpty()) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text("Library 中的独立图片会显示在这里")
+            }
+        } else {
+            MediaGrid(items, viewModel, viewModel::open, Modifier.weight(1f))
+        }
+    }
+    if (showCreateDialog) {
+        CreateImageSetDialog(
+            items = items,
+            onDismiss = { showCreateDialog = false },
+            onCreate = { selected, title ->
+                viewModel.createImageSet(selected, title)
+                showCreateDialog = false
+            },
+        )
+    }
+}
+
+@Composable
+private fun CreateImageSetDialog(
+    items: List<MediaItem>,
+    onDismiss: () -> Unit,
+    onCreate: (List<String>, String) -> Unit,
+) {
+    var title by remember { mutableStateOf("新 ImageSet") }
+    var selected by remember { mutableStateOf(emptySet<String>()) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("创建 ImageSet") },
+        text = {
+            Column {
+                OutlinedTextField(
+                    value = title,
+                    onValueChange = { title = it },
+                    label = { Text("名称") },
+                    singleLine = true,
+                )
+                LazyColumn(modifier = Modifier.height(320.dp)) {
+                    items(items, key = MediaItem::id) { item ->
+                        ListItem(
+                            headlineContent = {
+                                Text(item.displayTitle, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            },
+                            leadingContent = {
+                                Checkbox(
+                                    checked = item.id in selected,
+                                    onCheckedChange = { checked ->
+                                        selected = if (checked) selected + item.id else selected - item.id
+                                    },
+                                )
+                            },
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onCreate(selected.toList(), title) },
+                enabled = selected.size >= 2 && title.isNotBlank(),
+            ) { Text("复制并创建") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+    )
 }
 
 private enum class Facet(val emptyText: String) {
@@ -507,6 +582,7 @@ private fun OrganizationPlanView(
 @Composable
 private fun SettingsScreen(state: GalleryUiState, viewModel: GalleryViewModel) {
     var daysText by remember(state.trashRetentionDays) { mutableStateOf(state.trashRetentionDays.toString()) }
+    val duplicateGroups by viewModel.duplicateGroups.collectAsStateWithLifecycle()
     LazyColumn(contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
         item {
             ListItem(
@@ -532,6 +608,26 @@ private fun SettingsScreen(state: GalleryUiState, viewModel: GalleryViewModel) {
         }
         item {
             OutlinedButton(onClick = viewModel::rebuildIndex) { Text("从 Library 重建本机索引") }
+        }
+        item {
+            OutlinedButton(onClick = viewModel::findDuplicates) { Text("检测重复内容") }
+            Text(
+                "只计算和展示，不自动去重。主动派生的相同内容可以继续并存。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        duplicateGroups.forEachIndexed { index, group ->
+            item(key = "duplicate-$index") {
+                Card(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(14.dp)) {
+                        Text("重复组 ${index + 1}", fontWeight = FontWeight.SemiBold)
+                        group.forEach { item ->
+                            Text(item.relativePath, style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                }
+            }
         }
         item {
             Text("Gallery 1.0", style = MaterialTheme.typography.titleMedium)

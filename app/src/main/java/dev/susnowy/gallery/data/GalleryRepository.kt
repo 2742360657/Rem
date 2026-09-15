@@ -2,9 +2,11 @@ package dev.susnowy.gallery.data
 
 import android.content.Context
 import android.net.Uri
+import dev.susnowy.gallery.derive.DerivationService
 import dev.susnowy.gallery.importer.ImportResult
 import dev.susnowy.gallery.importer.SystemMediaImporter
 import dev.susnowy.gallery.library.PortableLibraryManager
+import dev.susnowy.gallery.library.LibraryDocument
 import dev.susnowy.gallery.metadata.PortableMetadataStore
 import dev.susnowy.gallery.model.LibraryInspection
 import dev.susnowy.gallery.model.LibraryRegistration
@@ -18,6 +20,7 @@ import dev.susnowy.gallery.scanner.LibraryScanner
 import dev.susnowy.gallery.scanner.ScanResult
 import dev.susnowy.gallery.storage.DocumentTreeStorage
 import java.io.FileNotFoundException
+import java.security.MessageDigest
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -34,6 +37,7 @@ class GalleryRepository(context: Context) {
     private val scanner = LibraryScanner()
     private val organizer = OrganizerService()
     private val importer = SystemMediaImporter(appContext)
+    private val derivation = DerivationService()
 
     private val _libraries = MutableStateFlow<List<LibraryRegistration>>(emptyList())
     val libraries: StateFlow<List<LibraryRegistration>> = _libraries.asStateFlow()
@@ -109,6 +113,15 @@ class GalleryRepository(context: Context) {
                     ?: metadataByPath[candidate.relativePath]
                 val id = metadata?.id ?: local?.id ?: UUID.randomUUID().toString()
                 val trashEntry = state.trash.firstOrNull { it.itemId == id }
+                val recognized = candidate.recognizedMetadata
+                val recognizedSeries = recognized?.series?.let { title ->
+                    dev.susnowy.gallery.model.SeriesRef(
+                        id = UUID.nameUUIDFromBytes("$libraryId:$title".encodeToByteArray()).toString(),
+                        title = title,
+                        sortIndex = recognized.sortIndex ?: 0.0,
+                        volume = recognized.volume,
+                    )
+                }
                 val item = MediaItem(
                     id = id,
                     libraryId = libraryId,
@@ -116,17 +129,21 @@ class GalleryRepository(context: Context) {
                     uri = candidate.uri,
                     kind = candidate.kind,
                     sourceKind = candidate.sourceKind,
-                    displayTitle = metadata?.displayTitle ?: local?.displayTitle ?: candidate.suggestedTitle,
-                    originalTitle = metadata?.originalTitle ?: local?.originalTitle,
+                    displayTitle = metadata?.displayTitle ?: recognized?.title
+                        ?: local?.displayTitle ?: candidate.suggestedTitle,
+                    originalTitle = metadata?.originalTitle ?: recognized?.title ?: local?.originalTitle,
                     mimeType = candidate.mimeType,
                     size = candidate.size,
                     modifiedAt = candidate.modifiedAt,
                     capturedAt = candidate.capturedAt ?: local?.capturedAt,
                     pageCount = candidate.pageCount,
-                    authors = metadata?.authors ?: local?.authors.orEmpty(),
-                    tags = metadata?.tags ?: local?.tags.orEmpty(),
+                    authors = metadata?.authors ?: recognized?.authors?.takeIf { it.isNotEmpty() }
+                        ?: local?.authors.orEmpty(),
+                    tags = metadata?.tags ?: recognized?.let {
+                        it.tags + listOfNotNull(it.language?.let { language -> "language:$language" })
+                    }?.takeIf { it.isNotEmpty() } ?: local?.tags.orEmpty(),
                     collections = metadata?.collections ?: local?.collections.orEmpty(),
-                    series = metadata?.series ?: local?.series,
+                    series = metadata?.series ?: recognizedSeries ?: local?.series,
                     coverPath = metadata?.coverPath ?: candidate.coverPath ?: local?.coverPath,
                     secondaryPath = metadata?.secondaryPath ?: candidate.secondaryPath ?: local?.secondaryPath,
                     favorite = metadata?.favorite ?: local?.favorite ?: false,
@@ -235,6 +252,11 @@ class GalleryRepository(context: Context) {
             onIo { importer.import(uris, storageFor(requireLibrary(libraryId))) }
         }
 
+    suspend fun recoverInterruptedTransactions(libraryId: String): Int =
+        runOperation("正在恢复未完成事务…") {
+            onIo { organizer.recoverInterrupted(libraryId, storageFor(requireLibrary(libraryId))) }
+        }
+
     suspend fun cleanupExpired(retentionDays: Int): Int = onIo {
         val threshold = System.currentTimeMillis() - retentionDays.coerceAtLeast(1) * 86_400_000L
         val expired = database.media().filter {
@@ -247,6 +269,60 @@ class GalleryRepository(context: Context) {
         if (deleted > 0) refreshFromDatabase()
         deleted
     }
+
+    suspend fun deriveImage(itemId: String): String = runOperation("正在复制派生图片…") {
+        onIo {
+            val item = database.mediaItem(itemId) ?: error("媒体不存在")
+            derivation.deriveImage(item, storageFor(requireLibrary(item.libraryId)))
+        }
+    }
+
+    suspend fun derivePage(itemId: String, pageIndex: Int): String =
+        runOperation("正在从 ImageSet 派生页面…") {
+            onIo {
+                val item = database.mediaItem(itemId) ?: error("媒体不存在")
+                derivation.derivePage(item, pageIndex, storageFor(requireLibrary(item.libraryId)))
+            }
+        }
+
+    suspend fun createImageSet(libraryId: String, itemIds: List<String>, title: String): String =
+        runOperation("正在创建 ImageSet…") {
+            onIo {
+                val items = itemIds.map { id -> database.mediaItem(id) ?: error("图片不存在：$id") }
+                require(items.all { it.libraryId == libraryId }) { "不能跨 Library 隐式派生" }
+                derivation.createImageSet(items, title, storageFor(requireLibrary(libraryId)))
+            }
+        }
+
+    suspend fun findDuplicates(libraryId: String): List<List<MediaItem>> =
+        runOperation("正在后台计算重复文件指纹…") {
+            onIo {
+                val storage = storageFor(requireLibrary(libraryId))
+                database.media(libraryId)
+                    .filter {
+                        !it.trashed && !it.needsRepair && it.size > 0 &&
+                            it.sourceKind != dev.susnowy.gallery.model.SourceKind.DIRECTORY
+                    }
+                    .groupBy(MediaItem::size)
+                    .values
+                    .filter { it.size > 1 }
+                    .flatMap { sameSize ->
+                        sameSize.groupBy { item ->
+                            val digest = MessageDigest.getInstance("SHA-256")
+                            val document = LibraryDocument(item.relativePath, item.relativePath.substringAfterLast('/'), false)
+                            storage.openInput(document).use { input ->
+                                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                                while (true) {
+                                    val count = input.read(buffer)
+                                    if (count < 0) break
+                                    digest.update(buffer, 0, count)
+                                }
+                            }
+                            digest.digest().joinToString("") { "%02x".format(it) }
+                        }.values.filter { it.size > 1 }
+                    }
+            }
+        }
 
     suspend fun forgetLibrary(libraryId: String) = onIo {
         database.removeLibrary(libraryId)
