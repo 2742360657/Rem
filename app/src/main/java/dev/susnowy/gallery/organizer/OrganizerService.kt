@@ -27,6 +27,8 @@ data class OrganizationStep(
     val item: MediaItem,
     val source: String,
     val target: String,
+    val secondarySource: String? = null,
+    val secondaryTarget: String? = null,
     val conflict: String? = null,
 )
 
@@ -56,6 +58,8 @@ data class TransactionStep(
     @SerialName("item_id") val itemId: String,
     val source: String,
     val target: String,
+    @SerialName("secondary_source") val secondarySource: String? = null,
+    @SerialName("secondary_target") val secondaryTarget: String? = null,
     val status: String,
 )
 
@@ -71,20 +75,31 @@ class OrganizerService {
                 val target = targetPath(item, template) ?: return@mapNotNull null
                 if (target.equals(item.relativePath, ignoreCase = true)) return@mapNotNull null
                 val existing = storage.entry(target)
+                val secondaryTarget = item.secondaryPath?.let { source ->
+                    "${target.substringBeforeLast('/')}/${source.substringAfterLast('/')}"
+                }
                 OrganizationStep(
                     item = item,
                     source = item.relativePath,
                     target = target,
-                    conflict = existing?.let { "目标已经存在" },
+                    secondarySource = item.secondaryPath,
+                    secondaryTarget = secondaryTarget,
+                    conflict = when {
+                        existing != null -> "目标已经存在"
+                        secondaryTarget != null && storage.entry(secondaryTarget) != null -> "Motion Photo 目标已经存在"
+                        else -> null
+                    },
                 )
             }.toList()
-        val duplicatedTargets = preliminary.groupBy { it.target.lowercase(Locale.ROOT) }
-            .filterValues { it.size > 1 }
-            .keys
+        val duplicatedTargets = preliminary.flatMap { step ->
+            listOfNotNull(step.target, step.secondaryTarget)
+        }.groupingBy { it.lowercase(Locale.ROOT) }.eachCount().filterValues { it > 1 }.keys
         OrganizationPlan(
             template = template,
             steps = preliminary.map { step ->
-                if (step.target.lowercase(Locale.ROOT) in duplicatedTargets) {
+                if (step.target.lowercase(Locale.ROOT) in duplicatedTargets ||
+                    step.secondaryTarget?.lowercase(Locale.ROOT) in duplicatedTargets
+                ) {
                     step.copy(conflict = "多个项目生成了相同目标")
                 } else step
             },
@@ -106,7 +121,14 @@ class OrganizerService {
             status = "running",
             template = plan.template.name,
             steps = plan.steps.map {
-                TransactionStep(it.item.id, it.source, it.target, "planned")
+                TransactionStep(
+                    itemId = it.item.id,
+                    source = it.source,
+                    target = it.target,
+                    secondarySource = it.secondarySource,
+                    secondaryTarget = it.secondaryTarget,
+                    status = "planned",
+                )
             },
         )
         writeTransaction(storage, transaction)
@@ -117,14 +139,29 @@ class OrganizerService {
                 check(storage.entry(step.target) == null) { "目标在执行前已出现：${step.target}" }
                 if (source.isDirectory) storage.copyDirectory(step.source, step.target)
                 else storage.copyFile(source, step.target)
+                if (step.secondarySource != null && step.secondaryTarget != null) {
+                    val secondary = storage.entry(step.secondarySource)
+                        ?: error("Live Photo motion 文件不存在：${step.secondarySource}")
+                    storage.copyFile(secondary, step.secondaryTarget)
+                }
                 val sourceStats = storage.treeStats(step.source)
                 val targetStats = storage.treeStats(step.target)
                 check(sourceStats == targetStats) { "复制校验失败：${step.source}" }
+                if (step.secondarySource != null && step.secondaryTarget != null) {
+                    check(storage.treeStats(step.secondarySource) == storage.treeStats(step.secondaryTarget)) {
+                        "Live Photo motion 复制校验失败"
+                    }
+                }
                 transaction = transaction.updateStep(index, "copied")
                 writeTransaction(storage, transaction)
 
                 val sourceDocument = storage.find(step.source) ?: error("复制后源文件丢失")
                 check(storage.delete(sourceDocument)) { "无法删除已校验的源文件：${step.source}" }
+                step.secondarySource?.let { secondarySource ->
+                    val secondaryDocument = storage.find(secondarySource)
+                        ?: error("复制后 motion 源文件丢失")
+                    check(storage.delete(secondaryDocument)) { "无法删除已校验的 motion 源文件" }
+                }
                 transaction = transaction.updateStep(index, "source_deleted")
                 writeTransaction(storage, transaction)
 
@@ -133,9 +170,12 @@ class OrganizerService {
                     relativePath = step.target,
                     uri = targetEntry.uri,
                     coverPath = step.item.coverPath?.replacePathPrefix(step.source, step.target),
-                    secondaryPath = step.item.secondaryPath?.replacePathPrefix(step.source, step.target),
+                    secondaryPath = step.secondaryTarget
+                        ?: step.item.secondaryPath?.replacePathPrefix(step.source, step.target),
                     modifiedAt = targetEntry.lastModified,
-                    size = if (targetEntry.isDirectory) targetStats.totalBytes else targetEntry.size,
+                    contentHash = step.item.contentHash,
+                    size = (if (targetEntry.isDirectory) targetStats.totalBytes else targetEntry.size) +
+                        (step.secondaryTarget?.let { storage.entry(it)?.size } ?: 0),
                 )
                 val saved = metadata.saveItem(moved, step.item.revision)
                 onItemMoved(moved.copy(revision = saved.revision))
@@ -196,35 +236,49 @@ class OrganizerService {
                 transaction.steps.forEachIndexed { index, step ->
                     if (step.status == "completed") return@forEachIndexed
                     coroutineContext.ensureActive()
-                    var source = storage.entry(step.source)
-                    var target = storage.entry(step.target)
-                    check(source != null || target != null) {
-                        "事务 ${transaction.operationId} 的源和目标都不存在"
-                    }
-                    if (source != null && target == null) {
-                        if (source.isDirectory) storage.copyDirectory(step.source, step.target)
-                        else storage.copyFile(source, step.target)
-                        target = storage.entry(step.target) ?: error("恢复复制后目标不存在")
-                    }
-                    if (source != null && target != null) {
-                        check(storage.treeStats(step.source) == storage.treeStats(step.target)) {
-                            "事务 ${transaction.operationId} 的源与目标不一致，已停止恢复"
+                    val pairs = buildList {
+                        add(step.source to step.target)
+                        if (step.secondarySource != null && step.secondaryTarget != null) {
+                            add(step.secondarySource to step.secondaryTarget)
                         }
-                        transaction = transaction.updateStep(index, "copied")
-                        writeTransaction(storage, transaction)
-                        val sourceDocument = storage.find(step.source) ?: error("恢复时源文件丢失")
-                        check(storage.delete(sourceDocument)) { "恢复时无法删除已校验源文件" }
-                        source = null
                     }
-                    if (source == null && target != null) {
-                        transaction = transaction.updateStep(index, "source_deleted")
-                        writeTransaction(storage, transaction)
-                        check(metadata.relocateItem(libraryId, step.itemId, step.source, step.target)) {
-                            "事务项目 ${step.itemId} 缺少便携元数据"
+                    pairs.forEach { (sourcePath, targetPath) ->
+                        val source = storage.entry(sourcePath)
+                        var target = storage.entry(targetPath)
+                        check(source != null || target != null) {
+                            "事务 ${transaction.operationId} 的源和目标都不存在"
                         }
-                        transaction = transaction.updateStep(index, "completed")
-                        writeTransaction(storage, transaction)
+                        if (source != null && target == null) {
+                            if (source.isDirectory) storage.copyDirectory(sourcePath, targetPath)
+                            else storage.copyFile(source, targetPath)
+                            target = storage.entry(targetPath) ?: error("恢复复制后目标不存在")
+                        }
+                        if (source != null && target != null) {
+                            check(storage.treeStats(sourcePath) == storage.treeStats(targetPath)) {
+                                "事务 ${transaction.operationId} 的源与目标不一致，已停止恢复"
+                            }
+                        }
                     }
+                    transaction = transaction.updateStep(index, "copied")
+                    writeTransaction(storage, transaction)
+                    pairs.forEach { (sourcePath, _) ->
+                        storage.find(sourcePath)?.let { sourceDocument ->
+                            check(storage.delete(sourceDocument)) { "恢复时无法删除已校验源文件" }
+                        }
+                    }
+                    transaction = transaction.updateStep(index, "source_deleted")
+                    writeTransaction(storage, transaction)
+                    check(
+                        metadata.relocateItem(
+                            libraryId,
+                            step.itemId,
+                            step.source,
+                            step.target,
+                            step.secondaryTarget,
+                        ),
+                    ) { "事务项目 ${step.itemId} 缺少便携元数据" }
+                    transaction = transaction.updateStep(index, "completed")
+                    writeTransaction(storage, transaction)
                 }
                 writeTransaction(storage, transaction.copy(status = "completed", error = null))
                 recovered++

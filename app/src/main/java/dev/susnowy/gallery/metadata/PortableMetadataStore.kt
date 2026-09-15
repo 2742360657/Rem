@@ -138,14 +138,20 @@ class PortableMetadataStore(
         }
     }
 
-    fun relocateItem(libraryId: String, itemId: String, source: String, target: String): Boolean {
+    fun relocateItem(
+        libraryId: String,
+        itemId: String,
+        source: String,
+        target: String,
+        secondaryTarget: String? = null,
+    ): Boolean {
         val catalog = loadCatalog(libraryId)
         val existing = catalog.items.firstOrNull { it.id == itemId } ?: return false
         val now = Instant.now().toString()
         val relocated = existing.copy(
             relativePath = target,
             coverPath = existing.coverPath?.replacePathPrefix(source, target),
-            secondaryPath = existing.secondaryPath?.replacePathPrefix(source, target),
+            secondaryPath = secondaryTarget ?: existing.secondaryPath?.replacePathPrefix(source, target),
             revision = existing.revision + 1,
             updatedAt = now,
         )
@@ -200,6 +206,7 @@ class PortableMetadataStore(
             series = series,
             coverPath = coverPath,
             secondaryPath = secondaryPath,
+            contentHash = contentHash,
             favorite = favorite,
             revision = revision,
             updatedAt = updatedAt,

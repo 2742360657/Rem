@@ -4,6 +4,7 @@ import android.app.Application
 import android.graphics.Bitmap
 import android.net.Uri
 import androidx.documentfile.provider.DocumentFile
+import androidx.core.content.edit
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dev.susnowy.gallery.GalleryApplication
@@ -19,6 +20,8 @@ import dev.susnowy.gallery.organizer.OrganizationPlan
 import dev.susnowy.gallery.organizer.OrganizerTemplate
 import java.util.UUID
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -48,6 +51,7 @@ data class GalleryUiState(
     val libraries: List<LibraryRegistration> = emptyList(),
     val activeLibraryId: String? = null,
     val media: List<MediaItem> = emptyList(),
+    val allMedia: List<MediaItem> = emptyList(),
     val screen: AppScreen = AppScreen.HOME,
     val selectedItemId: String? = null,
     val searchQuery: String = "",
@@ -59,7 +63,7 @@ data class GalleryUiState(
     val activeLibrary: LibraryRegistration?
         get() = libraries.firstOrNull { it.libraryId == activeLibraryId }
     val selectedItem: MediaItem?
-        get() = media.firstOrNull { it.id == selectedItemId }
+        get() = allMedia.firstOrNull { it.id == selectedItemId }
 }
 
 class GalleryViewModel(application: Application) : AndroidViewModel(application) {
@@ -77,6 +81,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     val organizationPlan: StateFlow<OrganizationPlan?> = _organizationPlan
     private val _duplicateGroups = MutableStateFlow<List<List<MediaItem>>>(emptyList())
     val duplicateGroups: StateFlow<List<List<MediaItem>>> = _duplicateGroups
+    private var longOperationJob: Job? = null
 
     val uiState: StateFlow<GalleryUiState> = combine(
         repository.libraries,
@@ -96,6 +101,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             libraries = libraries,
             activeLibraryId = resolvedActiveId,
             media = allMedia.filter { resolvedActiveId == null || it.libraryId == resolvedActiveId },
+            allMedia = allMedia,
             screen = navigation.first,
             selectedItemId = navigation.second,
             searchQuery = navigation.third,
@@ -136,7 +142,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
     fun scan(libraryId: String? = activeLibraryId.value) {
         if (libraryId == null) return
-        viewModelScope.launch {
+        longOperationJob = viewModelScope.launch {
             runCatching { repository.scan(libraryId) }
                 .onSuccess { result ->
                     message.value = buildString {
@@ -153,7 +159,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
     fun rebuildIndex() {
         val libraryId = activeLibraryId.value ?: return
-        viewModelScope.launch {
+        longOperationJob = viewModelScope.launch {
             runCatching { repository.rebuildIndex(libraryId) }
                 .onSuccess { message.value = "本机索引已从 Library 重建" }
                 .onFailure(::showError)
@@ -179,6 +185,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun open(item: MediaItem) {
+        activeLibraryId.value = item.libraryId
         selectedItemId.value = item.id
     }
 
@@ -280,17 +287,17 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
     fun setAutoScan(enabled: Boolean) {
         autoScan.value = enabled
-        preferences.edit().putBoolean("auto_scan", enabled).apply()
+        preferences.edit { putBoolean("auto_scan", enabled) }
     }
 
     fun setRetentionDays(days: Int) {
-        retentionDays.value = days.coerceIn(1, 3650)
-        preferences.edit().putInt("trash_retention_days", retentionDays.value).apply()
+        retentionDays.value = if (days <= 0) 0 else days.coerceIn(1, 3650)
+        preferences.edit { putInt("trash_retention_days", retentionDays.value) }
     }
 
     fun previewOrganization(template: OrganizerTemplate) {
         val libraryId = activeLibraryId.value ?: return
-        viewModelScope.launch {
+        longOperationJob = viewModelScope.launch {
             runCatching { repository.previewOrganization(libraryId, template) }
                 .onSuccess { _organizationPlan.value = it }
                 .onFailure(::showError)
@@ -298,7 +305,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun executeOrganization(plan: OrganizationPlan) {
-        viewModelScope.launch {
+        longOperationJob = viewModelScope.launch {
             runCatching {
                 repository.executeOrganization(plan)
                 repository.scan(plan.steps.first().item.libraryId)
@@ -316,7 +323,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     fun importSystemMedia(uris: List<Uri>) {
         val libraryId = activeLibraryId.value ?: return
         if (uris.isEmpty()) return
-        viewModelScope.launch {
+        longOperationJob = viewModelScope.launch {
             runCatching {
                 val result = repository.importSystemMedia(libraryId, uris)
                 repository.scan(libraryId)
@@ -329,7 +336,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun deriveImage(item: MediaItem) {
-        viewModelScope.launch {
+        longOperationJob = viewModelScope.launch {
             runCatching {
                 val target = repository.deriveImage(item.id)
                 repository.scan(item.libraryId)
@@ -340,7 +347,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun derivePage(item: MediaItem, pageNumber: Int) {
-        viewModelScope.launch {
+        longOperationJob = viewModelScope.launch {
             runCatching {
                 val target = repository.derivePage(item.id, pageNumber - 1)
                 repository.scan(item.libraryId)
@@ -352,7 +359,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
     fun createImageSet(itemIds: List<String>, title: String) {
         val libraryId = activeLibraryId.value ?: return
-        viewModelScope.launch {
+        longOperationJob = viewModelScope.launch {
             runCatching {
                 val target = repository.createImageSet(libraryId, itemIds, title)
                 repository.scan(libraryId)
@@ -364,7 +371,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
     fun findDuplicates() {
         val libraryId = activeLibraryId.value ?: return
-        viewModelScope.launch {
+        longOperationJob = viewModelScope.launch {
             runCatching { repository.findDuplicates(libraryId) }
                 .onSuccess {
                     _duplicateGroups.value = it
@@ -378,7 +385,18 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         message.value = null
     }
 
+    fun cancelLongOperation() {
+        if (longOperationJob?.isActive == true) {
+            longOperationJob?.cancel()
+            longOperationJob = null
+            message.value = "操作已取消；已提交的事务步骤保留在恢复日志中"
+        } else {
+            message.value = "当前操作已进入不可取消的短提交阶段"
+        }
+    }
+
     private fun showError(error: Throwable) {
+        if (error is CancellationException) return
         message.value = error.message ?: "操作失败"
     }
 

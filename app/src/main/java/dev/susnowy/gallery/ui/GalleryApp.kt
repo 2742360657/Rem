@@ -255,6 +255,7 @@ fun GalleryApp(viewModel: GalleryViewModel = viewModel()) {
                             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                 CircularProgressIndicator()
                                 Text(operation, modifier = Modifier.padding(top = 8.dp))
+                                TextButton(onClick = viewModel::cancelLongOperation) { Text("取消") }
                             }
                         }
                     }

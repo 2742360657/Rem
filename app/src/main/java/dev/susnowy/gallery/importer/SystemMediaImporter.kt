@@ -23,7 +23,7 @@ import kotlin.coroutines.coroutineContext
 @Serializable
 data class MediaImportEntry(
     @SerialName("source_name") val sourceName: String,
-    @SerialName("source_uri") val sourceUri: String,
+    @SerialName("source_kind") val sourceKind: String = "android-system-picker",
     @SerialName("target_path") val targetPath: String,
     @SerialName("captured_at") val capturedAt: String,
     val size: Long,
@@ -77,7 +77,6 @@ class SystemMediaImporter(private val context: Context) {
                     if (source.size > 0) check(actual.size == source.size) { "复制后的文件大小不一致" }
                     imported += MediaImportEntry(
                         sourceName = source.displayName,
-                        sourceUri = uri.toString(),
                         targetPath = target,
                         capturedAt = Instant.ofEpochMilli(capturedAt).toString(),
                         size = actual.size,
@@ -134,10 +133,13 @@ class SystemMediaImporter(private val context: Context) {
             }
         }.getOrNull() ?: fallback
         mimeType.startsWith("video/") -> runCatching {
-            MediaMetadataRetriever().use { retriever ->
+            val retriever = MediaMetadataRetriever()
+            try {
                 retriever.setDataSource(context, uri)
                 retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DATE)
                     ?.let(::parseVideoDate)
+            } finally {
+                retriever.release()
             }
         }.getOrNull() ?: fallback
         else -> fallback

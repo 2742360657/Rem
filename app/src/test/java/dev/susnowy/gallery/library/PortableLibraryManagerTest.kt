@@ -7,6 +7,7 @@ import java.io.InputStream
 import java.io.OutputStream
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertThrows
 import org.junit.Test
 
 class PortableLibraryManagerTest {
@@ -18,6 +19,7 @@ class PortableLibraryManagerTest {
         assertEquals("My Library", library.name)
         assertTrue(access.files.containsKey(".gallery/library.json"))
         assertTrue(access.files.containsKey("GALLERY_LIBRARY.md"))
+        assertTrue(access.files.containsKey(".gallery/schema/v1.json"))
         assertTrue(PortableLibraryManager(access).inspect() is LibraryInspection.Valid)
     }
 
@@ -51,6 +53,18 @@ class PortableLibraryManagerTest {
         }
 
         assertEquals(LibraryInspection.Unsupported(99), PortableLibraryManager(access).inspect())
+    }
+
+    @Test
+    fun initializationNeverOverwritesReservedUserFile() {
+        val access = MemoryDocumentAccess().apply {
+            files[PortableLibraryManager.GUIDE_FILE] = "user content".encodeToByteArray()
+        }
+
+        assertThrows(IllegalStateException::class.java) {
+            PortableLibraryManager(access).initialize("Library")
+        }
+        assertEquals("user content", access.files.getValue(PortableLibraryManager.GUIDE_FILE).decodeToString())
     }
 }
 

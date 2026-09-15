@@ -11,6 +11,7 @@ import dev.susnowy.gallery.metadata.RecognizedMetadata
 import dev.susnowy.gallery.storage.DocumentTreeStorage
 import dev.susnowy.gallery.storage.StorageEntry
 import java.util.Locale
+import java.security.MessageDigest
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -30,6 +31,7 @@ data class ScanCandidate(
     val size: Long,
     val modifiedAt: Long,
     val capturedAt: Long? = null,
+    val contentHash: String? = null,
     val pageCount: Int? = null,
     val coverPath: String? = null,
     val secondaryPath: String? = null,
@@ -96,6 +98,7 @@ class LibraryScanner {
                     modifiedAt = maxOf(directory.lastModified, images.maxOfOrNull(StorageEntry::lastModified) ?: 0),
                     pageCount = images.size,
                     coverPath = sortedPages.firstOrNull()?.relativePath,
+                    contentHash = directoryFingerprint(files),
                     recognizedMetadata = comicInfo.fromDirectory(storage, path)
                         ?: FilenameMetadataParser.parse(path.substringAfterLast('/')),
                 )
@@ -120,6 +123,8 @@ class LibraryScanner {
                     sourceKind = if (inPhotos) SourceKind.SYSTEM_IMPORT else SourceKind.FILE,
                     secondaryPath = motion?.relativePath,
                     capturedAt = if (inPhotos) readCapturedAt(storage, image) else null,
+                    contentHash = contentHash(storage, image),
+                    sizeOverride = image.size + (motion?.size ?: 0),
                 )
             }
             videos.filterNot { it.relativePath in pairedVideoPaths }.forEach { video ->
@@ -127,6 +132,7 @@ class LibraryScanner {
                     kind = if (inPhotos) MediaKind.PHOTO_VIDEO else MediaKind.VIDEO,
                     sourceKind = if (inPhotos) SourceKind.SYSTEM_IMPORT else SourceKind.FILE,
                     capturedAt = if (inPhotos) readCapturedAt(storage, video) else null,
+                    contentHash = contentHash(storage, video),
                 )
             }
         }
@@ -140,6 +146,7 @@ class LibraryScanner {
                 kind = MediaKind.IMAGE_SET,
                 sourceKind = SourceKind.ARCHIVE,
                 pageCount = count,
+                contentHash = contentHash(storage, archive),
                 recognizedMetadata = comicInfo.fromArchive(storage, archive.relativePath)
                     ?: FilenameMetadataParser.parse(archive.name),
             )
@@ -172,6 +179,8 @@ class LibraryScanner {
         secondaryPath: String? = null,
         capturedAt: Long? = null,
         recognizedMetadata: RecognizedMetadata? = null,
+        contentHash: String? = null,
+        sizeOverride: Long? = null,
     ) = ScanCandidate(
         relativePath = relativePath,
         uri = uri,
@@ -179,13 +188,43 @@ class LibraryScanner {
         sourceKind = sourceKind,
         suggestedTitle = name.substringBeforeLast('.', name),
         mimeType = mimeType,
-        size = size,
+        size = sizeOverride ?: size,
         modifiedAt = lastModified,
         capturedAt = capturedAt,
         pageCount = pageCount,
         secondaryPath = secondaryPath,
         recognizedMetadata = recognizedMetadata,
+        contentHash = contentHash,
     )
+
+    private fun contentHash(storage: DocumentTreeStorage, entry: StorageEntry): String? {
+        if (entry.size <= 0 || entry.size > HASH_SIZE_LIMIT) return null
+        val document = LibraryDocument(entry.relativePath, entry.name, false)
+        val digest = MessageDigest.getInstance("SHA-256")
+        storage.openInput(document).use { input ->
+            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+            while (true) {
+                val count = input.read(buffer)
+                if (count < 0) break
+                digest.update(buffer, 0, count)
+            }
+        }
+        return digest.digest().toHex()
+    }
+
+    private fun directoryFingerprint(files: List<StorageEntry>): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        files.sortedWith { left, right -> MediaClassifier.naturalCompare(left.name, right.name) }
+            .forEach { entry ->
+                digest.update(entry.name.lowercase(Locale.ROOT).encodeToByteArray())
+                digest.update(0.toByte())
+                digest.update(entry.size.toString().encodeToByteArray())
+                digest.update(0.toByte())
+            }
+        return digest.digest().toHex()
+    }
+
+    private fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it) }
 
     private fun readCapturedAt(storage: DocumentTreeStorage, entry: StorageEntry): Long? = when {
         MediaClassifier.isImage(entry.name, entry.mimeType) -> runCatching {
@@ -200,11 +239,14 @@ class LibraryScanner {
         }.getOrNull()
         MediaClassifier.isVideo(entry.name, entry.mimeType) -> runCatching {
             storage.openFileDescriptor(entry.relativePath)?.use { descriptor ->
-                MediaMetadataRetriever().use { retriever ->
+                val retriever = MediaMetadataRetriever()
+                try {
                     retriever.setDataSource(descriptor.fileDescriptor)
                     retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DATE)
                         ?.replace(Regex("\\.\\d+"), "")
                         ?.let { value -> runCatching { Instant.from(VIDEO_DATE.parse(value)).toEpochMilli() }.getOrNull() }
+                } finally {
+                    retriever.release()
                 }
             }
         }.getOrNull()
@@ -215,6 +257,7 @@ class LibraryScanner {
 
     companion object {
         const val MIN_IMAGE_SET_PAGES = 2
+        private const val HASH_SIZE_LIMIT = 64L * 1024L * 1024L
         private val EXIF_DATE = DateTimeFormatter.ofPattern("yyyy:MM:dd HH:mm:ss", Locale.ROOT)
         private val VIDEO_DATE = DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmssX", Locale.ROOT)
     }

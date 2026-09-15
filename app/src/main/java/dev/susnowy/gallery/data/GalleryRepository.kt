@@ -2,6 +2,7 @@ package dev.susnowy.gallery.data
 
 import android.content.Context
 import android.net.Uri
+import androidx.core.net.toUri
 import dev.susnowy.gallery.derive.DerivationService
 import dev.susnowy.gallery.importer.ImportResult
 import dev.susnowy.gallery.importer.SystemMediaImporter
@@ -23,6 +24,7 @@ import java.io.FileNotFoundException
 import java.security.MessageDigest
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -97,20 +99,24 @@ class GalleryRepository(context: Context) {
             val existingByPath = existing.associateBy(MediaItem::relativePath)
             val metadataById = catalog.items.associateBy { it.id }
             val metadataByPath = catalog.items.associateBy { it.relativePath }
+            val metadataByHash = catalog.items.filter { it.contentHash != null }
+                .groupBy { it.contentHash }
+                .mapNotNull { (hash, matches) -> matches.singleOrNull()?.let { hash to it } }
+                .toMap()
             val foundPaths = result.candidates.mapTo(mutableSetOf()) { it.relativePath }
             val unmatchedExisting = existing.filter { it.relativePath !in foundPaths }.toMutableList()
 
             result.candidates.forEach { candidate ->
                 val atPath = existingByPath[candidate.relativePath]
-                val relocated = if (atPath == null && candidate.sourceKind.name != "DIRECTORY") {
+                val relocated = if (atPath == null && candidate.contentHash != null) {
                     unmatchedExisting.filter {
-                        it.kind == candidate.kind && it.size == candidate.size &&
-                            it.modifiedAt == candidate.modifiedAt && !it.trashed
+                        it.kind == candidate.kind && it.contentHash == candidate.contentHash && !it.trashed
                     }.singleOrNull()?.also(unmatchedExisting::remove)
                 } else null
                 val local = atPath ?: relocated
                 val metadata = local?.let { metadataById[it.id] }
                     ?: metadataByPath[candidate.relativePath]
+                    ?: candidate.contentHash?.let(metadataByHash::get)
                 val id = metadata?.id ?: local?.id ?: UUID.randomUUID().toString()
                 val trashEntry = state.trash.firstOrNull { it.itemId == id }
                 val recognized = candidate.recognizedMetadata
@@ -135,6 +141,7 @@ class GalleryRepository(context: Context) {
                     mimeType = candidate.mimeType,
                     size = candidate.size,
                     modifiedAt = candidate.modifiedAt,
+                    contentHash = candidate.contentHash,
                     capturedAt = candidate.capturedAt ?: local?.capturedAt,
                     pageCount = candidate.pageCount,
                     authors = metadata?.authors ?: recognized?.authors?.takeIf { it.isNotEmpty() }
@@ -258,6 +265,7 @@ class GalleryRepository(context: Context) {
         }
 
     suspend fun cleanupExpired(retentionDays: Int): Int = onIo {
+        if (retentionDays <= 0) return@onIo 0
         val threshold = System.currentTimeMillis() - retentionDays.coerceAtLeast(1) * 86_400_000L
         val expired = database.media().filter {
             it.trashed && (it.deletedAt ?: Long.MAX_VALUE) <= threshold
@@ -342,7 +350,7 @@ class GalleryRepository(context: Context) {
         database.library(libraryId) ?: error("Library 未登记：$libraryId")
 
     private fun storageFor(registration: LibraryRegistration) =
-        DocumentTreeStorage(appContext, Uri.parse(registration.treeUri))
+        DocumentTreeStorage(appContext, registration.treeUri.toUri())
 
     private fun purgeInternal(itemId: String) {
         val item = database.mediaItem(itemId) ?: return
@@ -350,12 +358,20 @@ class GalleryRepository(context: Context) {
         val storage = storageFor(requireLibrary(item.libraryId))
         val entry = storage.entry(item.relativePath)
             ?: throw FileNotFoundException("文件已不存在，请先重新扫描")
-        val currentSize = if (entry.isDirectory) storage.treeStats(item.relativePath).totalBytes else entry.size
+        val secondaryEntry = item.secondaryPath?.let { path ->
+            storage.entry(path) ?: throw FileNotFoundException("Live Photo motion 文件已不存在")
+        }
+        val currentSize = (if (entry.isDirectory) storage.treeStats(item.relativePath).totalBytes else entry.size) +
+            (secondaryEntry?.size ?: 0)
         if (item.size > 0 && currentSize != item.size) {
             error("媒体内容大小已变化，为避免误删已停止操作")
         }
         val document = storage.find(item.relativePath)
             ?: throw FileNotFoundException(item.relativePath)
+        item.secondaryPath?.let { path ->
+            val secondaryDocument = storage.find(path) ?: throw FileNotFoundException(path)
+            check(storage.delete(secondaryDocument)) { "Provider 拒绝删除 Live Photo motion 文件" }
+        }
         check(storage.delete(document)) { "Provider 拒绝删除 ${item.relativePath}" }
         PortableMetadataStore(storage).removeItem(item)
         database.removeMedia(item.id)
@@ -367,6 +383,7 @@ class GalleryRepository(context: Context) {
         return try {
             block()
         } catch (error: Exception) {
+            if (error is CancellationException) throw error
             _events.tryEmit(error.message ?: "操作失败")
             throw error
         } finally {

@@ -119,7 +119,16 @@ fun GalleryScreenContent(
         AppScreen.COLLECTIONS -> FacetScreen(visible, Facet.COLLECTION, viewModel)
         AppScreen.AUTHORS -> FacetScreen(visible, Facet.AUTHOR, viewModel)
         AppScreen.TAGS -> FacetScreen(visible, Facet.TAG, viewModel)
-        AppScreen.SEARCH -> SearchScreen(visible, state.searchQuery, viewModel)
+        AppScreen.SEARCH -> SearchScreen(
+            items = state.allMedia.filter { item ->
+                !item.trashed && state.libraries.any {
+                    it.libraryId == item.libraryId && it.permissionState == PermissionState.AVAILABLE
+                }
+            },
+            activeLibraryId = state.activeLibraryId,
+            query = state.searchQuery,
+            viewModel = viewModel,
+        )
         AppScreen.TRASH -> TrashScreen(state.media.filter(MediaItem::trashed), viewModel)
         AppScreen.ORGANIZER -> OrganizerScreen(viewModel)
         AppScreen.SETTINGS -> SettingsScreen(state, viewModel)
@@ -383,11 +392,18 @@ private fun FacetScreen(items: List<MediaItem>, facet: Facet, viewModel: Gallery
 }
 
 @Composable
-private fun SearchScreen(items: List<MediaItem>, query: String, viewModel: GalleryViewModel) {
+private fun SearchScreen(
+    items: List<MediaItem>,
+    activeLibraryId: String?,
+    query: String,
+    viewModel: GalleryViewModel,
+) {
     var kind by remember { mutableStateOf<MediaKind?>(null) }
+    var allLibraries by remember { mutableStateOf(true) }
     val normalized = query.trim()
     val filtered = items.filter { item ->
-        (kind == null || item.kind == kind) && (normalized.isBlank() || listOf(
+        (allLibraries || item.libraryId == activeLibraryId) &&
+            (kind == null || item.kind == kind) && (normalized.isBlank() || listOf(
             item.displayTitle,
             item.originalTitle.orEmpty(),
             item.relativePath,
@@ -412,6 +428,13 @@ private fun SearchScreen(items: List<MediaItem>, query: String, viewModel: Galle
             contentPadding = PaddingValues(horizontal = 16.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            item {
+                FilterChip(
+                    selected = allLibraries,
+                    onClick = { allLibraries = !allLibraries },
+                    label = { Text(if (allLibraries) "所有在线 Library" else "当前 Library") },
+                )
+            }
             item {
                 FilterChip(selected = kind == null, onClick = { kind = null }, label = { Text("全部") })
             }
@@ -581,7 +604,9 @@ private fun OrganizationPlanView(
 
 @Composable
 private fun SettingsScreen(state: GalleryUiState, viewModel: GalleryViewModel) {
-    var daysText by remember(state.trashRetentionDays) { mutableStateOf(state.trashRetentionDays.toString()) }
+    var daysText by remember(state.trashRetentionDays) {
+        mutableStateOf(state.trashRetentionDays.takeIf { it > 0 }?.toString().orEmpty())
+    }
     val duplicateGroups by viewModel.duplicateGroups.collectAsStateWithLifecycle()
     LazyColumn(contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
         item {
@@ -594,11 +619,24 @@ private fun SettingsScreen(state: GalleryUiState, viewModel: GalleryViewModel) {
             )
         }
         item {
+            Text("回收站保留期限", style = MaterialTheme.typography.titleMedium)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf(7, 30, 90, 0).forEach { days ->
+                    FilterChip(
+                        selected = state.trashRetentionDays == days,
+                        onClick = {
+                            viewModel.setRetentionDays(days)
+                            daysText = days.takeIf { it > 0 }?.toString().orEmpty()
+                        },
+                        label = { Text(if (days == 0) "永久" else "$days 天") },
+                    )
+                }
+            }
             OutlinedTextField(
                 value = daysText,
                 onValueChange = { daysText = it.filter(Char::isDigit).take(4) },
                 label = { Text("回收站保留天数") },
-                supportingText = { Text("到期内容仍需经过身份验证后才会真删除") },
+                supportingText = { Text("自定义天数；到期内容仍需经过身份验证后才会真删除") },
                 singleLine = true,
             )
             FilledTonalButton(

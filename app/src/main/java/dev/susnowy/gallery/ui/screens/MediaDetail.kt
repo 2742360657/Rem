@@ -5,6 +5,8 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.rememberTransformableState
 import androidx.compose.foundation.gestures.transformable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -60,6 +62,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.MediaItem as PlayerMediaItem
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
+import androidx.core.net.toUri
 import coil3.compose.AsyncImage
 import dev.susnowy.gallery.media.ImagePage
 import dev.susnowy.gallery.model.MediaItem
@@ -213,7 +216,7 @@ private fun ZoomableImage(uri: String, description: String, modifier: Modifier =
         contentAlignment = Alignment.Center,
     ) {
         AsyncImage(
-            model = Uri.parse(uri),
+            model = uri.toUri(),
             contentDescription = description,
             contentScale = ContentScale.Fit,
             modifier = Modifier
@@ -339,7 +342,7 @@ private fun VideoViewer(
     }
     LaunchedEffect(player, uri, saved) {
         val position = saved ?: return@LaunchedEffect
-        player.setMediaItem(PlayerMediaItem.fromUri(Uri.parse(uri)))
+        player.setMediaItem(PlayerMediaItem.fromUri(uri.toUri()))
         player.prepare()
         if (position > 0) player.seekTo(position)
         player.playWhenReady = true
@@ -402,7 +405,10 @@ private fun MetadataEditor(
         onDismissRequest = onDismiss,
         title = { Text("编辑便携元数据") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
                 OutlinedTextField(title, { title = it }, label = { Text("显示标题") }, singleLine = true)
                 OutlinedTextField(authors, { authors = it }, label = { Text("作者（逗号分隔）") }, singleLine = true)
                 OutlinedTextField(tags, { tags = it }, label = { Text("标签（支持 namespace）") }, singleLine = true)

@@ -55,6 +55,7 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
                 mime_type TEXT,
                 size INTEGER NOT NULL,
                 modified_at INTEGER NOT NULL,
+                content_hash TEXT,
                 captured_at INTEGER,
                 page_count INTEGER,
                 authors_json TEXT NOT NULL,
@@ -92,7 +93,9 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        if (oldVersion != newVersion) {
+        if (oldVersion < 2) {
+            db.execSQL("ALTER TABLE media ADD COLUMN content_hash TEXT")
+        } else if (oldVersion != newVersion) {
             db.execSQL("DROP TABLE IF EXISTS progress")
             db.execSQL("DROP TABLE IF EXISTS media")
             db.execSQL("DROP TABLE IF EXISTS libraries")
@@ -261,6 +264,7 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
         mimeType?.let { put("mime_type", it) } ?: putNull("mime_type")
         put("size", size)
         put("modified_at", modifiedAt)
+        contentHash?.let { put("content_hash", it) } ?: putNull("content_hash")
         capturedAt?.let { put("captured_at", it) } ?: putNull("captured_at")
         pageCount?.let { put("page_count", it) } ?: putNull("page_count")
         put("authors_json", json.encodeToString(authors))
@@ -298,6 +302,7 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
         mimeType = cursor.nullableString("mime_type"),
         size = cursor.long("size"),
         modifiedAt = cursor.long("modified_at"),
+        contentHash = cursor.nullableString("content_hash"),
         capturedAt = cursor.nullableLong("captured_at"),
         pageCount = cursor.nullableInt("page_count"),
         authors = json.decodeFromString(cursor.string("authors_json")),
@@ -334,6 +339,6 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
 
     companion object {
         private const val DATABASE_NAME = "gallery-index.db"
-        private const val DATABASE_VERSION = 1
+        private const val DATABASE_VERSION = 2
     }
 }
