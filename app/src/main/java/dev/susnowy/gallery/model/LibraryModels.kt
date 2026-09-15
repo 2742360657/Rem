@@ -16,6 +16,17 @@ data class PortableLibrary(
     @SerialName("updated_at") val updatedAt: String,
 )
 
+enum class PermissionState { AVAILABLE, OFFLINE, REVOKED }
+
+data class LibraryRegistration(
+    val libraryId: String,
+    val name: String,
+    val treeUri: String,
+    val permissionState: PermissionState,
+    val schemaVersion: Int,
+    val lastScanAt: Long? = null,
+)
+
 sealed interface LibraryInspection {
     data object Missing : LibraryInspection
     data class Valid(val library: PortableLibrary) : LibraryInspection
