@@ -15,7 +15,10 @@ import dev.susnowy.gallery.model.MediaItem
 import dev.susnowy.gallery.model.MediaKind
 import dev.susnowy.gallery.model.PlaybackProgress
 import dev.susnowy.gallery.model.SeriesRef
+import dev.susnowy.gallery.organizer.OrganizationPlan
+import dev.susnowy.gallery.organizer.OrganizerTemplate
 import java.util.UUID
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -70,6 +73,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     private val message = MutableStateFlow<String?>(null)
     private val autoScan = MutableStateFlow(preferences.getBoolean("auto_scan", true))
     private val retentionDays = MutableStateFlow(preferences.getInt("trash_retention_days", 30))
+    private val _organizationPlan = MutableStateFlow<OrganizationPlan?>(null)
+    val organizationPlan: StateFlow<OrganizationPlan?> = _organizationPlan
 
     val uiState: StateFlow<GalleryUiState> = combine(
         repository.libraries,
@@ -102,6 +107,11 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     init {
         viewModelScope.launch {
             repository.events.collect { message.value = it }
+        }
+        viewModelScope.launch {
+            delay(1_500)
+            runCatching { repository.cleanupExpired(retentionDays.value) }
+                .onSuccess { if (it > 0) message.value = "已安全清理 $it 个到期回收站项目" }
         }
     }
 
@@ -272,6 +282,46 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     fun setRetentionDays(days: Int) {
         retentionDays.value = days.coerceIn(1, 3650)
         preferences.edit().putInt("trash_retention_days", retentionDays.value).apply()
+    }
+
+    fun previewOrganization(template: OrganizerTemplate) {
+        val libraryId = activeLibraryId.value ?: return
+        viewModelScope.launch {
+            runCatching { repository.previewOrganization(libraryId, template) }
+                .onSuccess { _organizationPlan.value = it }
+                .onFailure(::showError)
+        }
+    }
+
+    fun executeOrganization(plan: OrganizationPlan) {
+        viewModelScope.launch {
+            runCatching {
+                repository.executeOrganization(plan)
+                repository.scan(plan.steps.first().item.libraryId)
+            }.onSuccess {
+                _organizationPlan.value = null
+                message.value = "整理事务已完成并校验"
+            }.onFailure(::showError)
+        }
+    }
+
+    fun clearOrganizationPlan() {
+        _organizationPlan.value = null
+    }
+
+    fun importSystemMedia(uris: List<Uri>) {
+        val libraryId = activeLibraryId.value ?: return
+        if (uris.isEmpty()) return
+        viewModelScope.launch {
+            runCatching {
+                val result = repository.importSystemMedia(libraryId, uris)
+                repository.scan(libraryId)
+                result
+            }.onSuccess { result ->
+                message.value = "已导入 ${result.imported} 项，跳过 ${result.skipped} 项" +
+                    if (result.warnings.isEmpty()) "" else "，${result.warnings.size} 条警告"
+            }.onFailure(::showError)
+        }
     }
 
     fun clearMessage() {

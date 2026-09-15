@@ -122,6 +122,22 @@ class PortableMetadataStore(
         writeSafely(STATE_PATH, json.encodeToString(stateUpdated), "application/json")
     }
 
+    fun createBackup(label: String): List<String> {
+        val safeLabel = label.replace(Regex("[^A-Za-z0-9._-]"), "_").take(80)
+        return buildList {
+            read(CATALOG_PATH)?.let { catalog ->
+                val path = ".gallery/backups/$safeLabel-catalog.json"
+                writeSafely(path, catalog, "application/json")
+                add(path)
+            }
+            read(STATE_PATH)?.let { state ->
+                val path = ".gallery/backups/$safeLabel-state.json"
+                writeSafely(path, state, "application/json")
+                add(path)
+            }
+        }
+    }
+
     private fun read(path: String): String? {
         val document = access.find(path) ?: return null
         return access.openInput(document).bufferedReader(Charsets.UTF_8).use { it.readText() }

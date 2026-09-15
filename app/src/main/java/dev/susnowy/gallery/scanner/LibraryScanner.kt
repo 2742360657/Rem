@@ -1,11 +1,16 @@
 package dev.susnowy.gallery.scanner
 
+import android.media.MediaMetadataRetriever
+import androidx.exifinterface.media.ExifInterface
 import dev.susnowy.gallery.library.LibraryDocument
 import dev.susnowy.gallery.model.MediaKind
 import dev.susnowy.gallery.model.SourceKind
 import dev.susnowy.gallery.storage.DocumentTreeStorage
 import dev.susnowy.gallery.storage.StorageEntry
 import java.util.Locale
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import java.util.zip.ZipInputStream
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
@@ -21,6 +26,7 @@ data class ScanCandidate(
     val mimeType: String?,
     val size: Long,
     val modifiedAt: Long,
+    val capturedAt: Long? = null,
     val pageCount: Int? = null,
     val coverPath: String? = null,
     val secondaryPath: String? = null,
@@ -81,7 +87,7 @@ class LibraryScanner {
                     sourceKind = SourceKind.DIRECTORY,
                     suggestedTitle = path.substringAfterLast('/'),
                     mimeType = null,
-                    size = images.sumOf(StorageEntry::size),
+                    size = files.sumOf(StorageEntry::size),
                     modifiedAt = maxOf(directory.lastModified, images.maxOfOrNull(StorageEntry::lastModified) ?: 0),
                     pageCount = images.size,
                     coverPath = sortedPages.firstOrNull()?.relativePath,
@@ -106,12 +112,14 @@ class LibraryScanner {
                     } else MediaKind.LIVE_PHOTO,
                     sourceKind = if (inPhotos) SourceKind.SYSTEM_IMPORT else SourceKind.FILE,
                     secondaryPath = motion?.relativePath,
+                    capturedAt = if (inPhotos) readCapturedAt(storage, image) else null,
                 )
             }
             videos.filterNot { it.relativePath in pairedVideoPaths }.forEach { video ->
                 output += video.toCandidate(
                     kind = if (inPhotos) MediaKind.PHOTO_VIDEO else MediaKind.VIDEO,
                     sourceKind = if (inPhotos) SourceKind.SYSTEM_IMPORT else SourceKind.FILE,
+                    capturedAt = if (inPhotos) readCapturedAt(storage, video) else null,
                 )
             }
         }
@@ -153,6 +161,7 @@ class LibraryScanner {
         sourceKind: SourceKind,
         pageCount: Int? = null,
         secondaryPath: String? = null,
+        capturedAt: Long? = null,
     ) = ScanCandidate(
         relativePath = relativePath,
         uri = uri,
@@ -162,13 +171,40 @@ class LibraryScanner {
         mimeType = mimeType,
         size = size,
         modifiedAt = lastModified,
+        capturedAt = capturedAt,
         pageCount = pageCount,
         secondaryPath = secondaryPath,
     )
+
+    private fun readCapturedAt(storage: DocumentTreeStorage, entry: StorageEntry): Long? = when {
+        MediaClassifier.isImage(entry.name, entry.mimeType) -> runCatching {
+            val document = LibraryDocument(entry.relativePath, entry.name, false)
+            storage.openInput(document).use { input ->
+                val exif = ExifInterface(input)
+                val value = exif.getAttribute(ExifInterface.TAG_DATETIME_ORIGINAL)
+                    ?: exif.getAttribute(ExifInterface.TAG_DATETIME)
+                value?.let { EXIF_DATE.parse(it, java.time.LocalDateTime::from) }
+                    ?.atZone(ZoneId.systemDefault())?.toInstant()?.toEpochMilli()
+            }
+        }.getOrNull()
+        MediaClassifier.isVideo(entry.name, entry.mimeType) -> runCatching {
+            storage.openFileDescriptor(entry.relativePath)?.use { descriptor ->
+                MediaMetadataRetriever().use { retriever ->
+                    retriever.setDataSource(descriptor.fileDescriptor)
+                    retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DATE)
+                        ?.replace(Regex("\\.\\d+"), "")
+                        ?.let { value -> runCatching { Instant.from(VIDEO_DATE.parse(value)).toEpochMilli() }.getOrNull() }
+                }
+            }
+        }.getOrNull()
+        else -> null
+    }
 
     private fun String.pathSegments(): List<String> = split('/').filter(String::isNotBlank)
 
     companion object {
         const val MIN_IMAGE_SET_PAGES = 2
+        private val EXIF_DATE = DateTimeFormatter.ofPattern("yyyy:MM:dd HH:mm:ss", Locale.ROOT)
+        private val VIDEO_DATE = DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmssX", Locale.ROOT)
     }
 }

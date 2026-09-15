@@ -2,6 +2,8 @@ package dev.susnowy.gallery.data
 
 import android.content.Context
 import android.net.Uri
+import dev.susnowy.gallery.importer.ImportResult
+import dev.susnowy.gallery.importer.SystemMediaImporter
 import dev.susnowy.gallery.library.PortableLibraryManager
 import dev.susnowy.gallery.metadata.PortableMetadataStore
 import dev.susnowy.gallery.model.LibraryInspection
@@ -9,6 +11,9 @@ import dev.susnowy.gallery.model.LibraryRegistration
 import dev.susnowy.gallery.model.MediaItem
 import dev.susnowy.gallery.model.PermissionState
 import dev.susnowy.gallery.model.PlaybackProgress
+import dev.susnowy.gallery.organizer.OrganizationPlan
+import dev.susnowy.gallery.organizer.OrganizerService
+import dev.susnowy.gallery.organizer.OrganizerTemplate
 import dev.susnowy.gallery.scanner.LibraryScanner
 import dev.susnowy.gallery.scanner.ScanResult
 import dev.susnowy.gallery.storage.DocumentTreeStorage
@@ -27,6 +32,8 @@ class GalleryRepository(context: Context) {
     private val appContext = context.applicationContext
     private val database = GalleryDatabase(appContext)
     private val scanner = LibraryScanner()
+    private val organizer = OrganizerService()
+    private val importer = SystemMediaImporter(appContext)
 
     private val _libraries = MutableStateFlow<List<LibraryRegistration>>(emptyList())
     val libraries: StateFlow<List<LibraryRegistration>> = _libraries.asStateFlow()
@@ -114,7 +121,7 @@ class GalleryRepository(context: Context) {
                     mimeType = candidate.mimeType,
                     size = candidate.size,
                     modifiedAt = candidate.modifiedAt,
-                    capturedAt = local?.capturedAt,
+                    capturedAt = candidate.capturedAt ?: local?.capturedAt,
                     pageCount = candidate.pageCount,
                     authors = metadata?.authors ?: local?.authors.orEmpty(),
                     tags = metadata?.tags ?: local?.tags.orEmpty(),
@@ -190,20 +197,7 @@ class GalleryRepository(context: Context) {
 
     suspend fun purge(itemId: String) = runOperation("正在永久删除…") {
         onIo {
-            val item = database.mediaItem(itemId) ?: return@onIo
-            check(item.trashed) { "只能永久删除回收站中的项目" }
-            val storage = storageFor(requireLibrary(item.libraryId))
-            val entry = storage.entry(item.relativePath)
-                ?: throw FileNotFoundException("文件已不存在，请先重新扫描")
-            if (!entry.isDirectory && item.size > 0 && entry.size != item.size) {
-                error("文件大小已变化，为避免误删已停止操作")
-            }
-            val document = storage.find(item.relativePath)
-                ?: throw FileNotFoundException(item.relativePath)
-            check(storage.delete(document)) { "Provider 拒绝删除 ${item.relativePath}" }
-            PortableMetadataStore(storage).removeItem(item)
-            database.removeMedia(item.id)
-            refreshFromDatabase()
+            purgeInternal(itemId)
         }
     }
 
@@ -215,6 +209,44 @@ class GalleryRepository(context: Context) {
     }
 
     suspend fun progress(itemId: String): PlaybackProgress? = onIo { database.progress(itemId) }
+
+    suspend fun previewOrganization(
+        libraryId: String,
+        template: OrganizerTemplate,
+    ): OrganizationPlan = runOperation("正在生成整理计划…") {
+        onIo {
+            val items = database.media(libraryId).filterNot { it.trashed || it.inInbox }
+            organizer.preview(items, storageFor(requireLibrary(libraryId)), template)
+        }
+    }
+
+    suspend fun executeOrganization(plan: OrganizationPlan) = runOperation("正在执行整理事务…") {
+        onIo {
+            val libraryId = plan.steps.firstOrNull()?.item?.libraryId ?: error("整理计划为空")
+            organizer.execute(plan, storageFor(requireLibrary(libraryId))) { moved ->
+                database.upsertMedia(moved)
+            }
+            refreshFromDatabase()
+        }
+    }
+
+    suspend fun importSystemMedia(libraryId: String, uris: List<Uri>): ImportResult =
+        runOperation("正在复制系统相册媒体…") {
+            onIo { importer.import(uris, storageFor(requireLibrary(libraryId))) }
+        }
+
+    suspend fun cleanupExpired(retentionDays: Int): Int = onIo {
+        val threshold = System.currentTimeMillis() - retentionDays.coerceAtLeast(1) * 86_400_000L
+        val expired = database.media().filter {
+            it.trashed && (it.deletedAt ?: Long.MAX_VALUE) <= threshold
+        }
+        var deleted = 0
+        expired.forEach { item ->
+            runCatching { purgeInternal(item.id) }.onSuccess { deleted++ }
+        }
+        if (deleted > 0) refreshFromDatabase()
+        deleted
+    }
 
     suspend fun forgetLibrary(libraryId: String) = onIo {
         database.removeLibrary(libraryId)
@@ -235,6 +267,24 @@ class GalleryRepository(context: Context) {
 
     private fun storageFor(registration: LibraryRegistration) =
         DocumentTreeStorage(appContext, Uri.parse(registration.treeUri))
+
+    private fun purgeInternal(itemId: String) {
+        val item = database.mediaItem(itemId) ?: return
+        check(item.trashed) { "只能永久删除回收站中的项目" }
+        val storage = storageFor(requireLibrary(item.libraryId))
+        val entry = storage.entry(item.relativePath)
+            ?: throw FileNotFoundException("文件已不存在，请先重新扫描")
+        val currentSize = if (entry.isDirectory) storage.treeStats(item.relativePath).totalBytes else entry.size
+        if (item.size > 0 && currentSize != item.size) {
+            error("媒体内容大小已变化，为避免误删已停止操作")
+        }
+        val document = storage.find(item.relativePath)
+            ?: throw FileNotFoundException(item.relativePath)
+        check(storage.delete(document)) { "Provider 拒绝删除 ${item.relativePath}" }
+        PortableMetadataStore(storage).removeItem(item)
+        database.removeMedia(item.id)
+        refreshFromDatabase()
+    }
 
     private suspend fun <T> runOperation(label: String, block: suspend () -> T): T {
         _operation.value = label

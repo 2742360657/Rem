@@ -2,6 +2,7 @@ package dev.susnowy.gallery.storage
 
 import android.content.Context
 import android.net.Uri
+import android.os.ParcelFileDescriptor
 import androidx.documentfile.provider.DocumentFile
 import dev.susnowy.gallery.library.LibraryDocument
 import dev.susnowy.gallery.library.LibraryDocumentAccess
@@ -18,6 +19,8 @@ data class StorageEntry(
     val size: Long,
     val lastModified: Long,
 )
+
+data class TreeStats(val fileCount: Int, val totalBytes: Long)
 
 class DocumentTreeStorage(
     private val context: Context,
@@ -97,6 +100,9 @@ class DocumentTreeStorage(
 
     fun contentUri(relativePath: String): Uri? = resolve(relativePath.normalizePath())?.uri
 
+    fun openFileDescriptor(relativePath: String): ParcelFileDescriptor? =
+        contentUri(relativePath)?.let { resolver.openFileDescriptor(it, "r") }
+
     fun copyFile(source: StorageEntry, targetPath: String): StorageEntry {
         require(!source.isDirectory) { "目录复制需要使用 copyDirectory" }
         val sourceDocument = find(source.relativePath) ?: throw FileNotFoundException(source.relativePath)
@@ -113,6 +119,16 @@ class DocumentTreeStorage(
             val targetChild = "$targetPath/${child.name}"
             if (child.isDirectory) copyDirectory(child.relativePath, targetChild)
             else copyFile(child, targetChild)
+        }
+    }
+
+    fun treeStats(path: String): TreeStats {
+        val rootEntry = entry(path) ?: return TreeStats(0, 0)
+        if (!rootEntry.isDirectory) return TreeStats(1, rootEntry.size)
+        return list(path).fold(TreeStats(0, 0)) { total, child ->
+            val childStats = if (child.isDirectory) treeStats(child.relativePath)
+            else TreeStats(1, child.size)
+            TreeStats(total.fileCount + childStats.fileCount, total.totalBytes + childStats.totalBytes)
         }
     }
 

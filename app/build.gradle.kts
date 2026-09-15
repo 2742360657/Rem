@@ -68,6 +68,7 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.documentfile:documentfile:1.1.0")
+    implementation("androidx.exifinterface:exifinterface:1.4.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.3")
     implementation("io.coil-kt.coil3:coil-compose:3.2.0")

@@ -47,9 +47,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.susnowy.gallery.model.MediaItem
 import dev.susnowy.gallery.model.MediaKind
 import dev.susnowy.gallery.model.PermissionState
+import dev.susnowy.gallery.organizer.OrganizationPlan
+import dev.susnowy.gallery.organizer.OrganizerTemplate
 import dev.susnowy.gallery.ui.AppScreen
 import dev.susnowy.gallery.ui.GalleryUiState
 import dev.susnowy.gallery.ui.GalleryViewModel
@@ -121,7 +124,7 @@ fun GalleryScreenContent(
         AppScreen.TAGS -> FacetScreen(visible, Facet.TAG, viewModel)
         AppScreen.SEARCH -> SearchScreen(visible, state.searchQuery, viewModel)
         AppScreen.TRASH -> TrashScreen(state.media.filter(MediaItem::trashed), viewModel)
-        AppScreen.ORGANIZER -> OrganizerIntroScreen()
+        AppScreen.ORGANIZER -> OrganizerScreen(viewModel)
         AppScreen.SETTINGS -> SettingsScreen(state, viewModel)
     }
 }
@@ -394,14 +397,109 @@ private fun TrashScreen(items: List<MediaItem>, viewModel: GalleryViewModel) {
 }
 
 @Composable
-private fun OrganizerIntroScreen() {
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Card(modifier = Modifier.padding(24.dp)) {
-            Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("显式整理", style = MaterialTheme.typography.headlineSmall)
-                Text("整理会先生成移动计划，检查冲突并展示预览。确认前不会改变任何真实文件。")
-                Text("可用字段：作者、标题、系列、季、集，以及原扩展名。")
+private fun OrganizerScreen(viewModel: GalleryViewModel) {
+    val plan by viewModel.organizationPlan.collectAsStateWithLifecycle()
+    var template by remember { mutableStateOf(OrganizerTemplate.AUTHOR_FIRST) }
+    var confirmExecution by remember { mutableStateOf(false) }
+    Column(Modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Text("显式整理真实文件", style = MaterialTheme.typography.headlineSmall)
+            Text(
+                "先生成只读计划并检查冲突。只有确认后才会建立事务、复制、校验并删除源路径。",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OrganizerTemplate.entries.forEach { value ->
+                    FilterChip(
+                        selected = template == value,
+                        onClick = {
+                            template = value
+                            viewModel.clearOrganizationPlan()
+                        },
+                        label = { Text(value.label) },
+                    )
+                }
             }
+            Button(onClick = { viewModel.previewOrganization(template) }) {
+                Text("生成预览")
+            }
+        }
+        if (plan == null) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text("尚未生成计划")
+            }
+        } else {
+            OrganizationPlanView(
+                plan = plan!!,
+                onExecute = { confirmExecution = true },
+                modifier = Modifier.weight(1f),
+            )
+        }
+    }
+    if (confirmExecution && plan != null) {
+        AlertDialog(
+            onDismissRequest = { confirmExecution = false },
+            title = { Text("执行整理事务？") },
+            text = {
+                Text("将移动 ${plan!!.executableSteps.size} 项真实媒体。执行前会备份 .gallery 元数据，并为每一步写入恢复日志。")
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.executeOrganization(plan!!)
+                    confirmExecution = false
+                }) { Text("确认执行") }
+            },
+            dismissButton = { TextButton(onClick = { confirmExecution = false }) { Text("取消") } },
+        )
+    }
+}
+
+@Composable
+private fun OrganizationPlanView(
+    plan: OrganizationPlan,
+    onExecute: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    LazyColumn(
+        modifier = modifier.fillMaxWidth(),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        item {
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp)) {
+                    Text("${plan.steps.size} 个变更 · ${plan.totalBytes.formatBytes()}")
+                    if (plan.hasConflicts) {
+                        Text(
+                            "存在冲突，解决前不能执行",
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    } else {
+                        Button(
+                            onClick = onExecute,
+                            enabled = plan.steps.isNotEmpty(),
+                            modifier = Modifier.padding(top = 8.dp),
+                        ) { Text("执行计划") }
+                    }
+                }
+            }
+        }
+        items(plan.steps, key = { it.item.id }) { step ->
+            ListItem(
+                headlineContent = { Text(step.item.displayTitle) },
+                supportingContent = {
+                    Column {
+                        Text(step.source, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text("→ ${step.target}", maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        step.conflict?.let {
+                            Text(it, color = MaterialTheme.colorScheme.error)
+                        }
+                    }
+                },
+            )
         }
     }
 }
@@ -446,3 +544,10 @@ private fun SettingsScreen(state: GalleryUiState, viewModel: GalleryViewModel) {
 }
 
 private val PHOTO_KINDS = setOf(MediaKind.PHOTO, MediaKind.PHOTO_VIDEO, MediaKind.LIVE_PHOTO)
+
+private fun Long.formatBytes(): String = when {
+    this >= 1_073_741_824 -> "%.1f GB".format(this / 1_073_741_824.0)
+    this >= 1_048_576 -> "%.1f MB".format(this / 1_048_576.0)
+    this >= 1_024 -> "%.1f KB".format(this / 1_024.0)
+    else -> "$this B"
+}

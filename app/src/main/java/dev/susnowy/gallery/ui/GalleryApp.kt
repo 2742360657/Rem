@@ -113,6 +113,9 @@ fun GalleryApp(viewModel: GalleryViewModel = viewModel()) {
         }
         viewModel.attachTree(uri)
     }
+    val mediaPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        viewModel.importSystemMedia(uris)
+    }
 
     LaunchedEffect(state.message) {
         state.message?.let {
@@ -217,6 +220,12 @@ fun GalleryApp(viewModel: GalleryViewModel = viewModel()) {
                             onClick = { folderPicker.launch(null) },
                             icon = { Icon(Icons.Rounded.Add, contentDescription = null) },
                             text = { Text("接入 Library") },
+                        )
+                    } else if (state.screen == AppScreen.PHOTOS) {
+                        ExtendedFloatingActionButton(
+                            onClick = { mediaPicker.launch(arrayOf("image/*", "video/*")) },
+                            icon = { Icon(Icons.Rounded.Add, contentDescription = null) },
+                            text = { Text("导入系统媒体") },
                         )
                     }
                 },
