@@ -3,6 +3,7 @@ package dev.susnowy.gallery.ui
 import android.app.Application
 import android.graphics.Bitmap
 import android.net.Uri
+import android.util.Log
 import androidx.documentfile.provider.DocumentFile
 import androidx.core.content.edit
 import androidx.lifecycle.AndroidViewModel
@@ -397,7 +398,11 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
     private fun showError(error: Throwable) {
         if (error is CancellationException) return
-        message.value = error.message ?: "操作失败"
+        Log.e("Gallery", "Operation failed", error)
+        val detail = generateSequence(error) { it.cause }
+            .mapNotNull { it.message?.trim()?.takeIf(String::isNotEmpty) }
+            .firstOrNull()
+        message.value = detail ?: "操作失败（${error.javaClass.simpleName}）"
     }
 
     private fun String.splitValues(): List<String> =

@@ -3,6 +3,8 @@ package dev.susnowy.gallery.storage
 import android.content.Context
 import android.net.Uri
 import android.os.ParcelFileDescriptor
+import android.provider.DocumentsContract
+import android.util.Log
 import androidx.documentfile.provider.DocumentFile
 import dev.susnowy.gallery.library.LibraryDocument
 import dev.susnowy.gallery.library.LibraryDocumentAccess
@@ -77,10 +79,29 @@ class DocumentTreeStorage(
         resolver.openOutputStream(document.resolveUri(), if (truncate) "rwt" else "wa")
             ?: throw FileNotFoundException(document.key)
 
-    override fun rename(document: LibraryDocument, displayName: String): Boolean =
-        document.resolveDocument().renameTo(displayName)
+    override fun rename(document: LibraryDocument, displayName: String): Boolean {
+        val sourceUri = document.resolveUri()
+        return try {
+            val renamed = DocumentsContract.renameDocument(resolver, sourceUri, displayName) != null
+            if (!renamed) {
+                Log.e(TAG, "Provider returned no URI while renaming ${document.key} to $displayName")
+            }
+            renamed
+        } catch (error: Exception) {
+            Log.e(TAG, "Provider failed to rename ${document.key} to $displayName", error)
+            throw error
+        }
+    }
 
-    override fun delete(document: LibraryDocument): Boolean = document.resolveDocument().delete()
+    override fun delete(document: LibraryDocument): Boolean {
+        val documentUri = document.resolveUri()
+        return try {
+            DocumentsContract.deleteDocument(resolver, documentUri)
+        } catch (error: Exception) {
+            Log.e(TAG, "Provider failed to delete ${document.key}", error)
+            throw error
+        }
+    }
 
     fun list(relativePath: String = ""): List<StorageEntry> {
         val normalized = relativePath.normalizePath()
@@ -146,10 +167,6 @@ class DocumentTreeStorage(
     private fun LibraryDocument.resolveUri(): Uri =
         locator?.let(Uri::parse) ?: resolveRequired(key).uri
 
-    private fun LibraryDocument.resolveDocument(): DocumentFile =
-        locator?.let(Uri::parse)?.let { uri -> DocumentFile.fromSingleUri(context, uri) }
-            ?: resolveRequired(key)
-
     private fun DocumentFile.toLibraryDocument(path: String) = LibraryDocument(
         key = path,
         name = name.orEmpty(),
@@ -166,6 +183,10 @@ class DocumentTreeStorage(
         size = if (isFile) length() else 0,
         lastModified = lastModified(),
     )
+
+    private companion object {
+        const val TAG = "GalleryStorage"
+    }
 }
 
 fun String.normalizeRelativePath(): String = normalizePath()
