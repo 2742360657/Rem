@@ -17,4 +17,10 @@ data class LibraryDocument(
     val key: String,
     val name: String,
     val isDirectory: Boolean,
+    /**
+     * Provider-native locator for a document. SAF providers are allowed to
+     * adjust a requested display name (for example by appending an extension),
+     * so newly created documents must not be looked up again only by [key].
+     */
+    val locator: String? = null,
 )

@@ -70,17 +70,17 @@ class DocumentTreeStorage(
     }
 
     override fun openInput(document: LibraryDocument): InputStream =
-        resolver.openInputStream(resolveRequired(document.key).uri)
+        resolver.openInputStream(document.resolveUri())
             ?: throw FileNotFoundException(document.key)
 
     override fun openOutput(document: LibraryDocument, truncate: Boolean): OutputStream =
-        resolver.openOutputStream(resolveRequired(document.key).uri, if (truncate) "rwt" else "wa")
+        resolver.openOutputStream(document.resolveUri(), if (truncate) "rwt" else "wa")
             ?: throw FileNotFoundException(document.key)
 
     override fun rename(document: LibraryDocument, displayName: String): Boolean =
-        resolveRequired(document.key).renameTo(displayName)
+        document.resolveDocument().renameTo(displayName)
 
-    override fun delete(document: LibraryDocument): Boolean = resolveRequired(document.key).delete()
+    override fun delete(document: LibraryDocument): Boolean = document.resolveDocument().delete()
 
     fun list(relativePath: String = ""): List<StorageEntry> {
         val normalized = relativePath.normalizePath()
@@ -143,10 +143,18 @@ class DocumentTreeStorage(
     private fun resolveRequired(relativePath: String): DocumentFile =
         resolve(relativePath.normalizePath()) ?: throw FileNotFoundException(relativePath)
 
+    private fun LibraryDocument.resolveUri(): Uri =
+        locator?.let(Uri::parse) ?: resolveRequired(key).uri
+
+    private fun LibraryDocument.resolveDocument(): DocumentFile =
+        locator?.let(Uri::parse)?.let { uri -> DocumentFile.fromSingleUri(context, uri) }
+            ?: resolveRequired(key)
+
     private fun DocumentFile.toLibraryDocument(path: String) = LibraryDocument(
         key = path,
         name = name.orEmpty(),
         isDirectory = isDirectory,
+        locator = uri.toString(),
     )
 
     private fun DocumentFile.toStorageEntry(path: String) = StorageEntry(

@@ -66,9 +66,23 @@ class PortableLibraryManagerTest {
         }
         assertEquals("user content", access.files.getValue(PortableLibraryManager.GUIDE_FILE).decodeToString())
     }
+
+    @Test
+    fun initializationSurvivesProviderAdjustedTemporaryNames() {
+        val access = MemoryDocumentAccess(adjustCreatedNames = true)
+
+        val library = PortableLibraryManager(access).initialize("Provider Library")
+
+        assertEquals("Provider Library", library.name)
+        assertTrue(access.files.containsKey(PortableLibraryManager.LIBRARY_JSON))
+        assertTrue(access.files.containsKey(PortableLibraryManager.SCHEMA_FILE))
+        assertTrue(PortableLibraryManager(access).inspect() is LibraryInspection.Valid)
+    }
 }
 
-private class MemoryDocumentAccess : LibraryDocumentAccess {
+private class MemoryDocumentAccess(
+    private val adjustCreatedNames: Boolean = false,
+) : LibraryDocumentAccess {
     val files = mutableMapOf<String, ByteArray>()
     private val directories = mutableSetOf<String>()
 
@@ -84,27 +98,40 @@ private class MemoryDocumentAccess : LibraryDocumentAccess {
     }
 
     override fun createFile(relativePath: String, mimeType: String): LibraryDocument {
-        files[relativePath] = byteArrayOf()
-        return LibraryDocument(relativePath, relativePath.substringAfterLast('/'), false)
+        val providerPath = if (adjustCreatedNames && relativePath.endsWith(".tmp")) {
+            "$relativePath.json"
+        } else {
+            relativePath
+        }
+        files[providerPath] = byteArrayOf()
+        return LibraryDocument(
+            key = relativePath,
+            name = providerPath.substringAfterLast('/'),
+            isDirectory = false,
+            locator = providerPath,
+        )
     }
 
     override fun openInput(document: LibraryDocument): InputStream =
-        ByteArrayInputStream(files.getValue(document.key))
+        ByteArrayInputStream(files.getValue(document.storageKey()))
 
     override fun openOutput(document: LibraryDocument, truncate: Boolean): OutputStream =
         object : ByteArrayOutputStream() {
             override fun close() {
-                files[document.key] = toByteArray()
+                files[document.storageKey()] = toByteArray()
                 super.close()
             }
         }
 
     override fun rename(document: LibraryDocument, displayName: String): Boolean {
-        val parent = document.key.substringBeforeLast('/', missingDelimiterValue = "")
+        val source = document.storageKey()
+        val parent = source.substringBeforeLast('/', missingDelimiterValue = "")
         val target = if (parent.isEmpty()) displayName else "$parent/$displayName"
-        files[target] = files.remove(document.key) ?: return false
+        files[target] = files.remove(source) ?: return false
         return true
     }
 
-    override fun delete(document: LibraryDocument): Boolean = files.remove(document.key) != null
+    override fun delete(document: LibraryDocument): Boolean = files.remove(document.storageKey()) != null
+
+    private fun LibraryDocument.storageKey(): String = locator ?: key
 }
