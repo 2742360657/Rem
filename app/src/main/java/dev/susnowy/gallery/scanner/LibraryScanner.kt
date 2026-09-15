@@ -1,6 +1,7 @@
 package dev.susnowy.gallery.scanner
 
 import android.media.MediaMetadataRetriever
+import android.util.Log
 import androidx.exifinterface.media.ExifInterface
 import dev.susnowy.gallery.library.LibraryDocument
 import dev.susnowy.gallery.model.MediaKind
@@ -51,6 +52,7 @@ class LibraryScanner {
         val ambiguous = mutableListOf<String>()
         val warnings = mutableListOf<String>()
         scanDirectory(storage, "", candidates, ambiguous, warnings)
+        Log.i(TAG, "Scan finished: candidates=${candidates.size}, ambiguous=${ambiguous.size}, warnings=${warnings.size}")
         ScanResult(
             candidates = candidates.sortedWith(compareBy<ScanCandidate> { it.kind.ordinal }
                 .thenComparator { left, right ->
@@ -70,6 +72,7 @@ class LibraryScanner {
     ) {
         coroutineContext.ensureActive()
         val entries = runCatching { storage.list(path) }.getOrElse { error ->
+            Log.e(TAG, "Unable to list ${path.ifEmpty { "<root>" }}", error)
             warnings += "无法读取 ${path.ifEmpty { "Library 根目录" }}：${error.message.orEmpty()}"
             return
         }.filterNot { path.isEmpty() && it.name == ".gallery" }
@@ -80,7 +83,6 @@ class LibraryScanner {
         val images = files.filter { MediaClassifier.isImage(it.name, it.mimeType) }
         val videos = files.filter { MediaClassifier.isVideo(it.name, it.mimeType) }
         val archives = files.filter { MediaClassifier.isImageArchive(it.name) }
-
         if (!inPhotos && path.isNotEmpty() && images.size >= MIN_IMAGE_SET_PAGES && directories.isEmpty()) {
             val sortedPages = images.sortedWith { left, right ->
                 MediaClassifier.naturalCompare(left.name, right.name)
@@ -256,6 +258,7 @@ class LibraryScanner {
     private fun String.pathSegments(): List<String> = split('/').filter(String::isNotBlank)
 
     companion object {
+        private const val TAG = "GalleryScanner"
         const val MIN_IMAGE_SET_PAGES = 2
         private const val HASH_SIZE_LIMIT = 64L * 1024L * 1024L
         private val EXIF_DATE = DateTimeFormatter.ofPattern("yyyy:MM:dd HH:mm:ss", Locale.ROOT)

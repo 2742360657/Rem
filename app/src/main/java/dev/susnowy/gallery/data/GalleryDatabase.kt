@@ -105,12 +105,15 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
 
     @Synchronized
     fun upsertLibrary(library: LibraryRegistration) {
-        writableDatabase.insertWithOnConflict(
+        val database = writableDatabase
+        val values = library.toValues()
+        val updated = database.update(
             "libraries",
-            null,
-            library.toValues(),
-            SQLiteDatabase.CONFLICT_REPLACE,
+            values,
+            "library_id = ?",
+            arrayOf(library.libraryId),
         )
+        if (updated == 0) database.insertOrThrow("libraries", null, values)
     }
 
     @Synchronized
@@ -143,12 +146,20 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
 
     @Synchronized
     fun upsertMedia(item: MediaItem) {
-        writableDatabase.insertWithOnConflict(
-            "media",
-            null,
-            item.toValues(),
-            SQLiteDatabase.CONFLICT_REPLACE,
-        )
+        val database = writableDatabase
+        val values = item.toValues()
+        val updated = database.update("media", values, "id = ?", arrayOf(item.id))
+        if (updated == 0) {
+            // A portable metadata record can intentionally replace a local placeholder at the
+            // same path. REPLACE is only used for that identity hand-off; routine updates stay
+            // in-place so their progress rows are not deleted by ON DELETE CASCADE.
+            database.insertWithOnConflict(
+                "media",
+                null,
+                values,
+                SQLiteDatabase.CONFLICT_REPLACE,
+            )
+        }
     }
 
     @Synchronized
