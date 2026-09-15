@@ -10,6 +10,8 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dev.susnowy.gallery.GalleryApplication
 import dev.susnowy.gallery.data.GalleryRepository
+import dev.susnowy.gallery.importer.SystemMediaAccess
+import dev.susnowy.gallery.importer.SystemMediaEntry
 import dev.susnowy.gallery.media.ImagePage
 import dev.susnowy.gallery.media.MediaContentService
 import dev.susnowy.gallery.model.LibraryRegistration
@@ -35,6 +37,7 @@ enum class AppScreen(val title: String) {
     LIBRARIES("媒体库"),
     INBOX("Inbox"),
     PHOTOS("相册"),
+    SYSTEM_GALLERY("系统相册"),
     IMAGES("图片"),
     IMAGE_SETS("漫画与图集"),
     VIDEOS("视频"),
@@ -60,6 +63,9 @@ data class GalleryUiState(
     val message: String? = null,
     val autoScan: Boolean = true,
     val trashRetentionDays: Int = 30,
+    val systemMedia: List<SystemMediaEntry> = emptyList(),
+    val systemMediaAccess: SystemMediaAccess = SystemMediaAccess.NONE,
+    val systemMediaLoading: Boolean = false,
 ) {
     val activeLibrary: LibraryRegistration?
         get() = libraries.firstOrNull { it.libraryId == activeLibraryId }
@@ -78,11 +84,15 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     private val message = MutableStateFlow<String?>(null)
     private val autoScan = MutableStateFlow(preferences.getBoolean("auto_scan", true))
     private val retentionDays = MutableStateFlow(preferences.getInt("trash_retention_days", 30))
+    private val systemMedia = MutableStateFlow<List<SystemMediaEntry>>(emptyList())
+    private val systemMediaAccess = MutableStateFlow(repository.systemMediaAccess())
+    private val systemMediaLoading = MutableStateFlow(false)
     private val _organizationPlan = MutableStateFlow<OrganizationPlan?>(null)
     val organizationPlan: StateFlow<OrganizationPlan?> = _organizationPlan
     private val _duplicateGroups = MutableStateFlow<List<List<MediaItem>>>(emptyList())
     val duplicateGroups: StateFlow<List<List<MediaItem>>> = _duplicateGroups
     private var longOperationJob: Job? = null
+    private var systemMediaJob: Job? = null
 
     val uiState: StateFlow<GalleryUiState> = combine(
         repository.libraries,
@@ -90,8 +100,16 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         combine(screen, selectedItemId, searchQuery) { currentScreen, selected, query ->
             Triple(currentScreen, selected, query)
         },
-        combine(repository.operation, message, autoScan, retentionDays) { operation, currentMessage, scan, days ->
-            SettingsStatus(operation, currentMessage, scan, days)
+        combine(
+            repository.operation,
+            message,
+            autoScan,
+            retentionDays,
+            combine(systemMedia, systemMediaAccess, systemMediaLoading) { media, access, loading ->
+                SystemGalleryStatus(media, access, loading)
+            },
+        ) { operation, currentMessage, scan, days, gallery ->
+            SettingsStatus(operation, currentMessage, scan, days, gallery)
         },
         activeLibraryId,
     ) { libraries, allMedia, navigation, status, activeId ->
@@ -110,6 +128,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             message = status.message,
             autoScan = status.autoScan,
             trashRetentionDays = status.retentionDays,
+            systemMedia = status.systemGallery.media,
+            systemMediaAccess = status.systemGallery.access,
+            systemMediaLoading = status.systemGallery.loading,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), GalleryUiState())
 
@@ -183,6 +204,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     fun navigate(destination: AppScreen) {
         screen.value = destination
         selectedItemId.value = null
+        if (destination == AppScreen.SYSTEM_GALLERY) refreshSystemMedia()
     }
 
     fun open(item: MediaItem) {
@@ -336,6 +358,50 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    fun importSystemImageSet(uris: List<Uri>, title: String) {
+        val libraryId = activeLibraryId.value ?: return
+        if (uris.size < 2 || title.isBlank()) return
+        longOperationJob = viewModelScope.launch {
+            runCatching {
+                val result = repository.importSystemImageSet(libraryId, uris, title.trim())
+                repository.scan(libraryId)
+                result
+            }.onSuccess { result ->
+                message.value = "已创建 ImageSet：导入 ${result.imported} 页" +
+                    if (result.warnings.isEmpty()) "" else "，${result.warnings.size} 条警告"
+                screen.value = AppScreen.IMAGE_SETS
+            }.onFailure(::showError)
+        }
+    }
+
+    fun refreshSystemMedia() {
+        systemMediaJob?.cancel()
+        val access = repository.systemMediaAccess()
+        systemMediaAccess.value = access
+        if (access == SystemMediaAccess.NONE) {
+            systemMedia.value = emptyList()
+            systemMediaLoading.value = false
+            return
+        }
+        systemMediaJob = viewModelScope.launch {
+            systemMediaLoading.value = true
+            try {
+                runCatching { repository.systemMedia() }
+                    .onSuccess {
+                        systemMedia.value = it
+                        systemMediaAccess.value = repository.systemMediaAccess()
+                    }
+                    .onFailure(::showError)
+            } finally {
+                systemMediaLoading.value = false
+            }
+        }
+    }
+
+    fun onSystemMediaPermissionResult() {
+        refreshSystemMedia()
+    }
+
     fun deriveImage(item: MediaItem) {
         longOperationJob = viewModelScope.launch {
             runCatching {
@@ -365,7 +431,10 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 val target = repository.createImageSet(libraryId, itemIds, title)
                 repository.scan(libraryId)
                 target
-            }.onSuccess { message.value = "已创建 ImageSet：$it" }
+            }.onSuccess {
+                message.value = "已创建 ImageSet：$it"
+                screen.value = AppScreen.IMAGE_SETS
+            }
                 .onFailure(::showError)
         }
     }
@@ -413,5 +482,12 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         val message: String?,
         val autoScan: Boolean,
         val retentionDays: Int,
+        val systemGallery: SystemGalleryStatus,
+    )
+
+    private data class SystemGalleryStatus(
+        val media: List<SystemMediaEntry>,
+        val access: SystemMediaAccess,
+        val loading: Boolean,
     )
 }

@@ -3,7 +3,7 @@
 ## 首次使用
 
 1. 点击“选择文件夹”，通过 Android 系统目录选择器选择一个空目录或已有媒体目录。
-2. Gallery 会创建 `.gallery/`、`GALLERY_LIBRARY.md` 和 Schema v1；原媒体内容不会被改写。
+2. Gallery 会创建 `.gallery/`、`GALLERY_LIBRARY.md`、`.nomedia` 和 Schema v1；原媒体内容不会被改写。`.nomedia` 只阻止系统相册重复收录 Library 副本，不影响 Gallery 扫描。
 3. 扫描完成后，新发现内容进入 Inbox。叶子图片目录会成为 ImageSet 候选，ZIP/CBZ 会直接作为 ImageSet。
 4. 在详情页编辑标题、作者、标签、Collection 和 Series。保存后这些信息写入 Library，而不是只留在手机数据库中。
 
@@ -24,7 +24,11 @@
 
 ## 导入与派生
 
-- 相册页的“导入系统媒体”会复制选中的图片和视频，保持原字节不变，并按拍摄年月放入 `Photos/`。
+- “系统相册”支持 Android 的完整或部分照片授权；拒绝广泛授权后仍可使用系统选择器。
+- 导入为相册媒体时保持原字节不变，并保留 `DCIM/Camera`、`Pictures/Screenshots` 等来源层级放入 `Photos/`。
+- 选择至少两张图片时可以显式导入为 ImageSet；页面按自然文件名排序复制到 `ImageSets/Imported/`。
+- 系统相册导入始终复制，不移动、不删除手机相册原文件。
+- 如果已经误导入为相册媒体，可在“相册”中选择图片并显式派生 ImageSet；该操作复制页面，不会删除原相册媒体。
 - 详情页的复制按钮可以把照片或漫画指定页派生成普通图片。
 - 图片页可选择至少两张独立图片，复制组成新的 ImageSet。
 - 派生内容与来源彼此独立；删除来源不会级联删除派生项。

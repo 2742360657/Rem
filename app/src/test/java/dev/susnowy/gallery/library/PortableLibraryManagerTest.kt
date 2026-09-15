@@ -20,6 +20,7 @@ class PortableLibraryManagerTest {
         assertTrue(access.files.containsKey(".gallery/library.json"))
         assertTrue(access.files.containsKey("GALLERY_LIBRARY.md"))
         assertTrue(access.files.containsKey(".gallery/schema/v1.json"))
+        assertTrue(access.files.containsKey(PortableLibraryManager.MEDIA_IGNORE_FILE))
         assertTrue(PortableLibraryManager(access).inspect() is LibraryInspection.Valid)
     }
 

@@ -53,11 +53,23 @@ class PortableLibraryManager(
             createdAt = now,
             updatedAt = now,
         )
+        ensureMediaStoreIgnored()
         writeAtomically(SCHEMA_FILE, schemaV1(), "application/json")
         writeAtomically(GUIDE_FILE, libraryGuide(library), "text/markdown")
         // library.json is the completion marker and must be committed last.
         writeAtomically(LIBRARY_JSON, json.encodeToString(library), "application/json")
         return library
+    }
+
+    fun ensureMediaStoreIgnored() {
+        if (access.find(MEDIA_IGNORE_FILE) != null) return
+        val created = access.createFile(MEDIA_IGNORE_FILE, "application/octet-stream")
+        access.openOutput(created).use { /* Empty marker file. */ }
+        if (access.find(MEDIA_IGNORE_FILE) == null) {
+            check(access.rename(created, MEDIA_IGNORE_FILE)) {
+                "无法创建 $MEDIA_IGNORE_FILE；Library 媒体可能会被系统相册重复收录"
+            }
+        }
     }
 
     private fun writeAtomically(relativePath: String, value: String, mimeType: String) {
@@ -76,6 +88,7 @@ class PortableLibraryManager(
         const val GUIDE_FILE = "GALLERY_LIBRARY.md"
         const val LIBRARY_JSON = ".gallery/library.json"
         const val SCHEMA_FILE = ".gallery/schema/v1.json"
+        const val MEDIA_IGNORE_FILE = ".nomedia"
 
         val REQUIRED_DIRECTORIES = listOf(
             ".gallery",
@@ -98,6 +111,8 @@ class PortableLibraryManager(
             # ${library.name}
 
             这是一个 Gallery 便携媒体库。Library 身份位于 `.gallery/library.json`，当前 Schema 版本为 ${library.schemaVersion}，规范位于 `.gallery/schema/v1.json`。
+
+            根目录中的 `.nomedia` 用于阻止 Android 系统相册重复收录 Library 内的媒体副本；Gallery 自己通过 SAF 扫描，不受影响。
 
             ## 目录职责
 

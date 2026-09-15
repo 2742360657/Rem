@@ -5,6 +5,9 @@ import android.net.Uri
 import androidx.core.net.toUri
 import dev.susnowy.gallery.derive.DerivationService
 import dev.susnowy.gallery.importer.ImportResult
+import dev.susnowy.gallery.importer.SystemMediaAccess
+import dev.susnowy.gallery.importer.SystemMediaCatalog
+import dev.susnowy.gallery.importer.SystemMediaEntry
 import dev.susnowy.gallery.importer.SystemMediaImporter
 import dev.susnowy.gallery.library.PortableLibraryManager
 import dev.susnowy.gallery.library.LibraryDocument
@@ -39,6 +42,7 @@ class GalleryRepository(context: Context) {
     private val scanner = LibraryScanner()
     private val organizer = OrganizerService()
     private val importer = SystemMediaImporter(appContext)
+    private val systemMediaCatalog = SystemMediaCatalog(appContext)
     private val derivation = DerivationService()
 
     private val _libraries = MutableStateFlow<List<LibraryRegistration>>(emptyList())
@@ -69,6 +73,7 @@ class GalleryRepository(context: Context) {
             )
             is LibraryInspection.Invalid -> error(inspection.reason)
         }
+        manager.ensureMediaStoreIgnored()
         val registration = LibraryRegistration(
             libraryId = portable.libraryId,
             name = portable.name,
@@ -91,6 +96,7 @@ class GalleryRepository(context: Context) {
                 refreshFromDatabase()
                 throw FileNotFoundException("${registration.name} 当前离线")
             }
+            PortableLibraryManager(storage).ensureMediaStoreIgnored()
             val portableStore = PortableMetadataStore(storage)
             val catalog = portableStore.loadCatalog(libraryId)
             val state = portableStore.loadState(libraryId)
@@ -256,8 +262,28 @@ class GalleryRepository(context: Context) {
 
     suspend fun importSystemMedia(libraryId: String, uris: List<Uri>): ImportResult =
         runOperation("正在复制系统相册媒体…") {
-            onIo { importer.import(uris, storageFor(requireLibrary(libraryId))) }
+            onIo {
+                val storage = storageFor(requireLibrary(libraryId))
+                PortableLibraryManager(storage).ensureMediaStoreIgnored()
+                importer.import(uris, storage)
+            }
         }
+
+    suspend fun importSystemImageSet(
+        libraryId: String,
+        uris: List<Uri>,
+        title: String,
+    ): ImportResult = runOperation("正在复制系统图片并创建 ImageSet…") {
+        onIo {
+            val storage = storageFor(requireLibrary(libraryId))
+            PortableLibraryManager(storage).ensureMediaStoreIgnored()
+            importer.importImageSet(uris, title, storage)
+        }
+    }
+
+    fun systemMediaAccess(): SystemMediaAccess = systemMediaCatalog.access()
+
+    suspend fun systemMedia(): List<SystemMediaEntry> = onIo { systemMediaCatalog.query() }
 
     suspend fun recoverInterruptedTransactions(libraryId: String): Int =
         runOperation("正在恢复未完成事务…") {

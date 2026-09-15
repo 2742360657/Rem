@@ -1,6 +1,8 @@
 package dev.susnowy.gallery.ui
 
+import android.Manifest
 import android.content.Intent
+import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Box
@@ -81,6 +83,7 @@ private val destinations = listOf(
     DrawerDestination(AppScreen.LIBRARIES, Icons.Rounded.Folder),
     DrawerDestination(AppScreen.INBOX, Icons.Rounded.Inventory2),
     DrawerDestination(AppScreen.PHOTOS, Icons.Rounded.PhotoLibrary),
+    DrawerDestination(AppScreen.SYSTEM_GALLERY, Icons.Rounded.PhotoLibrary),
     DrawerDestination(AppScreen.IMAGES, Icons.Rounded.Image),
     DrawerDestination(AppScreen.IMAGE_SETS, Icons.Rounded.Collections),
     DrawerDestination(AppScreen.VIDEOS, Icons.Rounded.VideoLibrary),
@@ -115,6 +118,11 @@ fun GalleryApp(viewModel: GalleryViewModel = viewModel()) {
     }
     val mediaPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
         viewModel.importSystemMedia(uris)
+    }
+    val systemMediaPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions(),
+    ) {
+        viewModel.onSystemMediaPermissionResult()
     }
 
     LaunchedEffect(state.message) {
@@ -223,9 +231,9 @@ fun GalleryApp(viewModel: GalleryViewModel = viewModel()) {
                         )
                     } else if (state.screen == AppScreen.PHOTOS) {
                         ExtendedFloatingActionButton(
-                            onClick = { mediaPicker.launch(arrayOf("image/*", "video/*")) },
+                            onClick = { viewModel.navigate(AppScreen.SYSTEM_GALLERY) },
                             icon = { Icon(Icons.Rounded.Add, contentDescription = null) },
-                            text = { Text("导入系统媒体") },
+                            text = { Text("打开系统相册") },
                         )
                     }
                 },
@@ -242,6 +250,12 @@ fun GalleryApp(viewModel: GalleryViewModel = viewModel()) {
                             state = state,
                             viewModel = viewModel,
                             onChooseFolder = { folderPicker.launch(null) },
+                            onRequestSystemMediaAccess = {
+                                systemMediaPermission.launch(systemMediaPermissions())
+                            },
+                            onFallbackMediaPicker = {
+                                mediaPicker.launch(arrayOf("image/*", "video/*"))
+                            },
                         )
                     }
                     state.operation?.let { operation ->
@@ -263,4 +277,17 @@ fun GalleryApp(viewModel: GalleryViewModel = viewModel()) {
             }
         }
     }
+}
+
+private fun systemMediaPermissions(): Array<String> = when {
+    Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE -> arrayOf(
+        Manifest.permission.READ_MEDIA_IMAGES,
+        Manifest.permission.READ_MEDIA_VIDEO,
+        Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED,
+    )
+    Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU -> arrayOf(
+        Manifest.permission.READ_MEDIA_IMAGES,
+        Manifest.permission.READ_MEDIA_VIDEO,
+    )
+    else -> arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
 }

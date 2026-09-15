@@ -82,15 +82,21 @@ class DerivationService {
         require(items.all { it.sourceKind == SourceKind.FILE || it.sourceKind == SourceKind.SYSTEM_IMPORT }) {
             "只能从独立图片创建 ImageSet"
         }
+        val orderedItems = items.sortedWith { left, right ->
+            MediaClassifier.naturalCompare(
+                left.relativePath.substringAfterLast('/'),
+                right.relativePath.substringAfterLast('/'),
+            )
+        }
         val directory = uniqueDirectory(storage, "ImageSets/Derived", title.safeName())
         storage.ensureDirectory(directory)
-        items.forEachIndexed { index, item ->
+        orderedItems.forEachIndexed { index, item ->
             coroutineContext.ensureActive()
             val source = storage.entry(item.relativePath) ?: error("源图片不存在：${item.relativePath}")
             val extension = item.relativePath.substringAfterLast('.', "jpg").lowercase(Locale.ROOT)
             storage.copyFile(source, "$directory/${(index + 1).toString().padStart(4, '0')}.$extension")
         }
-        writeManifest(storage, items.map(MediaItem::id), listOf(directory))
+        writeManifest(storage, orderedItems.map(MediaItem::id), listOf(directory))
         directory
     }
 

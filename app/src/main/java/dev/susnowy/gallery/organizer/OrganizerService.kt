@@ -162,6 +162,9 @@ class OrganizerService {
                         ?: error("复制后 motion 源文件丢失")
                     check(storage.delete(secondaryDocument)) { "无法删除已校验的 motion 源文件" }
                 }
+                listOfNotNull(step.source, step.secondarySource).forEach { sourcePath ->
+                    pruneEmptySourceParents(storage, sourcePath)
+                }
                 transaction = transaction.updateStep(index, "source_deleted")
                 writeTransaction(storage, transaction)
 
@@ -266,6 +269,7 @@ class OrganizerService {
                             check(storage.delete(sourceDocument)) { "恢复时无法删除已校验源文件" }
                         }
                     }
+                    pairs.forEach { (sourcePath, _) -> pruneEmptySourceParents(storage, sourcePath) }
                     transaction = transaction.updateStep(index, "source_deleted")
                     writeTransaction(storage, transaction)
                     check(
@@ -345,6 +349,19 @@ class OrganizerService {
         steps = steps.mapIndexed { current, step -> if (current == index) step.copy(status = status) else step },
     )
 
+    private fun pruneEmptySourceParents(storage: DocumentTreeStorage, sourcePath: String) {
+        val managedRoot = sourcePath.substringBefore('/', missingDelimiterValue = "")
+        if (managedRoot !in MANAGED_MEDIA_ROOTS) return
+        var current = sourcePath.substringBeforeLast('/', missingDelimiterValue = "")
+        while (current.startsWith("$managedRoot/")) {
+            val entry = storage.entry(current) ?: break
+            if (!entry.isDirectory || storage.list(current).isNotEmpty()) break
+            val directory = storage.find(current) ?: break
+            if (!storage.delete(directory)) break
+            current = current.substringBeforeLast('/', missingDelimiterValue = "")
+        }
+    }
+
     private fun String.replacePathPrefix(source: String, target: String): String = when {
         this == source -> target
         startsWith("$source/") -> target + removePrefix(source)
@@ -363,6 +380,7 @@ class OrganizerService {
 
     companion object {
         private val JSON = Json { prettyPrint = true; encodeDefaults = true }
+        private val MANAGED_MEDIA_ROOTS = setOf("Photos", "Images", "ImageSets", "Videos", "Inbox")
         private val WINDOWS_RESERVED_NAMES = buildSet {
             addAll(listOf("CON", "PRN", "AUX", "NUL"))
             (1..9).forEach {

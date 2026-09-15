@@ -33,6 +33,10 @@ Android URIs and mount paths are local-only. Every portable media path uses `/`-
 - A newer unsupported Library Schema is never written.
 - Manual portable metadata wins over local and inferred metadata.
 - Duplicate detection reports SHA-256 matches but never deletes or merges them.
+- System media browsing uses read-only `MediaStore` access with full/partial/denied states; it never requests `MANAGE_EXTERNAL_STORAGE`.
+- Every Library has a root `.nomedia` marker so Android media scanners ignore Library copies while Gallery continues to use SAF.
+- System album imports preserve portable source-directory text but never persist Android content URIs in Library metadata.
+- Organizer prunes only verified-empty directories below known Library media roots and never deletes the roots themselves.
 
 ## Build and verification
 

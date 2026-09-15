@@ -1,5 +1,7 @@
 package dev.susnowy.gallery.ui.screens
 
+import android.net.Uri
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,12 +16,16 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.DeleteForever
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.Inbox
+import androidx.compose.material.icons.rounded.PhotoLibrary
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Restore
 import androidx.compose.material.icons.rounded.Search
@@ -27,6 +33,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -39,16 +46,22 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import coil3.compose.AsyncImage
+import dev.susnowy.gallery.importer.SystemMediaAccess
+import dev.susnowy.gallery.importer.SystemMediaEntry
+import dev.susnowy.gallery.importer.SystemMediaType
 import dev.susnowy.gallery.model.MediaItem
 import dev.susnowy.gallery.model.MediaKind
 import dev.susnowy.gallery.model.PermissionState
@@ -89,6 +102,8 @@ fun GalleryScreenContent(
     state: GalleryUiState,
     viewModel: GalleryViewModel,
     onChooseFolder: () -> Unit,
+    onRequestSystemMediaAccess: () -> Unit,
+    onFallbackMediaPicker: () -> Unit,
 ) {
     val visible = state.media.filterNot(MediaItem::trashed)
     when (state.screen) {
@@ -99,10 +114,15 @@ fun GalleryScreenContent(
             viewModel = viewModel,
             emptyText = "扫描到的新内容会出现在这里",
         )
-        AppScreen.PHOTOS -> MediaCollectionScreen(
+        AppScreen.PHOTOS -> PhotosScreen(
             items = visible.filter { it.kind in PHOTO_KINDS }.sortedByDescending { it.capturedAt ?: it.modifiedAt },
             viewModel = viewModel,
-            emptyText = "从系统相册导入，或在 Library 的 Photos 目录中放入媒体",
+        )
+        AppScreen.SYSTEM_GALLERY -> SystemGalleryScreen(
+            state = state,
+            viewModel = viewModel,
+            onRequestAccess = onRequestSystemMediaAccess,
+            onFallbackPicker = onFallbackMediaPicker,
         )
         AppScreen.IMAGES -> ImagesScreen(visible.filter { it.kind == MediaKind.IMAGE }, viewModel)
         AppScreen.IMAGE_SETS -> MediaCollectionScreen(
@@ -134,6 +154,245 @@ fun GalleryScreenContent(
         AppScreen.SETTINGS -> SettingsScreen(state, viewModel)
     }
 }
+
+@Composable
+private fun SystemGalleryScreen(
+    state: GalleryUiState,
+    viewModel: GalleryViewModel,
+    onRequestAccess: () -> Unit,
+    onFallbackPicker: () -> Unit,
+) {
+    var selected by remember { mutableStateOf(emptySet<String>()) }
+    var sourceFilter by remember { mutableStateOf<String?>(null) }
+    var showImportChoices by remember { mutableStateOf(false) }
+    var showImageSetTitle by remember { mutableStateOf(false) }
+    var imageSetTitle by remember { mutableStateOf("导入图集") }
+    val availableUris = remember(state.systemMedia) { state.systemMedia.mapTo(mutableSetOf()) { it.uri } }
+    LaunchedEffect(availableUris) { selected = selected.intersect(availableUris) }
+
+    val sources = remember(state.systemMedia) {
+        state.systemMedia.map(SystemMediaEntry::sourceLabel).distinct().sortedWith(String.CASE_INSENSITIVE_ORDER)
+    }
+    val visible = remember(state.systemMedia, sourceFilter) {
+        state.systemMedia.filter { sourceFilter == null || it.sourceLabel() == sourceFilter }
+    }
+    val selectedMedia = state.systemMedia.filter { it.uri in selected }
+    val canCreateImageSet = selectedMedia.size >= 2 &&
+        selectedMedia.all { it.mediaType == SystemMediaType.IMAGE }
+
+    if (state.systemMediaAccess == SystemMediaAccess.NONE) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier.padding(28.dp),
+            ) {
+                Icon(Icons.Rounded.PhotoLibrary, contentDescription = null)
+                Text("浏览系统相册", style = MaterialTheme.typography.headlineSmall)
+                Text(
+                    "授权后可在 Gallery 中按时间和来源查看本机照片、视频，再复制到当前 Library。不会移动或删除系统相册原文件。",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Button(onClick = onRequestAccess) { Text("授权访问照片和视频") }
+                OutlinedButton(onClick = onFallbackPicker) { Text("仅使用系统选择器") }
+            }
+        }
+        return
+    }
+
+    Column(Modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                when (state.systemMediaAccess) {
+                    SystemMediaAccess.FULL -> "已获得系统相册访问权限"
+                    SystemMediaAccess.PARTIAL -> "当前仅显示系统授权的部分照片和视频"
+                    SystemMediaAccess.NONE -> "未授权"
+                },
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Text(
+                "${state.systemMedia.size} 项可访问媒体 · 导入会复制原始文件并保留来源目录关系",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = viewModel::refreshSystemMedia) {
+                    Icon(Icons.Rounded.Refresh, contentDescription = null)
+                    Spacer(Modifier.width(6.dp))
+                    Text("刷新")
+                }
+                OutlinedButton(onClick = onRequestAccess) {
+                    Text(if (state.systemMediaAccess == SystemMediaAccess.PARTIAL) "调整授权范围" else "权限设置")
+                }
+            }
+        }
+
+        LazyRow(
+            contentPadding = PaddingValues(horizontal = 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            item {
+                FilterChip(
+                    selected = sourceFilter == null,
+                    onClick = { sourceFilter = null },
+                    label = { Text("全部") },
+                )
+            }
+            items(sources, key = { it }) { source ->
+                FilterChip(
+                    selected = sourceFilter == source,
+                    onClick = { sourceFilter = source },
+                    label = { Text(source, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                )
+            }
+        }
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            TextButton(onClick = { selected = selected + visible.map(SystemMediaEntry::uri) }) {
+                Text("全选当前 ${visible.size} 项")
+            }
+            if (selected.isNotEmpty()) {
+                TextButton(onClick = { selected = emptySet() }) { Text("清空") }
+            }
+            Spacer(Modifier.weight(1f))
+            Button(
+                onClick = { showImportChoices = true },
+                enabled = selected.isNotEmpty() && state.operation == null,
+            ) { Text("导入 ${selected.size} 项") }
+        }
+
+        when {
+            state.systemMediaLoading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator()
+            }
+            visible.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text("当前授权范围内没有可访问的照片或视频")
+            }
+            else -> LazyVerticalGrid(
+                columns = GridCells.Adaptive(132.dp),
+                contentPadding = PaddingValues(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.weight(1f),
+            ) {
+                gridItems(visible, key = SystemMediaEntry::uri) { media ->
+                    val checked = media.uri in selected
+                    Card(onClick = {
+                        selected = if (checked) selected - media.uri else selected + media.uri
+                    }) {
+                        Box {
+                            AsyncImage(
+                                model = media.uri,
+                                contentDescription = media.displayName,
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .aspectRatio(1f),
+                            )
+                            Checkbox(
+                                checked = checked,
+                                onCheckedChange = { value ->
+                                    selected = if (value) selected + media.uri else selected - media.uri
+                                },
+                                modifier = Modifier.align(Alignment.TopEnd),
+                            )
+                        }
+                        Text(
+                            media.displayName,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                        )
+                        Text(
+                            if (media.mediaType == SystemMediaType.VIDEO) "视频 · ${media.sourceLabel()}" else media.sourceLabel(),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    if (showImportChoices) {
+        AlertDialog(
+            onDismissRequest = { showImportChoices = false },
+            title = { Text("选择导入语义") },
+            text = {
+                Text(
+                    "相册媒体会进入 Photos 时间线；ImageSet 会按文件名自然排序，作为一本漫画或图集阅读。两种方式都只复制，不改动系统相册原文件。",
+                )
+            },
+            confirmButton = {
+                Column(horizontalAlignment = Alignment.End) {
+                    TextButton(onClick = {
+                        viewModel.importSystemMedia(selectedMedia.map { Uri.parse(it.uri) })
+                        selected = emptySet()
+                        showImportChoices = false
+                    }) { Text("导入为相册媒体") }
+                    if (canCreateImageSet) {
+                        TextButton(onClick = {
+                            imageSetTitle = selectedMedia.map(SystemMediaEntry::sourceLabel)
+                                .distinct()
+                                .singleOrNull()
+                                ?.substringAfterLast('/')
+                                ?.takeIf(String::isNotBlank)
+                                ?: "导入图集"
+                            showImportChoices = false
+                            showImageSetTitle = true
+                        }) { Text("导入为 ImageSet") }
+                    }
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showImportChoices = false }) { Text("取消") }
+            },
+        )
+    }
+
+    if (showImageSetTitle) {
+        AlertDialog(
+            onDismissRequest = { showImageSetTitle = false },
+            title = { Text("创建 ImageSet") },
+            text = {
+                OutlinedTextField(
+                    value = imageSetTitle,
+                    onValueChange = { imageSetTitle = it },
+                    label = { Text("漫画或图集标题") },
+                    singleLine = true,
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        viewModel.importSystemImageSet(
+                            selectedMedia.map { Uri.parse(it.uri) },
+                            imageSetTitle,
+                        )
+                        selected = emptySet()
+                        showImageSetTitle = false
+                    },
+                    enabled = imageSetTitle.isNotBlank(),
+                ) { Text("复制并创建") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showImageSetTitle = false }) { Text("取消") }
+            },
+        )
+    }
+}
+
+private fun SystemMediaEntry.sourceLabel(): String = sourcePath.ifBlank { bucketName.ifBlank { "未分类" } }
 
 @Composable
 private fun HomeScreen(items: List<MediaItem>, viewModel: GalleryViewModel) {
@@ -265,6 +524,37 @@ private fun MediaCollectionScreen(
 }
 
 @Composable
+private fun PhotosScreen(items: List<MediaItem>, viewModel: GalleryViewModel) {
+    val stillImages = items.filter { it.kind == MediaKind.PHOTO }
+    var showCreateDialog by remember { mutableStateOf(false) }
+    Column(Modifier.fillMaxSize()) {
+        if (stillImages.size >= 2) {
+            FilledTonalButton(
+                onClick = { showCreateDialog = true },
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            ) { Text("从相册图片派生 ImageSet") }
+        }
+        if (items.isEmpty()) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text("从系统相册导入，或在 Library 的 Photos 目录中放入媒体")
+            }
+        } else {
+            MediaGrid(items, viewModel, viewModel::open, Modifier.weight(1f))
+        }
+    }
+    if (showCreateDialog) {
+        CreateImageSetDialog(
+            items = stillImages,
+            onDismiss = { showCreateDialog = false },
+            onCreate = { selected, title ->
+                viewModel.createImageSet(selected, title)
+                showCreateDialog = false
+            },
+        )
+    }
+}
+
+@Composable
 private fun ImagesScreen(items: List<MediaItem>, viewModel: GalleryViewModel) {
     var showCreateDialog by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxSize()) {
@@ -313,6 +603,18 @@ private fun CreateImageSetDialog(
                     label = { Text("名称") },
                     singleLine = true,
                 )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    TextButton(onClick = { selected = items.mapTo(mutableSetOf(), MediaItem::id) }) {
+                        Text("全选 ${items.size} 项")
+                    }
+                    if (selected.isNotEmpty()) {
+                        TextButton(onClick = { selected = emptySet() }) { Text("清空") }
+                    }
+                    Text("已选 ${selected.size} 项", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
                 LazyColumn(modifier = Modifier.height(320.dp)) {
                     items(items, key = MediaItem::id) { item ->
                         ListItem(
