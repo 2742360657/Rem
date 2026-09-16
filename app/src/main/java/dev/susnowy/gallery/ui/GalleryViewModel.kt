@@ -3,7 +3,6 @@ package dev.susnowy.gallery.ui
 import android.app.Application
 import android.graphics.Bitmap
 import android.net.Uri
-import android.util.Log
 import androidx.documentfile.provider.DocumentFile
 import androidx.core.content.edit
 import androidx.lifecycle.AndroidViewModel
@@ -16,6 +15,7 @@ import dev.susnowy.gallery.importer.SystemMediaEntry
 import dev.susnowy.gallery.importer.WorkImportKind
 import dev.susnowy.gallery.media.ImagePage
 import dev.susnowy.gallery.media.MediaContentService
+import dev.susnowy.gallery.logging.RemLog
 import dev.susnowy.gallery.model.LibraryRegistration
 import dev.susnowy.gallery.model.MediaItem
 import dev.susnowy.gallery.model.MediaDomain
@@ -574,7 +574,7 @@ class GalleryViewModel(
 
     private fun showError(error: Throwable) {
         if (error is CancellationException) return
-        Log.e("Rem", "Operation failed", error)
+        RemLog.failure("操作", "用户操作失败", error)
         val detail = generateSequence(error) { it.cause }
             .mapNotNull { it.message?.trim()?.takeIf(String::isNotEmpty) }
             .firstOrNull()

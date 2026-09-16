@@ -1,4 +1,4 @@
-﻿package dev.susnowy.gallery.storage
+package dev.susnowy.gallery.storage
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull

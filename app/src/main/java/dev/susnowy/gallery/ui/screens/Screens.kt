@@ -70,7 +70,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.text.font.FontFamily
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
 import dev.susnowy.gallery.BuildConfig
@@ -78,6 +80,7 @@ import dev.susnowy.gallery.importer.SystemMediaAccess
 import dev.susnowy.gallery.importer.SystemMediaEntry
 import dev.susnowy.gallery.importer.SystemMediaType
 import dev.susnowy.gallery.importer.WorkImportKind
+import dev.susnowy.gallery.logging.RemLog
 import dev.susnowy.gallery.model.MediaItem
 import dev.susnowy.gallery.model.MediaDomain
 import dev.susnowy.gallery.model.MediaKind
@@ -1612,6 +1615,8 @@ private fun SettingsScreen(state: GalleryUiState, viewModel: GalleryViewModel) {
         mutableStateOf(state.trashRetentionDays.takeIf { it > 0 }?.toString().orEmpty())
     }
     val duplicateGroups by viewModel.duplicateGroups.collectAsStateWithLifecycle()
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var diagnosticsText by remember { mutableStateOf<String?>(null) }
     LazyColumn(contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
         item {
             ListItem(
@@ -1672,12 +1677,53 @@ private fun SettingsScreen(state: GalleryUiState, viewModel: GalleryViewModel) {
             }
         }
         item {
+            Text("诊断日志", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "日志只存放在本机 App 私有目录，不写入 Library，卸载即清除；" +
+                    "默认只记录警告与错误，导出时账号信息和磁盘路径会被隐去。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 8.dp)) {
+                OutlinedButton(onClick = { diagnosticsText = RemLog.tail(context) }) { Text("查看最近日志") }
+                OutlinedButton(onClick = { RemLog.share(context) }) { Text("导出") }
+            }
+            TextButton(onClick = { RemLog.clear(context) }) { Text("清除日志") }
+        }
+        item {
             Text("Rem ${BuildConfig.VERSION_NAME}", style = MaterialTheme.typography.titleMedium)
             Text(
                 "本机索引和缩略图只是缓存；Library 中的 .gallery 元数据才是跨设备状态来源。",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+    }
+
+    diagnosticsText?.let { content ->
+        AlertDialog(
+            onDismissRequest = { diagnosticsText = null },
+            title = { Text("最近日志") },
+            text = {
+                LazyColumn(modifier = Modifier.heightIn(max = 420.dp)) {
+                    item {
+                        Text(
+                            content.ifBlank { "暂无日志记录。" },
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = FontFamily.Monospace,
+                        )
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { diagnosticsText = null }) { Text("关闭") } },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        RemLog.share(context)
+                        diagnosticsText = null
+                    },
+                ) { Text("导出") }
+            },
+        )
     }
 }
 

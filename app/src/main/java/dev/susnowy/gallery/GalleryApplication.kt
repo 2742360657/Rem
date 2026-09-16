@@ -12,10 +12,16 @@ import coil3.memory.MemoryCache
 import coil3.svg.SvgDecoder
 import coil3.video.VideoFrameDecoder
 import dev.susnowy.gallery.data.GalleryRepository
+import dev.susnowy.gallery.logging.RemLog
 import okio.Path.Companion.toOkioPath
 
 class GalleryApplication : Application(), SingletonImageLoader.Factory {
     val repository: GalleryRepository by lazy { GalleryRepository(this) }
+
+    override fun onCreate() {
+        super.onCreate()
+        RemLog.initialize(this)
+    }
 
     override fun newImageLoader(context: Context): ImageLoader = ImageLoader.Builder(context)
         .memoryCache {

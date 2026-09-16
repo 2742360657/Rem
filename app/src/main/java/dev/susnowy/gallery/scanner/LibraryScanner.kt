@@ -1,9 +1,9 @@
 package dev.susnowy.gallery.scanner
 
 import android.media.MediaMetadataRetriever
-import android.util.Log
 import androidx.exifinterface.media.ExifInterface
 import dev.susnowy.gallery.library.LibraryDocument
+import dev.susnowy.gallery.logging.RemLog
 import dev.susnowy.gallery.model.MediaDomain
 import dev.susnowy.gallery.model.MediaKind
 import dev.susnowy.gallery.model.SourceKind
@@ -99,11 +99,11 @@ class LibraryScanner {
         val warnings = mutableListOf<String>()
         val statistics = ScanStatistics()
         scanDirectory(storage, "", candidates, ambiguous, warnings, prior, statistics)
-        Log.i(
+        RemLog.info(
             TAG,
-            "Scan finished: candidates=${candidates.size}, ambiguous=${ambiguous.size}, " +
-                "warnings=${warnings.size}, contentReads=${statistics.contentReads}, " +
-                "unchangedReused=${statistics.contentReadsSkipped}",
+            "扫描完成：候选=${candidates.size}，待确认目录=${ambiguous.size}，" +
+                "警告=${warnings.size}，读取内容=${statistics.contentReads}，" +
+                "复用未变化文件=${statistics.contentReadsSkipped}",
         )
         ScanResult(
             candidates = candidates.sortedWith(compareBy<ScanCandidate> { it.kind.ordinal }
@@ -128,7 +128,7 @@ class LibraryScanner {
     ) {
         coroutineContext.ensureActive()
         val entries = runCatching { storage.list(path) }.getOrElse { error ->
-            Log.e(TAG, "Unable to list ${path.ifEmpty { "<root>" }}", error)
+            RemLog.warn(TAG, "无法读取 ${path.ifEmpty { "Library 根目录" }}", error)
             warnings += "无法读取 ${path.ifEmpty { "Library 根目录" }}：${error.message.orEmpty()}"
             return
         }.filterNot { path.isEmpty() && it.name == ".gallery" }

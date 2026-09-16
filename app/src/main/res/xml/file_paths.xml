@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Only the diagnostic log directory is shared, and only through a content URI granted
+    per export. Nothing under the Library or the local media index is exposed.
+-->
+<paths>
+    <files-path
+        name="diagnostics"
+        path="logs/" />
+</paths>

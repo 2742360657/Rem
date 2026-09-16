@@ -5,10 +5,10 @@ import android.database.Cursor
 import android.net.Uri
 import android.os.ParcelFileDescriptor
 import android.provider.DocumentsContract
-import android.util.Log
 import androidx.documentfile.provider.DocumentFile
 import dev.susnowy.gallery.library.LibraryDocument
 import dev.susnowy.gallery.library.LibraryDocumentAccess
+import dev.susnowy.gallery.logging.RemLog
 import java.io.FileNotFoundException
 import java.io.InputStream
 import java.io.OutputStream
@@ -173,14 +173,14 @@ class DocumentTreeStorage(
         return try {
             val relocated = DocumentsContract.renameDocument(resolver, sourceUri, displayName)
             if (relocated == null) {
-                Log.e(TAG, "Provider returned no URI while renaming ${document.key} to $displayName")
+                RemLog.error(TAG, "文件提供方未返回 URI：重命名 ${document.key} → $displayName")
                 false
             } else {
                 forgetSubtrees(document.key)
                 true
             }
         } catch (error: Exception) {
-            Log.e(TAG, "Provider failed to rename ${document.key} to $displayName", error)
+            RemLog.failure(TAG, "重命名失败：${document.key} → $displayName", error)
             throw error
         }
     }
@@ -192,7 +192,7 @@ class DocumentTreeStorage(
                 if (deleted) forgetSubtrees(document.key)
             }
         } catch (error: Exception) {
-            Log.e(TAG, "Provider failed to delete ${document.key}", error)
+            RemLog.failure(TAG, "删除失败：${document.key}", error)
             throw error
         }
     }
