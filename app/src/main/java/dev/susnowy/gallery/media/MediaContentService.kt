@@ -3,6 +3,7 @@ package dev.susnowy.gallery.media
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
+import android.util.LruCache
 import dev.susnowy.gallery.library.LibraryDocument
 import dev.susnowy.gallery.model.MediaItem
 import dev.susnowy.gallery.model.SourceKind
@@ -11,6 +12,8 @@ import dev.susnowy.gallery.storage.DocumentTreeStorage
 import java.util.zip.ZipInputStream
 import kotlin.math.ceil
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 data class ImagePage(
@@ -20,7 +23,14 @@ data class ImagePage(
     val relativePath: String? = null,
 )
 
-class MediaContentService {
+class MediaContentService(
+    archiveBitmapCacheBytes: Int = DEFAULT_ARCHIVE_BITMAP_CACHE_BYTES,
+) {
+    private val archiveBitmapCache = object : LruCache<String, Bitmap>(archiveBitmapCacheBytes) {
+        override fun sizeOf(key: String, value: Bitmap): Int = value.allocationByteCount
+    }
+    private val archiveDecodeMutex = Mutex()
+
     suspend fun imageSetPages(item: MediaItem, storage: DocumentTreeStorage): List<ImagePage> =
         withContext(Dispatchers.IO) {
             when (item.sourceKind) {
@@ -45,14 +55,28 @@ class MediaContentService {
         targetWidth: Int,
         targetHeight: Int,
     ): Bitmap? = withContext(Dispatchers.IO) {
-        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        decodeArchiveEntry(item, entryName, storage, bounds)
-        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return@withContext null
-        val options = BitmapFactory.Options().apply {
-            inSampleSize = calculateSampleSize(bounds.outWidth, bounds.outHeight, targetWidth, targetHeight)
-            inPreferredConfig = Bitmap.Config.RGB_565
+        val cacheKey = listOf(
+            item.id,
+            item.modifiedAt,
+            entryName,
+            targetWidth,
+            targetHeight,
+        ).joinToString(":")
+        archiveBitmapCache.get(cacheKey)?.let { return@withContext it }
+
+        archiveDecodeMutex.withLock {
+            archiveBitmapCache.get(cacheKey)?.let { return@withLock it }
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            decodeArchiveEntry(item, entryName, storage, bounds)
+            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return@withLock null
+            val options = BitmapFactory.Options().apply {
+                inSampleSize = calculateSampleSize(bounds.outWidth, bounds.outHeight, targetWidth, targetHeight)
+                inPreferredConfig = Bitmap.Config.RGB_565
+            }
+            decodeArchiveEntry(item, entryName, storage, options)?.also { bitmap ->
+                archiveBitmapCache.put(cacheKey, bitmap)
+            }
         }
-        decodeArchiveEntry(item, entryName, storage, options)
     }
 
     /**
@@ -167,6 +191,7 @@ class MediaContentService {
     }
 
     companion object {
+        private const val DEFAULT_ARCHIVE_BITMAP_CACHE_BYTES = 64 * 1024 * 1024
         private const val MAX_DECODED_PIXELS = 8_000_000L
         private const val MAX_DECODED_DIMENSION = 12_000
         private const val OVERSIZED_IMAGE_PIXELS = 40_000_000L

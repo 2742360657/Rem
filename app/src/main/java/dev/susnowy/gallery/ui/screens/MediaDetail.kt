@@ -15,7 +15,6 @@ import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -98,7 +97,14 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import coil3.compose.AsyncImage
+import coil3.compose.SubcomposeAsyncImage
+import coil3.compose.SubcomposeAsyncImageContent
+import coil3.request.CachePolicy
+import coil3.request.ImageRequest
+import coil3.size.Precision
+import coil3.SingletonImageLoader
 import dev.susnowy.gallery.media.ImagePage
+import dev.susnowy.gallery.media.comicPreloadOrder
 import dev.susnowy.gallery.model.MediaItem
 import dev.susnowy.gallery.model.MediaDomain
 import dev.susnowy.gallery.model.MediaKind
@@ -112,8 +118,14 @@ import dev.susnowy.gallery.ui.components.label
 import java.text.DateFormat
 import java.util.Date
 import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -865,6 +877,8 @@ private fun ImageSetReader(
         value = viewModel.progress(item)?.page ?: 0
     }
     val listState = rememberLazyListState()
+    val context = LocalContext.current
+    val imageLoader = remember(context) { SingletonImageLoader.get(context) }
     var zoomedPage by remember(item.id) { mutableStateOf<Int?>(null) }
     LaunchedEffect(pages.size, savedProgress) {
         if (savedProgress in pages.indices) listState.scrollToItem(savedProgress)
@@ -877,6 +891,42 @@ private fun ImageSetReader(
                 viewModel.saveProgress(item, page = page, finished = page >= pages.lastIndex)
             }
     }
+    LaunchedEffect(listState, item.id, item.modifiedAt, pages) {
+        var previousFirst = listState.firstVisibleItemIndex
+        snapshotFlow {
+            val visible = listState.layoutInfo.visibleItemsInfo
+            val first = visible.firstOrNull()?.index ?: listState.firstVisibleItemIndex
+            val last = visible.lastOrNull()?.index ?: first
+            first to last
+        }
+            .distinctUntilChanged()
+            .collectLatest { (first, last) ->
+                val scrollingForward = first >= previousFirst
+                previousFirst = first
+                val preload = comicPreloadOrder(first, last, pages.size, scrollingForward)
+                val permits = Semaphore(2)
+                coroutineScope {
+                    preload.map { index ->
+                        async {
+                            permits.withPermit {
+                                val page = pages[index]
+                                when {
+                                    page.uri != null -> imageLoader.execute(
+                                        comicPageImageRequest(context, item, page),
+                                    )
+                                    page.archiveEntry != null -> viewModel.archiveBitmap(
+                                        item,
+                                        page.archiveEntry,
+                                        COMIC_PAGE_TARGET_WIDTH,
+                                        COMIC_PAGE_TARGET_HEIGHT,
+                                    )
+                                }
+                            }
+                        }
+                    }.awaitAll()
+                }
+            }
+    }
     LazyColumn(
         state = listState,
         userScrollEnabled = zoomedPage == null,
@@ -886,16 +936,15 @@ private fun ImageSetReader(
             pages[index].relativePath ?: pages[index].archiveEntry ?: pages[index].name
         }) { index ->
             val page = pages[index]
-            val oversizedResult by produceState<Result<android.graphics.Bitmap?>?>(
-                initialValue = null,
+            val imageRequest = remember(
+                context,
                 item.id,
+                item.modifiedAt,
+                page.uri,
                 page.relativePath,
             ) {
-                value = runCatching {
-                    page.relativePath?.let { viewModel.oversizedBitmap(item, it) }
-                }
+                page.uri?.let { comicPageImageRequest(context, item, page) }
             }
-            val oversizedBitmap = oversizedResult?.getOrNull()
             ZoomableComicPage(
                 pageKey = page.relativePath ?: page.archiveEntry ?: page.name,
                 onTap = onToggleControls,
@@ -905,29 +954,47 @@ private fun ImageSetReader(
                 },
             ) {
                 when {
-                    page.relativePath != null && oversizedResult == null -> Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(240.dp),
-                        contentAlignment = Alignment.Center,
-                    ) { CircularProgressIndicator(color = Color.White) }
-                    oversizedBitmap != null -> Image(
-                        bitmap = oversizedBitmap!!.asImageBitmap(),
+                    imageRequest != null -> SubcomposeAsyncImage(
+                        model = imageRequest,
                         contentDescription = "第 ${index + 1} 页",
                         contentScale = ContentScale.FillWidth,
                         modifier = Modifier.fillMaxWidth(),
-                    )
-                    page.uri != null -> AsyncImage(
-                        model = page.uri,
-                        contentDescription = "第 ${index + 1} 页",
-                        contentScale = ContentScale.FillWidth,
-                        modifier = Modifier.fillMaxWidth(),
+                        loading = {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(240.dp),
+                                contentAlignment = Alignment.Center,
+                            ) { CircularProgressIndicator(color = Color.White) }
+                        },
+                        error = {
+                            ComicPageLoadError(message = "第 ${index + 1} 页加载失败")
+                        },
+                        success = { SubcomposeAsyncImageContent() },
                     )
                     page.archiveEntry != null -> ArchiveComicPage(item, page.archiveEntry, viewModel)
                 }
             }
         }
     }
+}
+
+private fun comicPageImageRequest(
+    context: Context,
+    item: MediaItem,
+    page: ImagePage,
+): ImageRequest {
+    val pageIdentity = page.relativePath ?: page.uri ?: page.name
+    val cacheKey = "comic:${item.id}:${item.modifiedAt}:$pageIdentity"
+    return ImageRequest.Builder(context)
+        .data(requireNotNull(page.uri))
+        .size(COMIC_PAGE_TARGET_WIDTH, COMIC_PAGE_TARGET_HEIGHT)
+        .precision(Precision.INEXACT)
+        .memoryCachePolicy(CachePolicy.ENABLED)
+        .diskCachePolicy(CachePolicy.ENABLED)
+        .memoryCacheKey(cacheKey)
+        .diskCacheKey(cacheKey)
+        .build()
 }
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -989,27 +1056,63 @@ private fun ZoomableComicPage(
 
 @Composable
 private fun ArchiveComicPage(item: MediaItem, entryName: String, viewModel: GalleryViewModel) {
-    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-        val bitmap by produceState<android.graphics.Bitmap?>(null, item.id, entryName, maxWidth) {
-            value = viewModel.archiveBitmap(item, entryName, 1440, 3200)
+    var retry by remember(item.id, entryName) { mutableIntStateOf(0) }
+    Box(modifier = Modifier.fillMaxWidth()) {
+        val result by produceState<Result<android.graphics.Bitmap?>?>(
+            null,
+            item.id,
+            item.modifiedAt,
+            entryName,
+            retry,
+        ) {
+            value = runCatching {
+                viewModel.archiveBitmap(
+                    item,
+                    entryName,
+                    COMIC_PAGE_TARGET_WIDTH,
+                    COMIC_PAGE_TARGET_HEIGHT,
+                )
+            }
         }
-        if (bitmap == null) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(240.dp),
+        val bitmap = result?.getOrNull()
+        when {
+            result == null -> Box(
+                modifier = Modifier.fillMaxWidth().height(240.dp),
                 contentAlignment = Alignment.Center,
             ) { CircularProgressIndicator(color = Color.White) }
-        } else {
-            Image(
-                bitmap = bitmap!!.asImageBitmap(),
+            bitmap != null -> Image(
+                bitmap = bitmap.asImageBitmap(),
                 contentDescription = entryName,
                 contentScale = ContentScale.FillWidth,
                 modifier = Modifier.fillMaxWidth(),
             )
+            else -> ComicPageLoadError(
+                message = "此页无法解码",
+                onRetry = { retry++ },
+            )
         }
     }
 }
+
+@Composable
+private fun ComicPageLoadError(message: String, onRetry: (() -> Unit)? = null) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(240.dp)
+            .padding(24.dp),
+    ) {
+        Text(message, color = Color.White)
+        if (onRetry != null) {
+            TextButton(onClick = onRetry) { Text("重试", color = Color.White) }
+        }
+    }
+}
+
+private const val COMIC_PAGE_TARGET_WIDTH = 1_440
+private const val COMIC_PAGE_TARGET_HEIGHT = 6_000
 
 @Composable
 private fun ImageSetOrderDialog(

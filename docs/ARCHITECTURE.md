@@ -19,7 +19,7 @@ Android URIs and mount paths are local-only. Every portable media path uses `/`-
 - `scanner`: nested-directory classification, content fingerprints, EXIF/video dates, ZIP/CBZ discovery, and Inbox candidates.
 - `metadata`: portable catalog/state persistence, revision checks, ComicInfo, and provider contracts.
 - `data`: local SQLite index and application repository.
-- `media`: lazy folder/archive page access and sampled archive decoding.
+- `media`: lazy folder/archive page access, sampled archive decoding, a bounded decoded-page cache, and direction-aware comic preloading.
 - `organizer`: previewed, conflict-checked, journaled physical organization and interrupted-operation recovery.
 - `importer` and `derive`: copy-only system media imports and explicit derived media operations.
 - `ui`: Compose navigation, grids, readers, player, metadata editor, search, trash, and settings.
@@ -39,6 +39,7 @@ Android URIs and mount paths are local-only. Every portable media path uses `/`-
 - Forgetting a Library removes only its device-local index and persisted SAF grant; it never mutates the selected tree.
 - Photos View selection is ephemeral UI state. Batch Author/Tag/Collection/favorite edits merge into one portable catalog write, and batch trash uses one portable state write before synchronizing the local index.
 - Image and Photos viewers use a lazy horizontal pager. One-finger swipes page while unzoomed; once zoomed, the current image owns pan gestures until it returns to its base scale.
+- The comic reader decodes directory pages against a 1440 × 6000 pixel budget, preloads five pages in the scroll direction plus two behind, and cancels stale preloads after a fast jump. Coil may use up to 25% of the app heap for decoded images and 768 MB of disposable disk cache; ZIP/CBZ pages additionally use a bounded 64 MB bitmap cache. None of these caches enter the portable Library.
 - A detail viewer keeps the originating grid/result order as its paging context, so Search and facet browsing do not leak into unrelated media.
 - `SavedStateHandle` retains only small navigation keys (screen, query, selected item); large media collections are reconstructed from the local index instead of being placed in Android saved-state bundles.
 - Every Library has a root `.nomedia` marker so Android media scanners ignore Library copies while Gallery continues to use SAF.
