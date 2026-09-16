@@ -2,7 +2,7 @@
 
 Rem is an Android 8.0+ local-first media library. The project intentionally uses one Gradle application module and separates responsibilities by Kotlin package; physical module splitting can wait until build or ownership pressure justifies it.
 
-The public product name is Rem and its release application ID is `com.susnowy.rem`. It installs alongside the legacy `dev.susnowy.gallery` development build, so device-local indexes and SAF grants do not migrate automatically. Kotlin package names, `.gallery/`, and Gallery portable-schema identifiers remain stable Library compatibility contracts.
+The public product name is Rem and its release application ID is `com.susnowy.rem`. Debug builds use `com.susnowy.rem.debug`, so development and release signatures can coexist without replacing each other. Both install alongside the legacy `dev.susnowy.gallery` development build; device-local indexes and SAF grants do not migrate automatically between application IDs. Kotlin package names, `.gallery/`, and Gallery portable-schema identifiers remain stable Library compatibility contracts.
 
 ## Data layers
 
@@ -79,6 +79,9 @@ re-reads because keeping a stale fingerprint would silently mis-merge metadata.
 
 ```powershell
 .\gradlew.bat testDebugUnitTest lintDebug assembleDebug assembleRelease
+.\gradlew.bat assembleDebugAndroidTest connectedDebugAndroidTest
 ```
 
-The installable development APK is generated at `app/build/outputs/apk/debug/app-debug.apk`. Release signing is loaded from an external properties file (`T:/jks/keystore.properties` by default) so no key or password enters Git. The owner must preserve the same release key for every later update. `assembleRelease` also copies the R8 mapping to `dist/Rem-<version>-mapping.txt`, which is what makes a crash report from a user's device readable after `build/` is cleaned.
+The installable development APK is generated at `app/build/outputs/apk/debug/app-debug.apk` with application ID `com.susnowy.rem.debug`. A debug-only `DocumentsProvider` plus connected tests exercise tree queries, provider-qualified names, scoped cache invalidation, query failures, and full portable-Library initialization through the real `ContentResolver` path; neither the provider nor its tests enter release builds. If Gradle's unified test-platform report dependencies are unavailable, build `assembleDebugAndroidTest`, install both APKs with ADB, and invoke `com.susnowy.rem.debug.test/androidx.test.runner.AndroidJUnitRunner` directly.
+
+Release signing is loaded from an external properties file (`T:/jks/keystore.properties` by default) so no key or password enters Git. The owner must preserve the same release key for every later update. `assembleRelease` also copies the R8 mapping to `dist/Rem-<version>-mapping.txt`, which is what makes a crash report from a user's device readable after `build/` is cleaned.

@@ -55,7 +55,7 @@
 
 - 未实测修复后的扫描耗时。
 - `Gallery_Project_Guide.md` 14.1 与 33 章早已写明"增量扫描 / 缓存持久化 / 大任务显示进度"，代码此前完全没有实现；本轮已补齐进程内缓存、增量复用和扫描进度。跨进程持久化目录缓存仍不做，因为 SAF 外部变化会使它失真。
-- `refreshFromDatabase()` 仍会把全部媒体行载入内存，库很大时这项开销未优化。
+- `refreshFromDatabase()` 仍会为界面状态全量载入一次媒体行；本轮已去掉扫描提交阶段的第二次完整对象/JSON 载入，但超大库最终仍应改为分页或按需查询。
 
 #### 后续全面审查与修正
 
@@ -68,6 +68,14 @@
 - `7b8c212`：每 10 个目录上报目录、条目、候选数量；读取失败的目录写入 `unreadableDirectories`，提交索引时保护该子树的旧行。
 
 **验证**：新增父列表同步、祖先缓存保留、压缩包页数复用、同大小页面修改、不完整子树保护和损坏 ComicInfo 等测试；完整回归见本条末尾。真机能启动并生成新日志，但外置硬盘未挂载，356 GB Library 耗时仍未实测。
+
+#### 真机 DocumentsProvider 集成回归
+
+**判断修正**：单元测试继续使用缓存或内存假实现，仍然没有经过 Android 对树 URI 的层级校验与 `DocumentsContract` 调用。新增真机 Provider 用例后又发现两处遗漏：`resolveChildLocked()` 把完整子路径当作父路径，多层目录已存在时可能被误建成 ` (1)` 副本；`createFileExclusive()` 虽记录了 provider 实际名称，却仍把请求路径作为返回 `key`。
+
+**措施**：子节点解析统一从完整子路径计算直接父路径；仅当父目录列表原先已缓存时才为外部变化额外刷新一次，首次缺失不重复查询；新建文件返回 provider 实际相对路径。扫描提交的缺失检测同时改为只查询 `id` 与 `relative_path`，不再重复解码整张媒体表。
+
+**验证**：调试版内置仅 debug 可见的测试 DocumentsProvider，并在 Xiaomi 23127PN0CC / Android 16 上经真实 `ContentResolver` 跑通 5 项用例：既有多层目录、独占创建冲突改名、失败查询不形成负缓存、重命名只失效目标父目录、完整 Library 初始化/身份提交/租约释放。E 盘正在下载时只抽样两层目录名，确认现有 `作者/NO.序号 作品名[页数-体积]`、单层图片集和作者视频目录都已被当前解析规则覆盖；未读取媒体内容、未计算哈希、未写入磁盘。
 
 ---
 
@@ -110,7 +118,7 @@ transactions (1)/  backups (1)/         空目录
 - `f779db2`：增加绕过“已存在即返回”的 provider 独占创建接口；锁移到 Library 根目录，先于 `.gallery` 创建，提交身份后释放。
 - `f79b0c7`：锁写入 UTC 时间戳并作为 15 分钟租约；进程被终止后，下一次接入可清理过期租约再尝试一次。活跃锁产生的 ` (1)` 文件由失败方删除。
 
-**验证**：覆盖活跃锁拒绝、成功后释放、过期锁恢复、第二次初始化不产生新身份。仍需在两台真实设备同时连接同一可写卷的条件下验证具体 provider 的跨设备一致性。
+**验证**：覆盖活跃锁拒绝、成功后释放、过期锁恢复、第二次初始化不产生新身份；并已在真机测试 DocumentsProvider 上跑通完整初始化、身份读取和租约释放。仍需在两台真实设备同时连接同一可写卷的条件下验证具体 provider 的跨设备一致性。
 
 ---
 
@@ -185,12 +193,12 @@ check(reservedConflicts.isEmpty()) { "目录中已有 Rem 保留文件：…" }
 
 - 插入硬盘后实测扫描耗时，与前次对比。
 - 为静默失败路径补日志级别记录。
-- `refreshFromDatabase()` 的全量载入在大库下的开销。
+- `refreshFromDatabase()` 首次全量载入在超大库下的开销与分页方案。
 
 ### 本轮完整回归
 
-- `testDebugUnitTest` 强制重跑：**89 项通过，0 失败，0 跳过**。
+- `testDebugUnitTest`：**89 项通过，0 失败，0 跳过**；真机 `AndroidJUnitRunner`：**5 项通过，0 失败**。
 - Android Lint：**0 errors，28 warnings**；警告为依赖更新提示、圆形图标轮廓和 KTX 建议，没有新增阻断项。
 - `assembleDebug` 与使用外部 JKS 的 `assembleRelease` 均成功；Release 通过 APK Signature Scheme v2 校验，签名人为 `CN=susnowy`，R8 mapping 已重新归档。
 - 真机 Xiaomi 23127PN0CC / Android 16：Debug 包保留数据覆盖安装成功，`MainActivity` 前台运行、进程存活、私有日志生成，无新崩溃。手机当时只有 private/emulated 卷，未挂载移动硬盘，因此没有把“启动成功”误写成“真实 Library 扫描已验证”。
-- 手机原安装包带 `DEBUGGABLE` 标志，不能由 Release 签名覆盖；这属于 Debug/Release 证书隔离。未卸载应用，避免清除本机索引、日志和 SAF 授权。
+- 调试版改用 `com.susnowy.rem.debug`，已与原 `com.susnowy.rem` 并存安装；后续真机调试不再需要用 Debug 证书覆盖正式包，也不会清除正式包的本机索引、日志和 SAF 授权。
