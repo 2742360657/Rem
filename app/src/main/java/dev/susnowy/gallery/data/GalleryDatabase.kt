@@ -13,6 +13,7 @@ import dev.susnowy.gallery.model.PermissionState
 import dev.susnowy.gallery.model.PlaybackProgress
 import dev.susnowy.gallery.model.SeriesRef
 import dev.susnowy.gallery.model.SourceKind
+import dev.susnowy.gallery.scanner.ScannedFile
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
@@ -203,6 +204,51 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
         null,
         "1",
     ).use { cursor -> if (cursor.moveToFirst()) mediaFromCursor(cursor) else null }
+
+    /**
+     * Only the columns a rescan needs to decide whether a file still has to be opened,
+     * so the whole media table does not have to be materialized into [MediaItem] objects
+     * before scanning. Mirrors [media] column for column.
+     */
+    @Synchronized
+    fun scanSnapshot(libraryId: String): Map<String, ScannedFile> {
+        val columns = arrayOf(
+            "relative_path",
+            "size",
+            "modified_at",
+            "content_hash",
+            "captured_at",
+            "latitude",
+            "longitude",
+        )
+        return readableDatabase.query(
+            "media",
+            columns,
+            "library_id = ?",
+            arrayOf(libraryId),
+            null,
+            null,
+            null,
+        ).use { cursor ->
+            buildMap(cursor.count) {
+                while (cursor.moveToNext()) {
+                    val path = cursor.string("relative_path")
+                    put(
+                        path,
+                        ScannedFile(
+                            relativePath = path,
+                            size = cursor.long("size"),
+                            modifiedAt = cursor.long("modified_at"),
+                            contentHash = cursor.nullableString("content_hash"),
+                            capturedAt = cursor.nullableLong("captured_at"),
+                            latitude = cursor.nullableDouble("latitude"),
+                            longitude = cursor.nullableDouble("longitude"),
+                        ),
+                    )
+                }
+            }
+        }
+    }
 
     @Synchronized
     fun markMissing(libraryId: String, foundPaths: Set<String>) {

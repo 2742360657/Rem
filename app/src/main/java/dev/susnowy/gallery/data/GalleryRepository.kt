@@ -138,7 +138,7 @@ class GalleryRepository(context: Context) {
             val portableStore = PortableMetadataStore(storage)
             val catalog = portableStore.loadCatalog(libraryId)
             val state = portableStore.loadState(libraryId)
-            val result = scanner.scan(storage)
+            val result = scanner.scan(storage, database.scanSnapshot(libraryId))
             val existing = database.media(libraryId)
             val existingByPath = existing.associateBy(MediaItem::relativePath)
             val metadataById = catalog.items.associateBy { it.id }
