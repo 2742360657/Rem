@@ -13,7 +13,7 @@ Android URIs and mount paths are local-only. Every portable media path uses `/`-
 
 ## Packages
 
-- `library`: initialization, identity, Schema v1, and generated Library guide.
+- `library`: initialization, identity, additive Schema v2 migration, and generated Library guide.
 - `storage`: the only layer that directly traverses or mutates SAF documents.
 - `scanner`: nested-directory classification, content fingerprints, EXIF/video dates, ZIP/CBZ discovery, and Inbox candidates.
 - `metadata`: portable catalog/state persistence, revision checks, ComicInfo, and provider contracts.

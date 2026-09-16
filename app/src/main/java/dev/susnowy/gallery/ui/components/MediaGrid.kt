@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -33,6 +34,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -105,11 +107,6 @@ fun MediaCard(
     selected: Boolean = false,
     compact: Boolean = false,
 ) {
-    val thumbnail by produceState<String?>(initialValue = directPreview(item), item.id, item.coverPath) {
-        if (value == null && item.coverPath != null) {
-            value = runCatching { viewModel.resolvePath(item, item.coverPath) }.getOrNull()
-        }
-    }
     Card(
         modifier = modifier
             .fillMaxWidth()
@@ -132,25 +129,11 @@ fun MediaCard(
                 .fillMaxWidth()
                 .aspectRatio(if (compact) 1f else 0.9f),
         ) {
-            if (thumbnail != null) {
-                AsyncImage(
-                    model = thumbnail,
-                    contentDescription = item.displayTitle,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize(),
-                )
-            } else {
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        imageVector = item.kind.icon(),
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                    )
-                }
-            }
+            MediaThumbnail(
+                item = item,
+                viewModel = viewModel,
+                modifier = Modifier.fillMaxSize(),
+            )
             if (item.favorite) {
                 Surface(
                     color = MaterialTheme.colorScheme.surface.copy(alpha = 0.82f),
@@ -231,6 +214,51 @@ fun MediaCard(
     }
 }
 
+@Composable
+fun MediaThumbnail(
+    item: MediaItem,
+    viewModel: GalleryViewModel,
+    modifier: Modifier = Modifier,
+    contentScale: ContentScale = ContentScale.Crop,
+) {
+    val thumbnail by produceState<String?>(initialValue = directPreview(item), item.id, item.coverPath) {
+        if (value == null && item.coverPath != null) {
+            value = runCatching { viewModel.resolvePath(item, item.coverPath) }.getOrNull()
+        }
+    }
+    val archiveBitmap by produceState<android.graphics.Bitmap?>(
+        initialValue = null,
+        item.id,
+        item.modifiedAt,
+    ) {
+        if (thumbnail == null && item.kind == MediaKind.IMAGE_SET && item.sourceKind == SourceKind.ARCHIVE) {
+            val firstEntry = runCatching { viewModel.pages(item).firstOrNull()?.archiveEntry }.getOrNull()
+            value = firstEntry?.let { viewModel.archiveBitmap(item, it, 640, 640) }
+        }
+    }
+    Box(modifier = modifier, contentAlignment = Alignment.Center) {
+        when {
+            thumbnail != null -> AsyncImage(
+                model = thumbnail,
+                contentDescription = item.displayTitle,
+                contentScale = contentScale,
+                modifier = Modifier.fillMaxSize(),
+            )
+            archiveBitmap != null -> Image(
+                bitmap = archiveBitmap!!.asImageBitmap(),
+                contentDescription = item.displayTitle,
+                contentScale = contentScale,
+                modifier = Modifier.fillMaxSize(),
+            )
+            else -> Icon(
+                imageVector = item.kind.icon(),
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+            )
+        }
+    }
+}
+
 private fun directPreview(item: MediaItem): String? = when {
     item.kind == MediaKind.IMAGE || item.kind == MediaKind.PHOTO || item.kind == MediaKind.LIVE_PHOTO -> item.uri
     item.kind == MediaKind.VIDEO || item.kind == MediaKind.PHOTO_VIDEO -> item.uri
@@ -240,7 +268,7 @@ private fun directPreview(item: MediaItem): String? = when {
 
 fun MediaKind.label(): String = when (this) {
     MediaKind.IMAGE -> "图片"
-    MediaKind.IMAGE_SET -> "ImageSet"
+    MediaKind.IMAGE_SET -> "漫画"
     MediaKind.VIDEO -> "视频"
     MediaKind.PHOTO -> "照片"
     MediaKind.PHOTO_VIDEO -> "相册视频"

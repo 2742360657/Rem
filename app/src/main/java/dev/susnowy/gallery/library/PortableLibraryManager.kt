@@ -1,9 +1,11 @@
 package dev.susnowy.gallery.library
 
+import dev.susnowy.gallery.metadata.PortableMetadataStore
 import dev.susnowy.gallery.model.CURRENT_SCHEMA_VERSION
 import dev.susnowy.gallery.model.GALLERY_FORMAT
 import dev.susnowy.gallery.model.LibraryInspection
 import dev.susnowy.gallery.model.PortableLibrary
+import dev.susnowy.gallery.model.UnsupportedSchemaException
 import java.time.Instant
 import java.util.UUID
 import kotlinx.serialization.SerializationException
@@ -18,6 +20,7 @@ class PortableLibraryManager(
         encodeDefaults = true
     },
 ) {
+    private val writer = PortableDocumentWriter(access)
     fun inspect(): LibraryInspection {
         val document = access.find(LIBRARY_JSON) ?: return LibraryInspection.Missing
         return try {
@@ -54,11 +57,38 @@ class PortableLibraryManager(
             updatedAt = now,
         )
         ensureMediaStoreIgnored()
-        writeAtomically(SCHEMA_FILE, schemaV1(), "application/json")
+        writeAtomically(SCHEMA_FILE, schemaDocument(), "application/json")
         writeAtomically(GUIDE_FILE, libraryGuide(library), "text/markdown")
         // library.json is the completion marker and must be committed last.
         writeAtomically(LIBRARY_JSON, json.encodeToString(library), "application/json")
         return library
+    }
+
+    /**
+     * Brings an older Library up to [CURRENT_SCHEMA_VERSION]. Portable metadata is
+     * snapshotted under `.gallery/backups/` before anything is rewritten, and a
+     * Library that declares a newer Schema is never touched.
+     */
+    fun migrateSchema(library: PortableLibrary): PortableLibrary {
+        if (library.schemaVersion > CURRENT_SCHEMA_VERSION) {
+            throw UnsupportedSchemaException(
+                "Library Schema v${library.schemaVersion} 高于本客户端支持的版本，已拒绝写入",
+            )
+        }
+        if (library.schemaVersion == CURRENT_SCHEMA_VERSION) return library
+
+        val stamp = Instant.now().toString().replace(':', '-')
+        VERSIONED_DOCUMENTS.forEach { path ->
+            val name = path.substringAfterLast('/')
+            writer.copyTo(path, ".gallery/backups/schema-v${library.schemaVersion}-$stamp-$name", "application/json")
+        }
+        val migrated = library.copy(
+            schemaVersion = CURRENT_SCHEMA_VERSION,
+            updatedAt = Instant.now().toString(),
+        )
+        writer.write(SCHEMA_FILE, schemaDocument(), "application/json")
+        writer.write(LIBRARY_JSON, json.encodeToString(migrated), "application/json")
+        return migrated
     }
 
     fun ensureMediaStoreIgnored() {
@@ -72,23 +102,24 @@ class PortableLibraryManager(
         }
     }
 
-    private fun writeAtomically(relativePath: String, value: String, mimeType: String) {
-        val fileName = relativePath.substringAfterLast('/')
-        val parent = relativePath.substringBeforeLast('/', missingDelimiterValue = "")
-        if (parent.isNotEmpty()) access.ensureDirectory(parent)
-        val temporaryPath = if (parent.isEmpty()) ".$fileName.tmp" else "$parent/.$fileName.tmp"
-        access.find(temporaryPath)?.let(access::delete)
-        val temporary = access.createFile(temporaryPath, mimeType)
-        access.openOutput(temporary).bufferedWriter(Charsets.UTF_8).use { it.write(value) }
-        access.find(relativePath)?.let(access::delete)
-        check(access.rename(temporary, fileName)) { "无法完成 $relativePath 的原子替换" }
-    }
+    private fun writeAtomically(relativePath: String, value: String, mimeType: String) =
+        writer.write(relativePath, value, mimeType)
 
     companion object {
         const val GUIDE_FILE = "GALLERY_LIBRARY.md"
         const val LIBRARY_JSON = ".gallery/library.json"
-        const val SCHEMA_FILE = ".gallery/schema/v1.json"
+        const val SCHEMA_FILE = ".gallery/schema/v2.json"
         const val MEDIA_IGNORE_FILE = ".nomedia"
+
+        /**
+         * Documents whose `schema_version` is bumped by [migrateSchema]; kept in
+         * sync with [PortableMetadataStore]. Snapshotted before migration.
+         */
+        val VERSIONED_DOCUMENTS = listOf(
+            LIBRARY_JSON,
+            PortableMetadataStore.CATALOG_PATH,
+            PortableMetadataStore.STATE_PATH,
+        )
 
         val REQUIRED_DIRECTORIES = listOf(
             ".gallery",
@@ -110,7 +141,7 @@ class PortableLibraryManager(
         fun libraryGuide(library: PortableLibrary): String = """
             # ${library.name}
 
-            这是一个 Gallery 便携媒体库。Library 身份位于 `.gallery/library.json`，当前 Schema 版本为 ${library.schemaVersion}，规范位于 `.gallery/schema/v1.json`。
+            这是一个 Gallery 便携媒体库。Library 身份位于 `.gallery/library.json`，当前 Schema 版本为 ${library.schemaVersion}，规范位于 `.gallery/schema/v2.json`。
 
             根目录中的 `.nomedia` 用于阻止 Android 系统相册重复收录 Library 内的媒体副本；Gallery 自己通过 SAF 扫描，不受影响。
 
@@ -128,6 +159,7 @@ class PortableLibraryManager(
             所有媒体路径必须使用相对于 Library 根目录的路径，禁止写入 Android URI、Windows 盘符或绝对路径。
             可以修改显示标题、作者、标签、Collection、Series、封面选择以及阅读状态；`id`、`revision`、时间戳和事务状态由程序维护。
             新增字段前必须先更新 Schema 说明，不要直接修改 Android 本机索引数据库。
+            修改可编辑字段时，请同时把该字段写入条目的 `field_sources` 并标记为 `manual`；标记为 `manual` 的字段不会被自动识别或在线元数据覆盖。
 
             新增漫画或图集时，可把按自然文件名排序的图片目录或 ZIP/CBZ 放入 Library。重新接入或在 App 中执行扫描后，新内容会进入 Inbox。
             普通分类不会移动真实文件；只有在 App 中预览并确认 Organizer 计划后才会改变底层目录。
@@ -135,12 +167,15 @@ class PortableLibraryManager(
             不要随意删除 `.gallery`。删除它会丢失分类、进度、回收站和事务信息。
         """.trimIndent() + "\n"
 
-        fun schemaV1(): String = """
+        fun schemaDocument(): String = """
             {
               "${'$'}schema": "https://json-schema.org/draft/2020-12/schema",
-              "title": "Gallery portable metadata schema v1",
-              "schema_version": 1,
+              "title": "Gallery portable metadata schema v2",
+              "schema_version": 2,
               "path_rule": "All media paths are slash-separated and relative to the Library root.",
+              "migration": {
+                "from_v1": "Additive. Catalog items gain field_sources; missing values mean the field is still automatic. Documents are stamped with the new version when next written."
+              },
               "documents": {
                 ".gallery/library.json": {
                   "required": ["format", "schema_version", "library_id", "name", "created_at", "updated_at"],
@@ -151,7 +186,13 @@ class PortableLibraryManager(
                   "required": ["schema_version", "library_id", "revision", "updated_at", "items"],
                   "item_required": ["id", "relative_path", "type", "display_title", "source", "revision", "updated_at"],
                   "item_editable": ["display_title", "original_title", "authors", "tags", "collections", "series", "cover_path", "favorite"],
-                  "item_program_managed": ["id", "relative_path", "source", "content_hash", "revision", "updated_at"]
+                  "item_program_managed": ["id", "relative_path", "source", "content_hash", "revision", "updated_at"],
+                  "item_field_sources": {
+                    "type": "object",
+                    "description": "Provenance per editable field. 'manual' means a human set it and automatic metadata must never overwrite it.",
+                    "keys": ["display_title", "original_title", "authors", "tags", "collections", "series", "cover_path", "favorite"],
+                    "values": ["manual", "import", "filename", "comic_info", "system_import", "provider:<id>"]
+                  }
                 },
                 ".gallery/state/state.json": {
                   "required": ["schema_version", "library_id", "revision", "updated_at", "progress", "trash"],

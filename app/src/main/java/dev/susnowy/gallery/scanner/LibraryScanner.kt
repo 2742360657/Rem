@@ -79,11 +79,19 @@ class LibraryScanner {
 
         val directories = entries.filter(StorageEntry::isDirectory)
         val files = entries.filterNot(StorageEntry::isDirectory)
-        val inPhotos = path.pathSegments().firstOrNull()?.equals("Photos", ignoreCase = true) == true
+        val rootDirectory = path.pathSegments().firstOrNull()
+        val inPhotos = rootDirectory.equals("Photos", ignoreCase = true)
+        val inImages = rootDirectory.equals("Images", ignoreCase = true)
+        val inVideos = rootDirectory.equals("Videos", ignoreCase = true)
         val images = files.filter { MediaClassifier.isImage(it.name, it.mimeType) }
         val videos = files.filter { MediaClassifier.isVideo(it.name, it.mimeType) }
         val archives = files.filter { MediaClassifier.isImageArchive(it.name) }
-        if (!inPhotos && path.isNotEmpty() && images.size >= MIN_IMAGE_SET_PAGES && directories.isEmpty()) {
+        val isImageSetDirectory = shouldTreatDirectoryAsImageSet(
+            path = path,
+            imageCount = images.size,
+            hasChildDirectories = directories.isNotEmpty(),
+        )
+        if (isImageSetDirectory) {
             val sortedPages = images.sortedWith { left, right ->
                 MediaClassifier.naturalCompare(left.name, right.name)
             }
@@ -106,7 +114,7 @@ class LibraryScanner {
                 )
             }
         } else {
-            if (!inPhotos && images.size >= MIN_IMAGE_SET_PAGES && directories.isNotEmpty()) {
+            if (!inPhotos && !inImages && !inVideos && images.size >= MIN_IMAGE_SET_PAGES && directories.isNotEmpty()) {
                 ambiguous += path
             }
             val pairedVideoPaths = mutableSetOf<String>()
@@ -263,5 +271,15 @@ class LibraryScanner {
         private const val HASH_SIZE_LIMIT = 64L * 1024L * 1024L
         private val EXIF_DATE = DateTimeFormatter.ofPattern("yyyy:MM:dd HH:mm:ss", Locale.ROOT)
         private val VIDEO_DATE = DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmssX", Locale.ROOT)
+
+        internal fun shouldTreatDirectoryAsImageSet(
+            path: String,
+            imageCount: Int,
+            hasChildDirectories: Boolean,
+        ): Boolean {
+            if (path.isBlank() || imageCount < MIN_IMAGE_SET_PAGES || hasChildDirectories) return false
+            val root = path.replace('\\', '/').trim('/').substringBefore('/')
+            return root.lowercase(Locale.ROOT) !in setOf("photos", "images", "videos")
+        }
     }
 }

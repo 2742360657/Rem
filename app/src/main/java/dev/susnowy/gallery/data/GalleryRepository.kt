@@ -10,9 +10,14 @@ import dev.susnowy.gallery.importer.SystemMediaAccess
 import dev.susnowy.gallery.importer.SystemMediaCatalog
 import dev.susnowy.gallery.importer.SystemMediaEntry
 import dev.susnowy.gallery.importer.SystemMediaImporter
+import dev.susnowy.gallery.importer.WorkImportKind
 import dev.susnowy.gallery.library.PortableLibraryManager
 import dev.susnowy.gallery.library.LibraryDocument
+import dev.susnowy.gallery.media.ImagePage
+import dev.susnowy.gallery.media.ImageSetOrderResult
+import dev.susnowy.gallery.media.ImageSetOrderService
 import dev.susnowy.gallery.metadata.PortableMetadataStore
+import dev.susnowy.gallery.metadata.withManualEdits
 import dev.susnowy.gallery.model.LibraryInspection
 import dev.susnowy.gallery.model.LibraryRegistration
 import dev.susnowy.gallery.model.MediaItem
@@ -35,6 +40,8 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 class GalleryRepository(context: Context) {
@@ -45,6 +52,8 @@ class GalleryRepository(context: Context) {
     private val importer = SystemMediaImporter(appContext)
     private val systemMediaCatalog = SystemMediaCatalog(appContext)
     private val derivation = DerivationService()
+    private val imageSetOrder = ImageSetOrderService()
+    private val progressWriteMutex = Mutex()
 
     private val _libraries = MutableStateFlow<List<LibraryRegistration>>(emptyList())
     val libraries: StateFlow<List<LibraryRegistration>> = _libraries.asStateFlow()
@@ -74,14 +83,18 @@ class GalleryRepository(context: Context) {
             )
             is LibraryInspection.Invalid -> error(inspection.reason)
         }
+        val migrated = manager.migrateSchema(portable)
+        if (migrated.schemaVersion != portable.schemaVersion) {
+            _events.tryEmit("已把便携元数据升级到 Schema v${migrated.schemaVersion}（原数据已备份）")
+        }
         manager.ensureMediaStoreIgnored()
         val registration = LibraryRegistration(
-            libraryId = portable.libraryId,
-            name = portable.name,
+            libraryId = migrated.libraryId,
+            name = migrated.name,
             treeUri = treeUri.toString(),
             permissionState = PermissionState.AVAILABLE,
-            schemaVersion = portable.schemaVersion,
-            lastScanAt = database.library(portable.libraryId)?.lastScanAt,
+            schemaVersion = migrated.schemaVersion,
+            lastScanAt = database.library(migrated.libraryId)?.lastScanAt,
         )
         database.upsertLibrary(registration)
         refreshFromDatabase()
@@ -97,7 +110,29 @@ class GalleryRepository(context: Context) {
                 refreshFromDatabase()
                 throw FileNotFoundException("${registration.name} 当前离线")
             }
-            PortableLibraryManager(storage).ensureMediaStoreIgnored()
+            val manager = PortableLibraryManager(storage)
+            val identity = when (val inspection = manager.inspect()) {
+                is LibraryInspection.Valid -> inspection.library
+                is LibraryInspection.Unsupported -> error(
+                    "Library Schema v${inspection.schemaVersion} 高于本客户端支持的版本，已拒绝写入",
+                )
+                is LibraryInspection.Invalid -> error(inspection.reason)
+                LibraryInspection.Missing -> error("Library 身份文件缺失，请重新接入并检查目录")
+            }
+            require(identity.libraryId == libraryId) { "Library 身份与本机登记不一致，已拒绝写入" }
+            val migratedIdentity = manager.migrateSchema(identity)
+            val effectiveRegistration = registration.copy(
+                name = migratedIdentity.name,
+                schemaVersion = migratedIdentity.schemaVersion,
+            )
+            if (migratedIdentity.schemaVersion != identity.schemaVersion) {
+                _events.tryEmit("已把便携元数据升级到 Schema v${migratedIdentity.schemaVersion}（原数据已备份）")
+            }
+            manager.ensureMediaStoreIgnored()
+            val recoveredPageOrders = imageSetOrder.recoverInterrupted(storage)
+            if (recoveredPageOrders > 0) {
+                _events.tryEmit("已恢复 $recoveredPageOrders 个中断的漫画页序事务")
+            }
             val portableStore = PortableMetadataStore(storage)
             val catalog = portableStore.loadCatalog(libraryId)
             val state = portableStore.loadState(libraryId)
@@ -166,6 +201,7 @@ class GalleryRepository(context: Context) {
                     deletedAt = trashEntry?.deletedAt?.let(java.time.Instant::parse)?.toEpochMilli(),
                     needsRepair = false,
                     revision = metadata?.revision ?: local?.revision ?: 0,
+                    fieldSources = metadata?.fieldSources ?: local?.fieldSources.orEmpty(),
                 )
                 database.upsertMedia(item)
             }
@@ -184,7 +220,7 @@ class GalleryRepository(context: Context) {
                 }
             }
             database.upsertLibrary(
-                registration.copy(
+                effectiveRegistration.copy(
                     permissionState = PermissionState.AVAILABLE,
                     lastScanAt = System.currentTimeMillis(),
                 ),
@@ -205,8 +241,9 @@ class GalleryRepository(context: Context) {
     suspend fun updateMedia(updated: MediaItem): MediaItem = runOperation("正在保存元数据…") {
         onIo {
             val storage = storageFor(requireLibrary(updated.libraryId))
-            val portable = PortableMetadataStore(storage).saveItem(updated, updated.revision)
-            val saved = updated.copy(revision = portable.revision, inInbox = false)
+            val locked = updated.copy(fieldSources = updated.withManualEdits(database.mediaItem(updated.id)))
+            val portable = PortableMetadataStore(storage).saveItem(locked, locked.revision)
+            val saved = locked.copy(revision = portable.revision, inInbox = false)
             database.upsertMedia(saved)
             refreshFromDatabase()
             saved
@@ -226,12 +263,13 @@ class GalleryRepository(context: Context) {
             require(items.all { it.libraryId == libraryId }) { "不能跨 Library 批量修改" }
             if (items.isEmpty()) return@onIo 0
             val updated = items.map { item ->
-                item.copy(
+                val changed = item.copy(
                     authors = (item.authors + addAuthors).distinct(),
                     tags = (item.tags + addTags).distinct(),
                     collections = (item.collections + addCollections).distinct(),
                     favorite = favorite ?: item.favorite,
                 )
+                changed.copy(fieldSources = changed.withManualEdits(item))
             }
             val storage = storageFor(requireLibrary(libraryId))
             val portable = PortableMetadataStore(storage).saveItems(updated).associateBy { it.id }
@@ -284,11 +322,13 @@ class GalleryRepository(context: Context) {
         }
     }
 
-    suspend fun saveProgress(progress: PlaybackProgress) = onIo {
-        val item = database.mediaItem(progress.itemId) ?: return@onIo
-        val storage = storageFor(requireLibrary(item.libraryId))
-        PortableMetadataStore(storage).saveProgress(item.libraryId, progress)
-        database.upsertProgress(progress)
+    suspend fun saveProgress(progress: PlaybackProgress) = progressWriteMutex.withLock {
+        onIo {
+            val item = database.mediaItem(progress.itemId) ?: return@onIo
+            val storage = storageFor(requireLibrary(item.libraryId))
+            PortableMetadataStore(storage).saveProgress(item.libraryId, progress)
+            database.upsertProgress(progress)
+        }
     }
 
     suspend fun progress(itemId: String): PlaybackProgress? = onIo { database.progress(itemId) }
@@ -331,6 +371,20 @@ class GalleryRepository(context: Context) {
             val storage = storageFor(requireLibrary(libraryId))
             PortableLibraryManager(storage).ensureMediaStoreIgnored()
             importer.importImageSet(uris, title, storage)
+        }
+    }
+
+    suspend fun importSystemWorks(
+        libraryId: String,
+        uris: List<Uri>,
+        kind: WorkImportKind,
+    ): ImportResult = runOperation(
+        if (kind == WorkImportKind.IMAGE) "正在按来源分类复制图片…" else "正在按来源分类复制视频…",
+    ) {
+        onIo {
+            val storage = storageFor(requireLibrary(libraryId))
+            PortableLibraryManager(storage).ensureMediaStoreIgnored()
+            importer.importWorks(uris, kind, storage)
         }
     }
 
@@ -378,6 +432,20 @@ class GalleryRepository(context: Context) {
                 val items = itemIds.map { id -> database.mediaItem(id) ?: error("图片不存在：$id") }
                 require(items.all { it.libraryId == libraryId }) { "不能跨 Library 隐式派生" }
                 derivation.createImageSet(items, title, storageFor(requireLibrary(libraryId)))
+            }
+        }
+
+    suspend fun reorderImageSet(itemId: String, pages: List<ImagePage>): ImageSetOrderResult =
+        runOperation("正在写入漫画页序…") {
+            onIo {
+                val item = database.mediaItem(itemId) ?: error("漫画不存在")
+                val storage = storageFor(requireLibrary(item.libraryId))
+                val result = imageSetOrder.reorder(item, pages, storage)
+                val updated = item.copy(coverPath = result.coverPath)
+                val portable = PortableMetadataStore(storage).saveItem(updated, updated.revision)
+                database.upsertMedia(updated.copy(revision = portable.revision, inInbox = false))
+                refreshFromDatabase()
+                result
             }
         }
 

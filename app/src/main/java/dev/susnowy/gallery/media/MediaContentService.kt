@@ -16,6 +16,7 @@ data class ImagePage(
     val name: String,
     val uri: String? = null,
     val archiveEntry: String? = null,
+    val relativePath: String? = null,
 )
 
 class MediaContentService {
@@ -25,7 +26,7 @@ class MediaContentService {
                 SourceKind.DIRECTORY -> storage.list(item.relativePath)
                     .filter { !it.isDirectory && MediaClassifier.isImage(it.name, it.mimeType) }
                     .sortedWith { left, right -> MediaClassifier.naturalCompare(left.name, right.name) }
-                    .map { ImagePage(name = it.name, uri = it.uri) }
+                    .map { ImagePage(name = it.name, uri = it.uri, relativePath = it.relativePath) }
                 SourceKind.ARCHIVE -> archiveEntryNames(item, storage).map {
                     ImagePage(name = it.substringAfterLast('/'), archiveEntry = it)
                 }

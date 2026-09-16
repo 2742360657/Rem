@@ -1,6 +1,8 @@
 package dev.susnowy.gallery.metadata
 
 import dev.susnowy.gallery.library.LibraryDocumentAccess
+import dev.susnowy.gallery.library.PortableDocumentWriter
+import dev.susnowy.gallery.model.CURRENT_SCHEMA_VERSION
 import dev.susnowy.gallery.model.MediaItem
 import dev.susnowy.gallery.model.PlaybackProgress
 import dev.susnowy.gallery.model.PortableCatalog
@@ -8,6 +10,7 @@ import dev.susnowy.gallery.model.PortableItemMetadata
 import dev.susnowy.gallery.model.PortableProgress
 import dev.susnowy.gallery.model.PortableState
 import dev.susnowy.gallery.model.PortableTrashEntry
+import dev.susnowy.gallery.model.UnsupportedSchemaException
 import java.time.Instant
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.encodeToString
@@ -23,11 +26,16 @@ class PortableMetadataStore(
         encodeDefaults = true
     },
 ) {
+    private val writer = PortableDocumentWriter(access)
+
     fun loadCatalog(libraryId: String): PortableCatalog =
         read(CATALOG_PATH)?.let { text ->
             runCatching { json.decodeFromString<PortableCatalog>(text) }
                 .getOrElse { throw SerializationException("catalog.json 无法解析", it) }
-                .also { require(it.libraryId == libraryId) { "Catalog 不属于当前 Library" } }
+                .also {
+                    require(it.libraryId == libraryId) { "Catalog 不属于当前 Library" }
+                    requireSupportedSchema(it.schemaVersion)
+                }
         } ?: PortableCatalog(
             libraryId = libraryId,
             updatedAt = Instant.EPOCH.toString(),
@@ -62,12 +70,17 @@ class PortableMetadataStore(
             item.toPortableMetadata(
                 revision = (existing?.revision ?: 0) + 1,
                 updatedAt = now,
+                // Provenance is sticky: a caller that does not mention a field keeps
+                // whatever the disk already recorded, so a relocation or cover
+                // refresh cannot silently drop a human's manual lock.
+                fieldSources = existing?.fieldSources.orEmpty() + item.fieldSources,
             )
         }
         val updatedIds = metadata.mapTo(mutableSetOf(), PortableItemMetadata::id)
         val updatedPaths = metadata.mapTo(mutableSetOf(), PortableItemMetadata::relativePath)
         val remaining = catalog.items.filterNot { it.id in updatedIds || it.relativePath in updatedPaths }
         val updated = catalog.copy(
+            schemaVersion = CURRENT_SCHEMA_VERSION,
             revision = catalog.revision + 1,
             updatedAt = now,
             items = (remaining + metadata).sortedBy(PortableItemMetadata::relativePath),
@@ -79,7 +92,10 @@ class PortableMetadataStore(
     fun loadState(libraryId: String): PortableState = read(STATE_PATH)?.let { text ->
         runCatching { json.decodeFromString<PortableState>(text) }
             .getOrElse { throw SerializationException("state.json 无法解析", it) }
-            .also { require(it.libraryId == libraryId) { "State 不属于当前 Library" } }
+            .also {
+                require(it.libraryId == libraryId) { "State 不属于当前 Library" }
+                requireSupportedSchema(it.schemaVersion)
+            }
     } ?: PortableState(libraryId = libraryId, updatedAt = Instant.EPOCH.toString())
 
     fun saveProgress(libraryId: String, progress: PlaybackProgress) {
@@ -93,6 +109,7 @@ class PortableMetadataStore(
             lastOpenedAt = Instant.ofEpochMilli(progress.lastOpenedAt).toString(),
         )
         val updated = state.copy(
+            schemaVersion = CURRENT_SCHEMA_VERSION,
             revision = state.revision + 1,
             updatedAt = now.toString(),
             progress = (state.progress.filterNot { it.itemId == progress.itemId } + portable)
@@ -126,6 +143,7 @@ class PortableMetadataStore(
             }
         } else remaining
         val updated = state.copy(
+            schemaVersion = CURRENT_SCHEMA_VERSION,
             revision = state.revision + 1,
             updatedAt = Instant.now().toString(),
             trash = trash.sortedBy(PortableTrashEntry::deletedAt),
@@ -137,6 +155,7 @@ class PortableMetadataStore(
         val now = Instant.now().toString()
         val catalog = loadCatalog(item.libraryId)
         val catalogUpdated = catalog.copy(
+            schemaVersion = CURRENT_SCHEMA_VERSION,
             revision = catalog.revision + 1,
             updatedAt = now,
             items = catalog.items.filterNot { it.id == item.id },
@@ -145,6 +164,7 @@ class PortableMetadataStore(
 
         val state = loadState(item.libraryId)
         val stateUpdated = state.copy(
+            schemaVersion = CURRENT_SCHEMA_VERSION,
             revision = state.revision + 1,
             updatedAt = now,
             progress = state.progress.filterNot { it.itemId == item.id },
@@ -187,6 +207,7 @@ class PortableMetadataStore(
             updatedAt = now,
         )
         val updated = catalog.copy(
+            schemaVersion = CURRENT_SCHEMA_VERSION,
             revision = catalog.revision + 1,
             updatedAt = now,
             items = catalog.items.map { if (it.id == itemId) relocated else it },
@@ -195,35 +216,24 @@ class PortableMetadataStore(
         return true
     }
 
-    private fun read(path: String): String? {
-        val document = access.find(path) ?: return null
-        return access.openInput(document).bufferedReader(Charsets.UTF_8).use { it.readText() }
+    private fun read(path: String): String? = writer.read(path)
+
+    private fun writeSafely(path: String, text: String, mimeType: String) =
+        writer.write(path, text, mimeType)
+
+    private fun requireSupportedSchema(schemaVersion: Int) {
+        if (schemaVersion > CURRENT_SCHEMA_VERSION) {
+            throw UnsupportedSchemaException(
+                "Library 元数据 Schema v$schemaVersion 高于本客户端支持的版本，已拒绝写入",
+            )
+        }
     }
 
-    private fun writeSafely(path: String, text: String, mimeType: String) {
-        val name = path.substringAfterLast('/')
-        val parent = path.substringBeforeLast('/', "")
-        if (parent.isNotEmpty()) access.ensureDirectory(parent)
-        val temporaryPath = if (parent.isEmpty()) ".$name.tmp" else "$parent/.$name.tmp"
-        val backupPath = if (parent.isEmpty()) ".$name.bak" else "$parent/.$name.bak"
-        access.find(temporaryPath)?.let(access::delete)
-        access.find(backupPath)?.let(access::delete)
-        val temporary = access.createFile(temporaryPath, mimeType)
-        access.openOutput(temporary).bufferedWriter(Charsets.UTF_8).use { it.write(text) }
-
-        val current = access.find(path)
-        if (current != null && !access.rename(current, ".$name.bak")) {
-            access.delete(temporary)
-            error("无法备份 $path")
-        }
-        if (!access.rename(temporary, name)) {
-            access.find(backupPath)?.let { access.rename(it, name) }
-            error("无法替换 $path")
-        }
-        access.find(backupPath)?.let(access::delete)
-    }
-
-    private fun MediaItem.toPortableMetadata(revision: Long, updatedAt: String) =
+    private fun MediaItem.toPortableMetadata(
+        revision: Long,
+        updatedAt: String,
+        fieldSources: Map<String, String>,
+    ) =
         PortableItemMetadata(
             id = id,
             relativePath = relativePath,
@@ -239,6 +249,7 @@ class PortableMetadataStore(
             secondaryPath = secondaryPath,
             contentHash = contentHash,
             favorite = favorite,
+            fieldSources = fieldSources,
             revision = revision,
             updatedAt = updatedAt,
         )

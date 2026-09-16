@@ -2,10 +2,12 @@ package dev.susnowy.gallery.metadata
 
 import dev.susnowy.gallery.library.LibraryDocument
 import dev.susnowy.gallery.library.LibraryDocumentAccess
+import dev.susnowy.gallery.model.CURRENT_SCHEMA_VERSION
 import dev.susnowy.gallery.model.MediaItem
 import dev.susnowy.gallery.model.MediaKind
 import dev.susnowy.gallery.model.PlaybackProgress
 import dev.susnowy.gallery.model.SourceKind
+import dev.susnowy.gallery.model.UnsupportedSchemaException
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
@@ -135,11 +137,94 @@ class PortableMetadataStoreTest {
         assertEquals("Changed elsewhere", catalog.items.first { it.id == "item-id" }.displayTitle)
         assertFalse(catalog.items.first { it.id == "item-2" }.tags.contains("must-not-write"))
     }
+
+    @Test
+    fun stateWritesTolerateProvidersThatAdjustStagingNames() {
+        val adjusted = PortableMetadataStore(MetadataMemoryAccess(adjustCreatedNames = true))
+
+        adjusted.saveProgress("library-id", PlaybackProgress("item-id", page = 3, lastOpenedAt = 1))
+        adjusted.saveProgress("library-id", PlaybackProgress("item-id", page = 9, lastOpenedAt = 2))
+
+        assertEquals(9, adjusted.loadState("library-id").progress.single().page)
+    }
+
+    @Test
+    fun keepsFieldProvenanceAndStampsCurrentSchema() {
+        store.saveItem(
+            item.copy(fieldSources = mapOf("display_title" to FieldSource.MANUAL)),
+            expectedRevision = 0,
+        )
+
+        val catalog = store.loadCatalog("library-id")
+        assertEquals(CURRENT_SCHEMA_VERSION, catalog.schemaVersion)
+        assertEquals(
+            mapOf("display_title" to "manual"),
+            catalog.items.single().fieldSources,
+        )
+    }
+
+    @Test
+    fun olderSchemaIsStillReadable() {
+        val seeded = MetadataMemoryAccess().apply {
+            seed(
+                PortableMetadataStore.CATALOG_PATH,
+                """
+                {
+                  "schema_version": 1,
+                  "library_id": "library-id",
+                  "revision": 3,
+                  "updated_at": "2026-01-01T00:00:00Z",
+                  "items": []
+                }
+                """.trimIndent(),
+            )
+        }
+
+        val catalog = PortableMetadataStore(seeded).loadCatalog("library-id")
+
+        assertEquals(1, catalog.schemaVersion)
+        assertEquals(3, catalog.revision)
+    }
+
+    @Test
+    fun newerSchemaIsNeverWritten() {
+        val seeded = MetadataMemoryAccess().apply {
+            seed(
+                PortableMetadataStore.STATE_PATH,
+                """
+                {
+                  "schema_version": 99,
+                  "library_id": "library-id",
+                  "revision": 1,
+                  "updated_at": "2026-01-01T00:00:00Z"
+                }
+                """.trimIndent(),
+            )
+        }
+
+        assertThrows(UnsupportedSchemaException::class.java) {
+            PortableMetadataStore(seeded).saveProgress(
+                "library-id",
+                PlaybackProgress("item-id", page = 1, lastOpenedAt = 1),
+            )
+        }
+        assertTrue(
+            seeded.read(PortableMetadataStore.STATE_PATH)!!.contains("\"schema_version\": 99"),
+        )
+    }
 }
 
-private class MetadataMemoryAccess : LibraryDocumentAccess {
+private class MetadataMemoryAccess(
+    private val adjustCreatedNames: Boolean = false,
+) : LibraryDocumentAccess {
     private val files = mutableMapOf<String, ByteArray>()
     private val directories = mutableSetOf<String>()
+
+    fun seed(relativePath: String, text: String) {
+        files[relativePath] = text.encodeToByteArray()
+    }
+
+    fun read(relativePath: String): String? = files[relativePath]?.decodeToString()
 
     override fun find(relativePath: String): LibraryDocument? = when {
         relativePath in directories -> LibraryDocument(relativePath, relativePath.substringAfterLast('/'), true)
@@ -153,28 +238,41 @@ private class MetadataMemoryAccess : LibraryDocumentAccess {
     }
 
     override fun createFile(relativePath: String, mimeType: String): LibraryDocument {
-        files.putIfAbsent(relativePath, byteArrayOf())
-        return LibraryDocument(relativePath, relativePath.substringAfterLast('/'), false)
+        val providerPath = if (adjustCreatedNames && relativePath.endsWith(".tmp")) {
+            "$relativePath.json"
+        } else {
+            relativePath
+        }
+        files.putIfAbsent(providerPath, byteArrayOf())
+        return LibraryDocument(
+            key = relativePath,
+            name = providerPath.substringAfterLast('/'),
+            isDirectory = false,
+            locator = providerPath,
+        )
     }
 
     override fun openInput(document: LibraryDocument): InputStream =
-        ByteArrayInputStream(files.getValue(document.key))
+        ByteArrayInputStream(files.getValue(document.storageKey()))
 
     override fun openOutput(document: LibraryDocument, truncate: Boolean): OutputStream =
         object : ByteArrayOutputStream() {
             override fun close() {
-                files[document.key] = toByteArray()
+                files[document.storageKey()] = toByteArray()
                 super.close()
             }
         }
 
     override fun rename(document: LibraryDocument, displayName: String): Boolean {
-        val bytes = files.remove(document.key) ?: return false
-        val parent = document.key.substringBeforeLast('/', "")
+        val source = document.storageKey()
+        val bytes = files.remove(source) ?: return false
+        val parent = source.substringBeforeLast('/', "")
         val target = if (parent.isBlank()) displayName else "$parent/$displayName"
         files[target] = bytes
         return true
     }
 
-    override fun delete(document: LibraryDocument): Boolean = files.remove(document.key) != null
+    override fun delete(document: LibraryDocument): Boolean = files.remove(document.storageKey()) != null
+
+    private fun LibraryDocument.storageKey(): String = locator ?: key
 }

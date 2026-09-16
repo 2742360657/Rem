@@ -47,7 +47,13 @@ data class ImportResult(
     val imported: Int,
     val skipped: Int,
     val warnings: List<String>,
+    val importedPaths: List<String> = emptyList(),
 )
+
+enum class WorkImportKind(val directory: String, val mimePrefix: String) {
+    IMAGE("Images", "image/"),
+    VIDEO("Videos", "video/"),
+}
 
 class SystemMediaImporter(private val context: Context) {
     private val resolver = context.contentResolver
@@ -103,18 +109,79 @@ class SystemMediaImporter(private val context: Context) {
             storage.openOutput(document).bufferedWriter(Charsets.UTF_8).use {
                 it.write(JSON.encodeToString(manifest))
             }
-            ImportResult(imported.size, skipped.size, warnings)
+            ImportResult(imported.size, skipped.size, warnings, imported.map(MediaImportEntry::targetPath))
         }
+
+    /**
+     * Copies system media into the ordinary image/video namespaces. The source
+     * directory is preserved below the namespace and is later presented as the
+     * default virtual classification. Photos remain a separate mixed timeline.
+     */
+    suspend fun importWorks(
+        uris: List<Uri>,
+        kind: WorkImportKind,
+        storage: DocumentTreeStorage,
+    ): ImportResult = withContext(Dispatchers.IO) {
+        require(uris.isNotEmpty()) { "没有选择媒体" }
+        val operationId = UUID.randomUUID().toString()
+        val imported = mutableListOf<MediaImportEntry>()
+        val skipped = mutableListOf<String>()
+        val warnings = mutableListOf<String>()
+        uris.distinct().forEach { uri ->
+            coroutineContext.ensureActive()
+            runCatching {
+                val source = querySource(uri)
+                require(source.mimeType.startsWith(kind.mimePrefix)) {
+                    if (kind == WorkImportKind.IMAGE) "图片分类只能导入图片" else "视频分类只能导入视频"
+                }
+                val capturedAt = extractCapturedAt(uri, source.mimeType, source.modifiedAt)
+                val parent = targetWorkParent(kind.directory, source.relativePath, capturedAt)
+                storage.ensureDirectory(parent)
+                val target = uniqueTarget(storage, parent, source.displayName, source.size)
+                if (target == null) {
+                    skipped += source.displayName
+                    return@runCatching
+                }
+                val document = storage.createFile(target, source.mimeType)
+                resolver.openInputStream(uri).use { input ->
+                    requireNotNull(input) { "无法读取源媒体" }
+                    storage.openOutput(document).use { output -> input.copyTo(output, DEFAULT_BUFFER_SIZE) }
+                }
+                val actual = storage.entry(target) ?: error("复制后找不到目标文件")
+                if (source.size > 0) check(actual.size == source.size) { "复制后的文件大小不一致" }
+                imported += MediaImportEntry(
+                    sourceName = source.displayName,
+                    sourceKind = source.sourceKind,
+                    sourcePath = source.relativePath.ifBlank { null },
+                    targetPath = target,
+                    capturedAt = Instant.ofEpochMilli(capturedAt).toString(),
+                    size = actual.size,
+                )
+            }.onFailure { error ->
+                warnings += "${uri.lastPathSegment.orEmpty()}：${error.message.orEmpty()}"
+            }
+        }
+        writeManifest(
+            storage,
+            MediaImportManifest(
+                operationId = operationId,
+                createdAt = Instant.now().toString(),
+                entries = imported,
+                skipped = skipped,
+            ),
+        )
+        ImportResult(imported.size, skipped.size, warnings, imported.map(MediaImportEntry::targetPath))
+    }
 
     suspend fun importImageSet(
         uris: List<Uri>,
         title: String,
         storage: DocumentTreeStorage,
     ): ImportResult = withContext(Dispatchers.IO) {
-        require(uris.distinct().size >= 2) { "ImageSet 至少需要两张图片" }
+        require(uris.distinct().size >= 2) { "漫画/图集至少需要两张图片" }
         val sources = uris.distinct().map { uri -> uri to querySource(uri) }
         require(sources.all { (_, source) -> source.mimeType.startsWith("image/") }) {
-            "ImageSet 只能包含图片"
+            "漫画/图集只能包含图片"
         }
         val operationId = UUID.randomUUID().toString()
         val directory = uniqueDirectory(storage, "ImageSets/Imported", title.safeFolderName())
@@ -148,7 +215,7 @@ class SystemMediaImporter(private val context: Context) {
                 warnings += "${source.displayName}：${error.message.orEmpty()}"
             }
         }
-        check(imported.size >= 2) { "成功复制的图片不足两张，未形成 ImageSet" }
+        check(imported.size >= 2) { "成功复制的图片不足两张，未形成漫画/图集" }
         writeManifest(
             storage,
             MediaImportManifest(
@@ -158,7 +225,7 @@ class SystemMediaImporter(private val context: Context) {
                 skipped = emptyList(),
             ),
         )
-        ImportResult(imported.size, 0, warnings)
+        ImportResult(imported.size, 0, warnings, imported.map(MediaImportEntry::targetPath))
     }
 
     private fun querySource(uri: Uri): SourceInfo {
@@ -283,7 +350,7 @@ class SystemMediaImporter(private val context: Context) {
             val candidate = "$parent/$name ($index)"
             if (storage.entry(candidate) == null) return candidate
         }
-        error("同名 ImageSet 过多：$name")
+        error("同名漫画/图集过多：$name")
     }
 
     private fun writeManifest(storage: DocumentTreeStorage, manifest: MediaImportManifest) {
@@ -339,6 +406,25 @@ class SystemMediaImporter(private val context: Context) {
             if (portableSource.isNotBlank()) return "Photos/$portableSource"
             val date = Instant.ofEpochMilli(capturedAt).atZone(ZoneId.systemDefault())
             return "Photos/Unsorted/${date.year}/${date.monthValue.toString().padStart(2, '0')}"
+        }
+
+        internal fun targetWorkParent(root: String, sourcePath: String, capturedAt: Long): String {
+            require(root == "Images" || root == "Videos") { "不受支持的作品根目录" }
+            val portableSource = sourcePath
+                .replace('\\', '/')
+                .trim('/')
+                .split('/')
+                .filter { it.isNotBlank() && it != "." && it != ".." }
+                .joinToString("/") { segment ->
+                    segment.trim()
+                        .replace(Regex("[<>:\"/\\\\|?*\\u0000-\\u001F]"), "_")
+                        .trim(' ', '.')
+                        .take(120)
+                        .ifBlank { "Unnamed" }
+                }
+            if (portableSource.isNotBlank()) return "$root/$portableSource"
+            val date = Instant.ofEpochMilli(capturedAt).atZone(ZoneId.systemDefault())
+            return "$root/未分类/${date.year}/${date.monthValue.toString().padStart(2, '0')}"
         }
     }
 }

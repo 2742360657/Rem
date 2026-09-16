@@ -22,4 +22,28 @@ class MediaClassifierTest {
         assertEquals(MediaKind.PHOTO_VIDEO, MediaClassifier.kindForFile("VID_1.mp4", null, true))
         assertNull(MediaClassifier.kindForFile("notes.txt", "text/plain", false))
     }
+
+    @Test
+    fun explicitMediaRootsDoNotTurnLeafFoldersIntoComics() {
+        assertEquals(
+            false,
+            LibraryScanner.shouldTreatDirectoryAsImageSet("Images/Pictures/WeChat", 20, false),
+        )
+        assertEquals(
+            false,
+            LibraryScanner.shouldTreatDirectoryAsImageSet("Videos/Covers", 20, false),
+        )
+        assertEquals(
+            false,
+            LibraryScanner.shouldTreatDirectoryAsImageSet("Photos/DCIM/Camera", 20, false),
+        )
+        assertEquals(
+            true,
+            LibraryScanner.shouldTreatDirectoryAsImageSet("ImageSets/Imported/Book", 20, false),
+        )
+        assertEquals(
+            true,
+            LibraryScanner.shouldTreatDirectoryAsImageSet("Legacy/Book", 20, false),
+        )
+    }
 }

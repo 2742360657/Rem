@@ -4,7 +4,17 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 const val GALLERY_FORMAT = "gallery-library"
-const val CURRENT_SCHEMA_VERSION = 1
+
+/**
+ * v1 → v2 adds per-field provenance (`field_sources`) to catalog items so that
+ * automatic metadata can never silently overwrite a manual edit.
+ * v2 is an additive change: v1 documents decode with defaults and are stamped
+ * with the new version the next time they are written.
+ */
+const val CURRENT_SCHEMA_VERSION = 2
+
+/** Raised instead of writing to a Library that declares a newer Schema. */
+class UnsupportedSchemaException(message: String) : IllegalStateException(message)
 
 @Serializable
 data class PortableLibrary(

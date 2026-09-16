@@ -13,6 +13,7 @@ import dev.susnowy.gallery.GalleryApplication
 import dev.susnowy.gallery.data.GalleryRepository
 import dev.susnowy.gallery.importer.SystemMediaAccess
 import dev.susnowy.gallery.importer.SystemMediaEntry
+import dev.susnowy.gallery.importer.WorkImportKind
 import dev.susnowy.gallery.media.ImagePage
 import dev.susnowy.gallery.media.MediaContentService
 import dev.susnowy.gallery.model.LibraryRegistration
@@ -40,7 +41,7 @@ enum class AppScreen(val title: String) {
     PHOTOS("相册"),
     SYSTEM_GALLERY("系统相册"),
     IMAGES("图片"),
-    IMAGE_SETS("漫画与图集"),
+    IMAGE_SETS("漫画"),
     VIDEOS("视频"),
     SERIES("系列"),
     COLLECTIONS("Collection"),
@@ -437,9 +438,26 @@ class GalleryViewModel(
                 repository.scan(libraryId)
                 result
             }.onSuccess { result ->
-                message.value = "已创建 ImageSet：导入 ${result.imported} 页" +
+                message.value = "已创建漫画/图集：导入 ${result.imported} 页" +
                     if (result.warnings.isEmpty()) "" else "，${result.warnings.size} 条警告"
                 setScreen(AppScreen.IMAGE_SETS)
+            }.onFailure(::showError)
+        }
+    }
+
+    fun importSystemWorks(uris: List<Uri>, kind: WorkImportKind) {
+        val libraryId = activeLibraryId.value ?: return
+        if (uris.isEmpty()) return
+        longOperationJob = viewModelScope.launch {
+            runCatching {
+                val result = repository.importSystemWorks(libraryId, uris, kind)
+                repository.scan(libraryId)
+                result
+            }.onSuccess { result ->
+                val label = if (kind == WorkImportKind.IMAGE) "图片" else "视频"
+                message.value = "已按来源分类导入 ${result.imported} 项$label，跳过 ${result.skipped} 项" +
+                    if (result.warnings.isEmpty()) "" else "，${result.warnings.size} 条警告"
+                setScreen(if (kind == WorkImportKind.IMAGE) AppScreen.IMAGES else AppScreen.VIDEOS)
             }.onFailure(::showError)
         }
     }
@@ -502,10 +520,22 @@ class GalleryViewModel(
                 repository.scan(libraryId)
                 target
             }.onSuccess {
-                message.value = "已创建 ImageSet：$it"
+                message.value = "已创建漫画/图集：$it"
                 setScreen(AppScreen.IMAGE_SETS)
             }
                 .onFailure(::showError)
+        }
+    }
+
+    fun reorderImageSet(item: MediaItem, pages: List<ImagePage>) {
+        if (pages.size < 2) return
+        longOperationJob = viewModelScope.launch {
+            runCatching {
+                repository.reorderImageSet(item.id, pages)
+                repository.scan(item.libraryId)
+            }.onSuccess {
+                message.value = "已按当前顺序重新编号 ${pages.size} 页"
+            }.onFailure(::showError)
         }
     }
 

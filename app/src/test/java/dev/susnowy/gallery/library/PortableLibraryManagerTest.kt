@@ -1,6 +1,9 @@
 package dev.susnowy.gallery.library
 
+import dev.susnowy.gallery.model.CURRENT_SCHEMA_VERSION
 import dev.susnowy.gallery.model.LibraryInspection
+import dev.susnowy.gallery.model.PortableLibrary
+import dev.susnowy.gallery.model.UnsupportedSchemaException
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
@@ -19,9 +22,67 @@ class PortableLibraryManagerTest {
         assertEquals("My Library", library.name)
         assertTrue(access.files.containsKey(".gallery/library.json"))
         assertTrue(access.files.containsKey("GALLERY_LIBRARY.md"))
-        assertTrue(access.files.containsKey(".gallery/schema/v1.json"))
+        assertTrue(access.files.containsKey(PortableLibraryManager.SCHEMA_FILE))
+        assertEquals(".gallery/schema/v2.json", PortableLibraryManager.SCHEMA_FILE)
         assertTrue(access.files.containsKey(PortableLibraryManager.MEDIA_IGNORE_FILE))
         assertTrue(PortableLibraryManager(access).inspect() is LibraryInspection.Valid)
+    }
+
+    @Test
+    fun migratesVersionOneLibraryWithBackups() {
+        val original = """{
+            "format":"gallery-library",
+            "schema_version":1,
+            "library_id":"d421f1ce-59e7-4f9f-85a0-250a586cdca5",
+            "name":"Old Library",
+            "created_at":"2026-01-01T00:00:00Z",
+            "updated_at":"2026-01-02T00:00:00Z"
+        }"""
+        val access = MemoryDocumentAccess().apply {
+            files[PortableLibraryManager.LIBRARY_JSON] = original.encodeToByteArray()
+            files[".gallery/items/catalog.json"] = """{"schema_version":1,"library_id":"d421f1ce-59e7-4f9f-85a0-250a586cdca5","revision":5,"updated_at":"2026-01-02T00:00:00Z","items":[]}""".encodeToByteArray()
+            files[".gallery/state/state.json"] = """{"schema_version":1,"library_id":"d421f1ce-59e7-4f9f-85a0-250a586cdca5","revision":2,"updated_at":"2026-01-02T00:00:00Z","progress":[],"trash":[]}""".encodeToByteArray()
+        }
+        val manager = PortableLibraryManager(access)
+
+        val migrated = manager.migrateSchema((manager.inspect() as LibraryInspection.Valid).library)
+
+        assertEquals(CURRENT_SCHEMA_VERSION, migrated.schemaVersion)
+        assertTrue(access.files.containsKey(".gallery/schema/v2.json"))
+        assertTrue(access.files.getValue(PortableLibraryManager.LIBRARY_JSON).decodeToString().contains("\"schema_version\": 2"))
+        // The original documents stay available as a pre-migration snapshot.
+        val backups = access.files.keys.filter { it.startsWith(".gallery/backups/schema-v1-") }
+        assertEquals(3, backups.size)
+        assertTrue(backups.any { access.files.getValue(it).decodeToString() == original })
+        assertTrue(manager.inspect() is LibraryInspection.Valid)
+    }
+
+    @Test
+    fun migrationRefusesNewerSchema() {
+        val newer = PortableLibrary(
+            schemaVersion = CURRENT_SCHEMA_VERSION + 1,
+            libraryId = "d421f1ce-59e7-4f9f-85a0-250a586cdca5",
+            name = "Future",
+            createdAt = "now",
+            updatedAt = "now",
+        )
+
+        assertThrows(UnsupportedSchemaException::class.java) {
+            PortableLibraryManager(MemoryDocumentAccess()).migrateSchema(newer)
+        }
+    }
+
+    @Test
+    fun migrationIsIdempotentAtCurrentVersion() {
+        val access = MemoryDocumentAccess()
+        val manager = PortableLibraryManager(access)
+        val library = manager.initialize("Library")
+        val backupsBefore = access.files.keys.count { it.startsWith(".gallery/backups/") }
+
+        val unchanged = manager.migrateSchema(library)
+
+        assertEquals(library, unchanged)
+        assertEquals(backupsBefore, access.files.keys.count { it.startsWith(".gallery/backups/") })
     }
 
     @Test

@@ -32,4 +32,21 @@ class SystemMediaImporterTest {
             SystemMediaImporter.targetParent("", Instant.parse("2024-06-15T12:00:00Z").toEpochMilli()),
         )
     }
+
+    @Test
+    fun preservesSourceHierarchyForOrdinaryImageAndVideoViews() {
+        val capturedAt = Instant.parse("2024-06-15T12:00:00Z").toEpochMilli()
+        assertEquals(
+            "Images/Pictures/WeChat",
+            SystemMediaImporter.targetWorkParent("Images", "Pictures/WeChat/", capturedAt),
+        )
+        assertEquals(
+            "Videos/DCIM/Camera",
+            SystemMediaImporter.targetWorkParent("Videos", "DCIM/Camera", capturedAt),
+        )
+        assertEquals(
+            "Images/未分类/2024/06",
+            SystemMediaImporter.targetWorkParent("Images", "", capturedAt),
+        )
+    }
 }

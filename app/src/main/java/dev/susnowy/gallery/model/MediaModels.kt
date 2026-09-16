@@ -59,6 +59,8 @@ data class MediaItem(
     val deletedAt: Long? = null,
     val needsRepair: Boolean = false,
     val revision: Long = 0,
+    /** Portable field name → provenance tag. See [dev.susnowy.gallery.metadata.FieldSource]. */
+    val fieldSources: Map<String, String> = emptyMap(),
 )
 
 data class PlaybackProgress(
@@ -85,6 +87,12 @@ data class PortableItemMetadata(
     @SerialName("secondary_path") val secondaryPath: String? = null,
     @SerialName("content_hash") val contentHash: String? = null,
     val favorite: Boolean = false,
+    /**
+     * Provenance of every editable field: `manual`, `filename`, `comic_info`,
+     * `import`, `library`, or `provider:<id>`. A field tagged `manual` must
+     * never be overwritten by automatic recognition.
+     */
+    @SerialName("field_sources") val fieldSources: Map<String, String> = emptyMap(),
     val revision: Long = 1,
     @SerialName("updated_at") val updatedAt: String,
 )

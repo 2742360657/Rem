@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -62,6 +63,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -71,6 +73,7 @@ import coil3.compose.AsyncImage
 import dev.susnowy.gallery.importer.SystemMediaAccess
 import dev.susnowy.gallery.importer.SystemMediaEntry
 import dev.susnowy.gallery.importer.SystemMediaType
+import dev.susnowy.gallery.importer.WorkImportKind
 import dev.susnowy.gallery.model.MediaItem
 import dev.susnowy.gallery.model.MediaKind
 import dev.susnowy.gallery.model.PermissionState
@@ -81,6 +84,7 @@ import dev.susnowy.gallery.ui.GalleryUiState
 import dev.susnowy.gallery.ui.GalleryViewModel
 import dev.susnowy.gallery.ui.components.MediaCard
 import dev.susnowy.gallery.ui.components.MediaGrid
+import dev.susnowy.gallery.ui.components.MediaThumbnail
 import dev.susnowy.gallery.ui.components.label
 
 @Composable
@@ -137,14 +141,16 @@ fun GalleryScreenContent(
             onOpenAppSettings = onOpenAppSettings,
         )
         AppScreen.IMAGES -> ImagesScreen(visible.filter { it.kind == MediaKind.IMAGE }, viewModel)
-        AppScreen.IMAGE_SETS -> MediaCollectionScreen(
+        AppScreen.IMAGE_SETS -> ClassifiedMediaScreen(
             items = visible.filter { it.kind == MediaKind.IMAGE_SET },
             viewModel = viewModel,
+            rootDirectory = "ImageSets",
             emptyText = "包含多张图片的叶子目录和 ZIP/CBZ 会显示在这里",
         )
-        AppScreen.VIDEOS -> MediaCollectionScreen(
+        AppScreen.VIDEOS -> ClassifiedMediaScreen(
             items = visible.filter { it.kind == MediaKind.VIDEO },
             viewModel = viewModel,
+            rootDirectory = "Videos",
             emptyText = "Library 中的作品视频会显示在这里",
         )
         AppScreen.SERIES -> FacetScreen(visible, Facet.SERIES, viewModel)
@@ -192,6 +198,10 @@ private fun SystemGalleryScreen(
     val selectedMedia = state.systemMedia.filter { it.uri in selected }
     val canCreateImageSet = selectedMedia.size >= 2 &&
         selectedMedia.all { it.mediaType == SystemMediaType.IMAGE }
+    val canImportImages = selectedMedia.isNotEmpty() &&
+        selectedMedia.all { it.mediaType == SystemMediaType.IMAGE }
+    val canImportVideos = selectedMedia.isNotEmpty() &&
+        selectedMedia.all { it.mediaType == SystemMediaType.VIDEO }
 
     BackHandler(enabled = selected.isNotEmpty() && !showImportChoices && !showImageSetTitle) {
         selected = emptySet()
@@ -359,7 +369,7 @@ private fun SystemGalleryScreen(
             title = { Text("选择导入语义") },
             text = {
                 Text(
-                    "相册媒体会进入 Photos 时间线；ImageSet 会按文件名自然排序，作为一本漫画或图集阅读。两种方式都只复制，不改动系统相册原文件。",
+                    "相册媒体会进入 Photos 混合时间线；图片或视频作品会按原来源目录形成默认分类；漫画会按文件名自然排序。所有方式都只复制，不改动系统相册原文件。",
                 )
             },
             confirmButton = {
@@ -369,6 +379,26 @@ private fun SystemGalleryScreen(
                         selected = emptySet()
                         showImportChoices = false
                     }) { Text("导入为相册媒体") }
+                    if (canImportImages) {
+                        TextButton(onClick = {
+                            viewModel.importSystemWorks(
+                                selectedMedia.map { Uri.parse(it.uri) },
+                                WorkImportKind.IMAGE,
+                            )
+                            selected = emptySet()
+                            showImportChoices = false
+                        }) { Text("导入为图片（按来源分类）") }
+                    }
+                    if (canImportVideos) {
+                        TextButton(onClick = {
+                            viewModel.importSystemWorks(
+                                selectedMedia.map { Uri.parse(it.uri) },
+                                WorkImportKind.VIDEO,
+                            )
+                            selected = emptySet()
+                            showImportChoices = false
+                        }) { Text("导入为视频（按来源分类）") }
+                    }
                     if (canCreateImageSet) {
                         TextButton(onClick = {
                             imageSetTitle = selectedMedia.map(SystemMediaEntry::sourceLabel)
@@ -379,7 +409,7 @@ private fun SystemGalleryScreen(
                                 ?: "导入图集"
                             showImportChoices = false
                             showImageSetTitle = true
-                        }) { Text("导入为 ImageSet") }
+                        }) { Text("导入为漫画/图集") }
                     }
                 }
             },
@@ -392,7 +422,7 @@ private fun SystemGalleryScreen(
     if (showImageSetTitle) {
         AlertDialog(
             onDismissRequest = { showImageSetTitle = false },
-            title = { Text("创建 ImageSet") },
+            title = { Text("创建漫画/图集") },
             text = {
                 OutlinedTextField(
                     value = imageSetTitle,
@@ -445,7 +475,7 @@ private fun HomeScreen(items: List<MediaItem>, viewModel: GalleryViewModel) {
             LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 item { StatCard("全部内容", items.size.toString()) { viewModel.navigate(AppScreen.SEARCH) } }
                 item { StatCard("待整理", inbox.toString()) { viewModel.navigate(AppScreen.INBOX) } }
-                item { StatCard("ImageSet", imageSets.toString()) { viewModel.navigate(AppScreen.IMAGE_SETS) } }
+                item { StatCard("漫画", imageSets.toString()) { viewModel.navigate(AppScreen.IMAGE_SETS) } }
                 item { StatCard("视频", videos.toString()) { viewModel.navigate(AppScreen.VIDEOS) } }
             }
         }
@@ -571,6 +601,118 @@ private fun MediaCollectionScreen(
 }
 
 @Composable
+private fun ClassifiedMediaScreen(
+    items: List<MediaItem>,
+    viewModel: GalleryViewModel,
+    rootDirectory: String,
+    emptyText: String,
+    modifier: Modifier = Modifier,
+) {
+    var currentPath by rememberSaveable(rootDirectory) { mutableStateOf<String?>(null) }
+    val classifications = remember(items, rootDirectory) {
+        items.associateWith { item -> item.classificationPaths(rootDirectory) }
+    }
+    val childFolders = remember(classifications, currentPath) {
+        val prefix = currentPath?.let { "$it/" }.orEmpty()
+        classifications.values.flatten().mapNotNull { path ->
+            when {
+                currentPath == null -> path.substringBefore('/').takeIf(String::isNotBlank)
+                path.startsWith(prefix) -> path.removePrefix(prefix).substringBefore('/')
+                    .takeIf(String::isNotBlank)
+                else -> null
+            }
+        }.distinct().sortedWith(String.CASE_INSENSITIVE_ORDER)
+    }
+    val visibleItems = remember(items, classifications, currentPath) {
+        if (currentPath == null) items
+        else items.filter { item -> currentPath in classifications.getValue(item) }
+    }
+
+    Column(modifier.fillMaxSize()) {
+        LazyRow(
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            item {
+                FilterChip(
+                    selected = currentPath == null,
+                    onClick = { currentPath = null },
+                    label = { Text("全部 ${items.size}") },
+                )
+            }
+            currentPath?.split('/')?.forEachIndexed { index, segment ->
+                val target = currentPath!!.split('/').take(index + 1).joinToString("/")
+                item(target) {
+                    FilterChip(
+                        selected = index == currentPath!!.count { it == '/' },
+                        onClick = { currentPath = target },
+                        label = { Text(segment) },
+                    )
+                }
+            }
+        }
+        if (childFolders.isNotEmpty()) {
+            LazyRow(
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                items(childFolders, key = { it }) { folder ->
+                    val path = listOfNotNull(currentPath, folder).joinToString("/")
+                    val count = classifications.count { (_, paths) ->
+                        paths.any { it == path || it.startsWith("$path/") }
+                    }
+                    Card(onClick = { currentPath = path }) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                        ) {
+                            Icon(Icons.Rounded.Folder, contentDescription = null)
+                            Column {
+                                Text(folder, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text("$count 项", style = MaterialTheme.typography.labelSmall)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if (items.isEmpty()) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text(emptyText, modifier = Modifier.padding(20.dp))
+            }
+        } else if (visibleItems.isEmpty()) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text("此分类只包含下级分类")
+            }
+        } else {
+            MediaGrid(
+                items = visibleItems,
+                viewModel = viewModel,
+                onOpen = { viewModel.open(it, visibleItems) },
+                modifier = Modifier.weight(1f),
+            )
+        }
+    }
+}
+
+private fun MediaItem.classificationPaths(rootDirectory: String): List<String> {
+    val explicit = collections.mapNotNull { value ->
+        value.replace('\\', '/').trim('/').takeIf(String::isNotBlank)
+    }
+    if (explicit.isNotEmpty()) return explicit.distinct()
+    val parent = relativePath.substringBeforeLast('/', "")
+    val rootPrefix = "$rootDirectory/"
+    val relativeParent = when {
+        parent.equals(rootDirectory, ignoreCase = true) -> "未分类"
+        parent.startsWith(rootPrefix, ignoreCase = true) -> parent.drop(rootPrefix.length)
+        parent.isBlank() -> "未分类"
+        else -> parent
+    }
+    return listOf(relativeParent.ifBlank { "未分类" })
+}
+
+@Composable
 private fun PhotosScreen(items: List<MediaItem>, viewModel: GalleryViewModel) {
     var selectionMode by rememberSaveable { mutableStateOf(false) }
     var selected by rememberSaveable { mutableStateOf(emptySet<String>()) }
@@ -644,7 +786,7 @@ private fun PhotosScreen(items: List<MediaItem>, viewModel: GalleryViewModel) {
                         onClick = { showCreateDialog = true },
                     ) {
                         Icon(Icons.Rounded.Collections, contentDescription = null)
-                        Text("派生 ImageSet")
+                        Text("派生漫画/图集")
                     }
                 }
                 item {
@@ -747,15 +889,15 @@ private fun ImagesScreen(items: List<MediaItem>, viewModel: GalleryViewModel) {
             FilledTonalButton(
                 onClick = { showCreateDialog = true },
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-            ) { Text("从多张图片创建 ImageSet") }
+            ) { Text("从多张图片创建漫画/图集") }
         }
-        if (items.isEmpty()) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text("Library 中的独立图片会显示在这里")
-            }
-        } else {
-            MediaGrid(items, viewModel, { viewModel.open(it, items) }, Modifier.weight(1f))
-        }
+        ClassifiedMediaScreen(
+            items = items,
+            viewModel = viewModel,
+            rootDirectory = "Images",
+            emptyText = "Library 中的独立图片会显示在这里",
+            modifier = Modifier.weight(1f),
+        )
     }
     if (showCreateDialog) {
         CreateImageSetDialog(
@@ -776,13 +918,13 @@ private fun CreateImageSetDialog(
     onDismiss: () -> Unit,
     onCreate: (List<String>, String) -> Unit,
 ) {
-    var title by remember { mutableStateOf("新 ImageSet") }
+    var title by remember { mutableStateOf("新漫画/图集") }
     var selected by remember(items, initialSelected) {
         mutableStateOf(initialSelected.intersect(items.mapTo(mutableSetOf(), MediaItem::id)))
     }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("创建 ImageSet") },
+        title = { Text("创建漫画/图集") },
         text = {
             Column {
                 OutlinedTextField(
@@ -996,6 +1138,15 @@ private fun TrashScreen(items: List<MediaItem>, viewModel: GalleryViewModel) {
                 ListItem(
                     headlineContent = { Text(item.displayTitle, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                     supportingContent = { Text(item.relativePath, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    leadingContent = {
+                        MediaThumbnail(
+                            item = item,
+                            viewModel = viewModel,
+                            modifier = Modifier
+                                .size(72.dp)
+                                .clip(MaterialTheme.shapes.medium),
+                        )
+                    },
                     trailingContent = {
                         Row {
                             IconButton(onClick = { viewModel.setTrashed(item, false) }) {
