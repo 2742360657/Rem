@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -5,12 +7,24 @@ plugins {
     id("org.jetbrains.kotlin.plugin.serialization")
 }
 
+val releaseSigningPropertiesFile = providers.gradleProperty("rem.signingProperties")
+    .orElse(providers.environmentVariable("REM_SIGNING_PROPERTIES"))
+    .orElse("T:/jks/keystore.properties")
+    .map(::file)
+    .get()
+val releaseSigningProperties = Properties().apply {
+    if (releaseSigningPropertiesFile.isFile) {
+        releaseSigningPropertiesFile.inputStream().use(::load)
+    }
+}
+val hasReleaseSigning = releaseSigningPropertiesFile.isFile
+
 android {
     namespace = "dev.susnowy.gallery"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "dev.susnowy.gallery"
+        applicationId = "com.susnowy.rem"
         minSdk = 26
         targetSdk = 36
         versionCode = 2
@@ -19,9 +33,29 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    signingConfigs {
+        if (hasReleaseSigning) {
+            create("release") {
+                storeFile = file(requireNotNull(releaseSigningProperties.getProperty("storeFile")) {
+                    "${releaseSigningPropertiesFile.path} 缺少 storeFile"
+                })
+                storePassword = requireNotNull(releaseSigningProperties.getProperty("storePassword")) {
+                    "${releaseSigningPropertiesFile.path} 缺少 storePassword"
+                }
+                keyAlias = requireNotNull(releaseSigningProperties.getProperty("keyAlias")) {
+                    "${releaseSigningPropertiesFile.path} 缺少 keyAlias"
+                }
+                keyPassword = requireNotNull(releaseSigningProperties.getProperty("keyPassword")) {
+                    "${releaseSigningPropertiesFile.path} 缺少 keyPassword"
+                }
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = true
+            if (hasReleaseSigning) signingConfig = signingConfigs.getByName("release")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
@@ -50,6 +84,26 @@ android {
     testOptions {
         unitTests.isReturnDefaultValues = true
     }
+}
+
+/**
+ * Keeps the R8 mapping next to the released APK.
+ *
+ * The mapping is what turns an obfuscated stack trace from a user's device back into
+ * readable class and method names. It is regenerated inside `build/`, which is cleaned
+ * routinely, so the copy under `dist/` is the one that survives long enough to be useful.
+ */
+val archiveReleaseMapping by tasks.registering(Copy::class) {
+    description = "Archives the release R8 mapping for deobfuscating user crash reports."
+    val mappingFile = layout.buildDirectory.file("outputs/mapping/release/mapping.txt")
+    from(mappingFile)
+    into(rootProject.layout.projectDirectory.dir("dist"))
+    rename { "Rem-${android.defaultConfig.versionName}-mapping.txt" }
+    onlyIf { mappingFile.get().asFile.isFile }
+}
+
+tasks.matching { it.name == "assembleRelease" }.configureEach {
+    finalizedBy(archiveReleaseMapping)
 }
 
 dependencies {
