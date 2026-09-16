@@ -198,13 +198,14 @@ private class AlreadyTakenNameQualifyingAccess : LibraryDocumentAccess {
         files.remove(document.locator ?: document.key) != null
 }
 
-class PortableLibraryInitializationLockTest {    @Test
-    fun initializeClaimsTheLockAndLeavesItAsEvidence() {
+class PortableLibraryInitializationLockTest {
+    @Test
+    fun initializeReleasesTheLockAfterPublishingTheIdentity() {
         val access = CollisionSuffixingAccess()
 
         val library = PortableLibraryManager(access).initialize("Library")
 
-        assertTrue(access.files.containsKey(PortableLibraryManager.INIT_LOCK_FILE))
+        assertTrue(!access.files.containsKey(PortableLibraryManager.INIT_LOCK_FILE))
         assertEquals(
             library.libraryId,
             (PortableLibraryManager(access).inspect() as LibraryInspection.Valid).library.libraryId,
@@ -229,6 +230,10 @@ class PortableLibraryInitializationLockTest {    @Test
         )
         // No competing identity may be published by the loser.
         assertTrue(access.files.keys.none { it == PortableLibraryManager.LIBRARY_JSON })
+        assertEquals(
+            1,
+            access.files.keys.count { it == PortableLibraryManager.INIT_LOCK_FILE },
+        )
     }
 
     @Test

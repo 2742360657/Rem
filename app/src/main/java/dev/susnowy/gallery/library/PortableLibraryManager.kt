@@ -91,23 +91,32 @@ class PortableLibraryManager(
         }
         val hasGuide = access.find(GUIDE_FILE) != null
 
-        claimInitializationLock()
-        REQUIRED_DIRECTORIES.forEach(access::ensureDirectory)
-        val now = Instant.now().toString()
-        val library = PortableLibrary(
-            libraryId = UUID.randomUUID().toString(),
-            name = sanitizeDisplayName(name),
-            createdAt = now,
-            updatedAt = now,
-        )
-        ensureMediaStoreIgnored()
-        writeAtomically(SCHEMA_FILE, schemaDocument(), "application/json")
-        // A guide that is already present is the user's copy of the Library rules. Adopting
-        // the directory must not silently reset a document they may have edited.
-        if (!hasGuide) writeAtomically(GUIDE_FILE, libraryGuide(library), "text/markdown")
-        // library.json is the completion marker and must be committed last.
-        writeAtomically(LIBRARY_JSON, json.encodeToString(library), "application/json")
-        return library
+        val initializationLock = claimInitializationLock()
+        try {
+            // The identity may have appeared after the first inspection but before this
+            // caller won the lock. Report a race so the repository re-reads the winner.
+            if (access.find(LIBRARY_JSON) != null) throw InitializationInProgressException()
+            REQUIRED_DIRECTORIES.forEach(access::ensureDirectory)
+            val now = Instant.now().toString()
+            val library = PortableLibrary(
+                libraryId = UUID.randomUUID().toString(),
+                name = sanitizeDisplayName(name),
+                createdAt = now,
+                updatedAt = now,
+            )
+            ensureMediaStoreIgnored()
+            writeAtomically(SCHEMA_FILE, schemaDocument(), "application/json")
+            // A guide that is already present is the user's copy of the Library rules. Adopting
+            // the directory must not silently reset a document they may have edited.
+            if (!hasGuide) writeAtomically(GUIDE_FILE, libraryGuide(library), "text/markdown")
+            // library.json is the completion marker and must be committed last.
+            writeAtomically(LIBRARY_JSON, json.encodeToString(library), "application/json")
+            return library
+        } finally {
+            // This is an in-progress claim, not permanent Library metadata. Releasing it
+            // allows a directory whose identity is later lost to be adopted again.
+            runCatching { access.delete(initializationLock) }
+        }
     }
 
     /**
@@ -116,16 +125,18 @@ class PortableLibraryManager(
      * ` (1)` on most Android builds — which is how a lost race is detected, since SAF
      * offers no other compare-and-set.
      */
-    private fun claimInitializationLock() {
+    private fun claimInitializationLock(): LibraryDocument {
         val created = try {
-            access.createFile(INIT_LOCK_FILE, "application/octet-stream")
+            access.createFileExclusive(INIT_LOCK_FILE, "application/octet-stream")
         } catch (error: Exception) {
             throw InitializationInProgressException(error)
         }
         val recorded = created.name.ifEmpty { access.find(INIT_LOCK_FILE)?.name.orEmpty() }
         if (recorded != INIT_LOCK_FILE.substringAfterLast('/')) {
+            runCatching { access.delete(created) }
             throw InitializationInProgressException()
         }
+        return created
     }
 
     /**
@@ -182,11 +193,10 @@ class PortableLibraryManager(
         const val MEDIA_IGNORE_FILE = ".nomedia"
 
         /**
-         * Claimed before the identity is written and deliberately left behind: it is the
-         * evidence that this directory was initialized once, so a later `initialize`
-         * fails on [libraryGuide] check rather than creating a second identity.
+         * Root-level so two callers also serialize creation of the `.gallery` directory.
+         * It is removed after the identity is committed; it is not portable metadata.
          */
-        const val INIT_LOCK_FILE = ".gallery/init.lock"
+        const val INIT_LOCK_FILE = ".rem-library-initializing.lock"
 
         /**
          * Documents whose `schema_version` is bumped by [migrateSchema]; kept in
