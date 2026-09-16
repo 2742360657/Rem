@@ -37,15 +37,17 @@ bytes — dominates scan time. Three rules keep that count proportional to the t
   `DocumentFile` answers `name`, `type`, `isDirectory`, `length()` and `lastModified()`
   with five separate queries per child.
 - `DocumentTreeStorage` memoizes path-to-document resolution and directory listings, so a
-  path is never walked from the tree root twice. Mutations invalidate only the affected
-  subtree.
+  path is never walked from the tree root twice. A mutation invalidates the affected
+  subtree and its direct parent's listing while retaining resolved ancestors and unrelated
+  branches. A provider returning no cursor is an I/O failure, never a cached empty directory.
 - Documents carry their provider locator, and readers prefer it, so a read never
   re-resolves a path it was already handed.
 
 A rescan compares size and modified time against the indexed record and reuses the
-recorded fingerprint and capture metadata. Only a changed file is opened, so an unchanged
-Library performs no content reads at all. A size or timestamp difference always re-reads,
-because keeping a stale fingerprint would silently mis-merge metadata.
+recorded fingerprint, capture metadata, and archive page count. Only a changed file is
+opened; changed ZIP/CBZ files are traversed once for both page count and ComicInfo. Directory
+fingerprints include page modification times. A size or timestamp difference always
+re-reads because keeping a stale fingerprint would silently mis-merge metadata.
 
 ## Safety invariants
 
@@ -68,9 +70,10 @@ because keeping a stale fingerprint would silently mis-merge metadata.
 - Every Library has a root `.nomedia` marker so Android media scanners ignore Library copies while Rem continues to use SAF.
 - System album imports preserve portable source-directory text but never persist Android content URIs in Library metadata.
 - Organizer prunes only verified-empty directories below known Library media roots and never deletes the roots themselves.
-- Initializing a Library claims an atomic lock and commits its identity last, so two concurrent attaches cannot produce two identities in one directory.
+- Initializing a Library claims a root-level provider-exclusive lease and commits its identity last, so two concurrent attaches cannot create separate `.gallery` directories or identities. The lease is released after commit; a lease left by a stopped process expires after 15 minutes.
 - A portable document is only committed once it is addressable under exactly the requested path. A provider that publishes a qualified copy instead of replacing the target gets that duplicate removed and the previous revision restored.
-- Diagnostics are written to the app's private files directory, never into the Library, and are reduced before writing: content URIs and host filesystem paths are stripped, so account material and volume ids cannot leave the device through an exported log.
+- Diagnostics are written to the app's private files directory, never into the Library, and are reduced before writing: complete messages and exception summaries have content URIs and host filesystem paths stripped. Export waits for queued writes and grants read-only FileProvider URIs through the system share sheet.
+- A scan reports directory, entry, and candidate counts while it runs. A failed directory query marks the scan incomplete and protects that subtree's previous local rows; temporary provider failure is not treated as media deletion.
 
 ## Build and verification
 
