@@ -36,14 +36,9 @@ object RemLog {
     const val TAG = "Rem"
 
     private const val DIRECTORY = "logs"
-    private const val SESSION_PREFIX = "session-"
-    private const val SESSION_SUFFIX = ".log"
     private const val CRASH_FILE = "last-crash.log"
-    private const val HEADER_FILE = "session-header.log"
+    private const val HEADER_FILE = LogRetention.HEADER_FILE
 
-    private const val MAX_FILES = 10
-    private const val RETENTION_MILLIS = 14L * 24 * 60 * 60 * 1000
-    private const val TAIL_LINES = 400
     private const val MAX_MESSAGE_CHARS = 4_000
 
     private val executor = Executors.newSingleThreadExecutor { runnable ->
@@ -60,7 +55,7 @@ object RemLog {
         if (!initialized.compareAndSet(null, directory)) return
         installCrashHandler(appContext, directory)
         executor.execute {
-            prune(directory)
+            LogRetention.prune(directory)
             writeHeader(appContext, directory)
         }
     }
@@ -80,7 +75,7 @@ object RemLog {
         record(Level.ERROR, tag, message, error)
 
     /**
-     * Recent records, newest last, capped at [TAIL_LINES] so the viewer can render a large
+     * Recent records, newest last, capped at [LogRetention.TAIL_LINES] so the viewer can render a large
      * Library's log without loading all of it.
      */
     fun tail(context: Context): String {
@@ -91,14 +86,14 @@ object RemLog {
             // The previous session's records still describe what happened before a restart.
             sessionFiles(directory).filter { it != session }.takeLast(1).forEach { previous ->
                 appendLine("—— 上一次运行（${previous.name}）——")
-                append(tailOf(previous, TAIL_LINES / 2))
+                append(tailOf(previous, LogRetention.TAIL_LINES / 2))
             }
             appendLine("—— 本次运行 ——")
-            append(tailOf(session, TAIL_LINES))
+            append(tailOf(session, LogRetention.TAIL_LINES))
             if (crash.isFile) {
                 appendLine()
                 appendLine("—— 上次崩溃 ——")
-                append(tailOf(crash, TAIL_LINES / 2))
+                append(tailOf(crash, LogRetention.TAIL_LINES / 2))
             }
         }
     }
@@ -224,49 +219,23 @@ object RemLog {
         appendTo(sessionFile(directory), "启动 | ${header.replace('\n', ' ')}")
     }
 
-    /**
-     * Keeps the log directory bounded: a rolling window of sessions by age, and a hard cap
-     * on the number of files so a crash loop cannot fill the device.
-     */
-    private fun prune(directory: File) {
-        val threshold = System.currentTimeMillis() - RETENTION_MILLIS
-        sessionFiles(directory).filter { it.lastModified() < threshold }.forEach { file ->
-            runCatching { file.delete() }
-        }
-        sessionFiles(directory).dropLast(MAX_FILES).forEach { file ->
-            runCatching { file.delete() }
-        }
-    }
-
     private fun directory(context: Context) =
         initialized.get() ?: File(context.applicationContext.filesDir, DIRECTORY).apply { mkdirs() }
 
     private fun sessionFile(directory: File) =
-        File(directory, "$SESSION_PREFIX${fileStamp.format(Date())}$SESSION_SUFFIX")
+        File(
+            directory,
+            "${LogRetention.SESSION_PREFIX}${fileStamp.format(Date())}${LogRetention.SESSION_SUFFIX}",
+        )
 
-    private fun sessionFiles(directory: File): List<File> =
-        directory.listFiles { file -> file.name.startsWith(SESSION_PREFIX) }
-            ?.sortedBy(File::getName)
-            .orEmpty()
+    private fun sessionFiles(directory: File): List<File> = LogRetention.sessions(directory)
 
     private fun appendTo(file: File, text: String) {
         file.parentFile?.mkdirs()
         file.appendText(text)
     }
 
-    private fun tailOf(file: File, lines: Int): String {
-        if (!file.isFile) return ""
-        val kept = ArrayDeque<String>(lines)
-        runCatching {
-            file.useLines { sequence ->
-                sequence.forEach { line ->
-                    if (kept.size == lines) kept.removeFirst()
-                    kept.addLast(line)
-                }
-            }
-        }
-        return kept.joinToString("\n", postfix = "\n")
-    }
+    private fun tailOf(file: File, lines: Int): String = LogRetention.tail(file, lines)
 
     /**
      * Keeps a report safe to hand over. The rule from the portable Library guide is that
