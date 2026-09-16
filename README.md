@@ -1,8 +1,8 @@
 # Rem
 
-Rem 是一个 Android 本地优先媒体库，当前初版为 **0.0.2**。用户通过系统目录选择器接入实体文件夹；媒体保持在原位置，`.gallery/` 保存可随硬盘移动、可供 Agent 理解的元数据和规则，本机 SQLite 只作为可重建索引。
+Rem 是一个 Android 本地优先媒体库，当前版本为 **0.0.3**。用户通过系统目录选择器接入实体文件夹；媒体保持在原位置，`.gallery/` 保存可随硬盘移动、可供 Agent 理解的元数据和规则，本机 SQLite 只作为可重建索引。
 
-应用的用户可见名称已经统一为 Rem。为兼容已有 Library、安装升级和便携元数据，`dev.susnowy.gallery`、`.gallery/`、`GALLERY_LIBRARY.md` 以及 Gallery Schema 等内部标识暂不重命名。
+正式应用 ID 为 `com.susnowy.rem`。它会与早期使用 `dev.susnowy.gallery` 的开发版并存，不能直接继承旧应用的本机索引和 SAF 目录授权；重新接入原 Library 后，`.gallery/` 中的标签、分类和进度仍可恢复。Kotlin 包名、`GALLERY_LIBRARY.md` 和 Gallery Schema 等内部格式标识暂不重命名。
 
 当前一级界面只有三类：
 
@@ -25,4 +25,6 @@ HEIF/AVIF/DNG 等格式。缩略图固定按显示尺寸解码；超大静态图
 .\gradlew.bat testDebugUnitTest lintDebug assembleDebug assembleRelease
 ```
 
-可直接安装的开发 APK 位于 `app/build/outputs/apk/debug/app-debug.apk`。优化后的 Release APK 位于 `app/build/outputs/apk/release/`，默认未签名，正式分发前必须使用项目所有者长期保管的发布密钥签名。
+设置页提供可导出的诊断日志（`设置 → 诊断日志`）；日志只写在本机 App 私有目录，不进入 Library。`assembleRelease` 会把 R8 mapping 归档到 `dist/Rem-<版本>-mapping.txt`，用于还原真机崩溃堆栈。
+
+可直接安装的开发 APK 位于 `app/build/outputs/apk/debug/app-debug.apk`。正式构建默认从 `T:/jks/keystore.properties` 读取仓库外签名配置，也可用 Gradle 属性 `rem.signingProperties` 或环境变量 `REM_SIGNING_PROPERTIES` 指定其他位置；密码和 JKS 不得提交到仓库。
