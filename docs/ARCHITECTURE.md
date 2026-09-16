@@ -1,6 +1,8 @@
-# Gallery architecture
+# Rem architecture
 
-Gallery is an Android 8.0+ local-first media library. The project intentionally uses one Gradle application module and separates responsibilities by Kotlin package; physical module splitting can wait until build or ownership pressure justifies it.
+Rem is an Android 8.0+ local-first media library. The project intentionally uses one Gradle application module and separates responsibilities by Kotlin package; physical module splitting can wait until build or ownership pressure justifies it.
+
+The public product name is Rem. The existing `dev.susnowy.gallery` application ID, Kotlin package names, `.gallery/` directory, and Gallery portable-schema identifiers remain stable compatibility contracts; renaming them would break upgrades or detach existing Libraries.
 
 ## Data layers
 
@@ -42,7 +44,7 @@ Android URIs and mount paths are local-only. Every portable media path uses `/`-
 - The comic reader decodes directory pages against a 1440 × 6000 pixel budget, preloads five pages in the scroll direction plus two behind, and cancels stale preloads after a fast jump. Coil may use up to 25% of the app heap for decoded images and 768 MB of disposable disk cache; ZIP/CBZ pages additionally use a bounded 64 MB bitmap cache. None of these caches enter the portable Library.
 - A detail viewer keeps the originating grid/result order as its paging context, so Search and facet browsing do not leak into unrelated media.
 - `SavedStateHandle` retains only small navigation keys (screen, query, selected item); large media collections are reconstructed from the local index instead of being placed in Android saved-state bundles.
-- Every Library has a root `.nomedia` marker so Android media scanners ignore Library copies while Gallery continues to use SAF.
+- Every Library has a root `.nomedia` marker so Android media scanners ignore Library copies while Rem continues to use SAF.
 - System album imports preserve portable source-directory text but never persist Android content URIs in Library metadata.
 - Organizer prunes only verified-empty directories below known Library media roots and never deletes the roots themselves.
 
@@ -52,4 +54,4 @@ Android URIs and mount paths are local-only. Every portable media path uses `/`-
 .\gradlew.bat testDebugUnitTest lintDebug assembleDebug assembleRelease
 ```
 
-The installable development APK is generated at `app/build/outputs/apk/debug/app-debug.apk`. Release output is minified but unsigned; production distribution needs an owner-provided signing configuration.
+The installable development APK is generated at `app/build/outputs/apk/debug/app-debug.apk`. Release output is minified but unsigned; production distribution needs an owner-provided, long-lived signing configuration. Version 0.0.2 is the first named Rem preview release.

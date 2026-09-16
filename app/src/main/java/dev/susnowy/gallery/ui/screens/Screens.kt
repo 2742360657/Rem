@@ -73,6 +73,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
+import dev.susnowy.gallery.BuildConfig
 import dev.susnowy.gallery.importer.SystemMediaAccess
 import dev.susnowy.gallery.importer.SystemMediaEntry
 import dev.susnowy.gallery.importer.SystemMediaType
@@ -103,7 +104,7 @@ fun EmptyLibraryScreen(onChooseFolder: () -> Unit) {
             Icon(Icons.Rounded.Folder, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
             Text("建立你的便携媒体库", style = MaterialTheme.typography.headlineMedium)
             Text(
-                "选择一个文件夹。Gallery 只管理你明确接入的 Library，分类和进度会随文件夹一起移动。",
+                "选择一个文件夹。Rem 只管理你明确接入的 Library，分类和进度会随文件夹一起移动。",
                 style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -223,7 +224,7 @@ private fun SystemGalleryScreen(
                 Icon(Icons.Rounded.PhotoLibrary, contentDescription = null)
                 Text("浏览系统相册", style = MaterialTheme.typography.headlineSmall)
                 Text(
-                    "授权后可在 Gallery 中按时间和来源查看本机照片、视频，再复制到当前 Library。不会移动或删除系统相册原文件。",
+                    "授权后可在 Rem 中按时间和来源查看本机照片、视频，再复制到当前 Library。不会移动或删除系统相册原文件。",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Button(onClick = onRequestAccess) { Text("授权访问照片和视频") }
@@ -1671,7 +1672,7 @@ private fun SettingsScreen(state: GalleryUiState, viewModel: GalleryViewModel) {
             }
         }
         item {
-            Text("Gallery 1.0", style = MaterialTheme.typography.titleMedium)
+            Text("Rem ${BuildConfig.VERSION_NAME}", style = MaterialTheme.typography.titleMedium)
             Text(
                 "本机索引和缩略图只是缓存；Library 中的 .gallery 元数据才是跨设备状态来源。",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,

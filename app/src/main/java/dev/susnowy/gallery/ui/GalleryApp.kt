@@ -184,7 +184,7 @@ fun GalleryApp(viewModel: GalleryViewModel = viewModel()) {
                     lastExitBackAt = now
                     scope.launch {
                         snackbarHostState.currentSnackbarData?.dismiss()
-                        snackbarHostState.showSnackbar("再按一次返回退出 Gallery")
+                        snackbarHostState.showSnackbar("再按一次返回退出 Rem")
                     }
                 }
             }

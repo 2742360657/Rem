@@ -23,6 +23,7 @@ class PortableLibraryManagerTest {
         assertTrue(access.files.containsKey(".gallery/library.json"))
         assertTrue(access.files.containsKey("GALLERY_LIBRARY.md"))
         val guide = access.files.getValue("GALLERY_LIBRARY.md").decodeToString()
+        assertTrue(guide.contains("这是一个 Rem 便携媒体库"))
         assertTrue(guide.contains("Agent 辅助识别与同步"))
         assertTrue(guide.contains("任何来源为 `manual` 的字段都不得修改"))
         assertTrue(guide.contains("`field_sources.tags` 为 `manual`，整组标签必须原样保留"))

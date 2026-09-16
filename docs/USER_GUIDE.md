@@ -1,9 +1,9 @@
-# Gallery 使用说明
+# Rem 0.0.2 使用说明
 
 ## 首次使用
 
 1. 点击“选择文件夹”，通过 Android 系统目录选择器选择一个空目录或已有媒体目录。
-2. Gallery 会创建 `.gallery/`、`GALLERY_LIBRARY.md`、`.nomedia` 和 Schema v3；原媒体内容不会被改写。`.nomedia` 只阻止系统相册重复收录 Library 副本，不影响 Gallery 扫描。旧 Library 会在接入或扫描时先备份元数据，再做兼容升级。
+2. Rem 会创建 `.gallery/`、`GALLERY_LIBRARY.md`、`.nomedia` 和 Schema v3；原媒体内容不会被改写。`.nomedia` 只阻止系统相册重复收录 Library 副本，不影响 Rem 扫描。旧 Library 会在接入或扫描时先备份元数据，再做兼容升级。
 3. 扫描可识别 `JM/<数字 ID>/`、EhViewer 的 `<gid>-<title>/.ehviewer` 和 Pixiv 的 `<illust_id>_pN` / `_ugoira…`。识别只读取目录与文件名，不需要站点账号。
 4. 扫描完成后，新发现内容进入 Inbox。`Photos/` 始终按相册媒体扫描，`Images/`、`Videos/` 是按真实目录浏览的普通分类媒体；`ImageSets/` 中的多图目录或 ZIP/CBZ 会成为漫画候选，动漫与影视视频推荐放在 `Anime/`、`Movies/`、`Series/` 或 `Works/`。旧 Library 的普通多图叶子目录仍会兼容识别为 ImageSet。
 5. 在详情页编辑标题、作者、标签、Collection 和 Series。保存后这些信息写入 Library，而不是只留在手机数据库中。
@@ -25,7 +25,7 @@
 ## 返回与退出
 
 - 系统返回键/返回手势与顶部返回箭头一致：先关闭右侧工具栏、对话框或选择态；阅读器返回作品详情，作品详情再返回作品列表。
-- 首页第一次返回会提示“再按一次返回退出 Gallery”，两秒内再次返回才退出。
+- 首页第一次返回会提示“再按一次返回退出 Rem”，两秒内再次返回才退出。
 - 每个 Library 的一级页面状态会分别保留；“图片 / 视频”还会分别记住上次浏览的真实目录。当前一级页面、搜索词和详情项目会在常规配置变化或系统回收进程后恢复；主动退出后仍从首页进入。
 
 ## 文件安全

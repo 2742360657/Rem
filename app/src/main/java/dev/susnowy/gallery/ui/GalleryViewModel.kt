@@ -164,7 +164,7 @@ class GalleryViewModel(
             runCatching {
                 val suggestedName = DocumentFile.fromTreeUri(getApplication(), uri)?.name
                     ?.takeIf(String::isNotBlank)
-                    ?: "Gallery Library"
+                    ?: "Rem Library"
                 val library = repository.attach(uri, suggestedName)
                 setActiveLibrary(library.libraryId)
                 setScreen(AppScreen.INBOX)
@@ -341,7 +341,7 @@ class GalleryViewModel(
     fun purge(item: MediaItem) {
         viewModelScope.launch {
             runCatching { repository.purge(item.id) }
-                .onSuccess { message.value = "文件及其 Gallery 元数据已永久删除" }
+                .onSuccess { message.value = "文件及其 Rem 元数据已永久删除" }
                 .onFailure(::showError)
         }
     }
@@ -574,7 +574,7 @@ class GalleryViewModel(
 
     private fun showError(error: Throwable) {
         if (error is CancellationException) return
-        Log.e("Gallery", "Operation failed", error)
+        Log.e("Rem", "Operation failed", error)
         val detail = generateSequence(error) { it.cause }
             .mapNotNull { it.message?.trim()?.takeIf(String::isNotEmpty) }
             .firstOrNull()

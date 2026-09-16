@@ -46,7 +46,7 @@ class PortableLibraryManager(
         check(access.find(LIBRARY_JSON) == null) { "Library 已经初始化" }
         val reservedConflicts = listOf(GUIDE_FILE, SCHEMA_FILE).filter { access.find(it) != null }
         check(reservedConflicts.isEmpty()) {
-            "目录中已有 Gallery 保留文件：${reservedConflicts.joinToString()}。为避免覆盖，请先确认或重命名这些文件"
+            "目录中已有 Rem 保留文件：${reservedConflicts.joinToString()}。为避免覆盖，请先确认或重命名这些文件"
         }
         REQUIRED_DIRECTORIES.forEach(access::ensureDirectory)
         val now = Instant.now().toString()
@@ -142,14 +142,14 @@ class PortableLibraryManager(
         )
 
         fun sanitizeDisplayName(value: String): String =
-            value.trim().replace(Regex("[\\r\\n\\t]+"), " ").take(120).ifBlank { "Gallery Library" }
+            value.trim().replace(Regex("[\\r\\n\\t]+"), " ").take(120).ifBlank { "Rem Library" }
 
         fun libraryGuide(library: PortableLibrary): String = """
             # ${library.name}
 
-            这是一个 Gallery 便携媒体库。Library 身份位于 `.gallery/library.json`，当前 Schema 版本为 ${library.schemaVersion}，规范位于 `.gallery/schema/v3.json`。
+            这是一个 Rem 便携媒体库。为兼容旧版本，其内部格式仍使用 `.gallery` 和 `Gallery` Schema 命名。Library 身份位于 `.gallery/library.json`，当前 Schema 版本为 ${library.schemaVersion}，规范位于 `.gallery/schema/v3.json`。
 
-            根目录中的 `.nomedia` 用于阻止 Android 系统相册重复收录 Library 内的媒体副本；Gallery 自己通过 SAF 扫描，不受影响。
+            根目录中的 `.nomedia` 用于阻止 Android 系统相册重复收录 Library 内的媒体副本；Rem 自己通过 SAF 扫描，不受影响。
 
             ## 目录职责
 
@@ -168,7 +168,7 @@ class PortableLibraryManager(
 
             以上目录名是推荐约定而不是硬限制。条目在 `.gallery/items/catalog.json` 中的 `domain`（`album`、`classified`、`works`）是最终归属，Agent 可以按规则修正它，不需要为了改视图而移动媒体。
 
-            常见“作者目录/NO.序号 作品名[页数-体积]/顺序图片”结构应保留原目录；Gallery 会尝试从父目录和作品目录名识别作者、标题与顺序。视频优先使用 `S01E02` 等通用集数命名。
+            常见“作者目录/NO.序号 作品名[页数-体积]/顺序图片”结构应保留原目录；Rem 会尝试从父目录和作品目录名识别作者、标题与顺序。视频优先使用 `S01E02` 等通用集数命名。
 
             下载器兼容规则：`JM/<纯数字 album_id>/` 识别为禁漫来源；EhViewer 的 `<gid>-<title>/` 需有 `.ehviewer` 标记；Pixiv 文件使用 `<illust_id>_p<page>`，动图转换常见 `<illust_id>_ugoira<尺寸>.webp/gif`。同一扁平目录出现多个 Pixiv 作品 ID 时保持为独立图片，不要合并成一本漫画。
             `source:jm` / `jm:album:<id>`、`source:ehviewer` / `eh:gid:<id>`、`source:pixiv` / `pixiv:id:<id>` 是稳定的来源 Tag，Agent 整理时应保留。账号、Cookie、Token 不得写入 Library。

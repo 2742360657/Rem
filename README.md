@@ -1,6 +1,8 @@
-# Gallery
+# Rem
 
-Gallery 是一个 Android 本地优先媒体库。用户通过系统目录选择器接入实体文件夹；媒体保持在原位置，`.gallery/` 保存可随硬盘移动、可供 Agent 理解的元数据和规则，本机 SQLite 只作为可重建索引。
+Rem 是一个 Android 本地优先媒体库，当前初版为 **0.0.2**。用户通过系统目录选择器接入实体文件夹；媒体保持在原位置，`.gallery/` 保存可随硬盘移动、可供 Agent 理解的元数据和规则，本机 SQLite 只作为可重建索引。
+
+应用的用户可见名称已经统一为 Rem。为兼容已有 Library、安装升级和便携元数据，`dev.susnowy.gallery`、`.gallery/`、`GALLERY_LIBRARY.md` 以及 Gallery Schema 等内部标识暂不重命名。
 
 当前一级界面只有三类：
 
@@ -17,10 +19,10 @@ Gallery 是一个 Android 本地优先媒体库。用户通过系统目录选择
 图片显示支持 GIF、Animated WebP（Android 9+）、SVG，以及系统可解码的
 HEIF/AVIF/DNG 等格式。缩略图固定按显示尺寸解码；超大静态图会先探测尺寸并安全降采样，避免整张原图直接解码造成内存溢出。
 
-详细设计见 `Gallery_Project_Guide.md`，使用方法见 `docs/USER_GUIDE.md`，架构约束见 `docs/ARCHITECTURE.md`。
+详细设计见 `Gallery_Project_Guide.md`，使用方法见 `docs/USER_GUIDE.md`，架构约束见 `docs/ARCHITECTURE.md`，版本变化见 `CHANGELOG.md`。
 
 ```powershell
-.\gradlew.bat testDebugUnitTest lintDebug assembleDebug
+.\gradlew.bat testDebugUnitTest lintDebug assembleDebug assembleRelease
 ```
 
-Debug APK 位于 `app/build/outputs/apk/debug/app-debug.apk`。
+可直接安装的开发 APK 位于 `app/build/outputs/apk/debug/app-debug.apk`。优化后的 Release APK 位于 `app/build/outputs/apk/release/`，默认未签名，正式分发前必须使用项目所有者长期保管的发布密钥签名。
