@@ -145,29 +145,57 @@ object FilenameMetadataParser {
 }
 
 class ComicInfoReader {
+    data class ArchiveInspection(
+        val pageCount: Int,
+        val metadata: RecognizedMetadata?,
+    )
+
     fun fromDirectory(storage: DocumentTreeStorage, directoryPath: String): RecognizedMetadata? {
         val path = "$directoryPath/ComicInfo.xml"
         val document = storage.find(path) ?: return null
         return storage.openInput(document).use(::parse)
     }
 
-    fun fromArchive(storage: DocumentTreeStorage, archivePath: String): RecognizedMetadata? {
-        val document = LibraryDocument(archivePath, archivePath.substringAfterLast('/'), false)
-        return storage.openInput(document).buffered().use { input ->
-            ZipInputStream(input).use { zip ->
-                while (true) {
-                    val entry = zip.nextEntry ?: return@use null
-                    if (!entry.isDirectory && entry.name.substringAfterLast('/')
-                            .equals("ComicInfo.xml", ignoreCase = true)
-                    ) {
-                        return@use parse(zip)
-                    }
-                    zip.closeEntry()
-                }
-                null
-            }
-        }
+    fun inspectArchive(
+        storage: DocumentTreeStorage,
+        archivePath: String,
+        locator: String? = null,
+        isPage: (String) -> Boolean = { false },
+    ): ArchiveInspection {
+        val document = LibraryDocument(
+            archivePath,
+            archivePath.substringAfterLast('/'),
+            false,
+            locator = locator,
+        )
+        return storage.openInput(document).use { input -> inspectArchive(input, isPage) }
     }
+
+    internal fun inspectArchive(
+        input: InputStream,
+        isPage: (String) -> Boolean,
+    ): ArchiveInspection = ZipInputStream(input.buffered()).use { zip ->
+        var pageCount = 0
+        var metadata: RecognizedMetadata? = null
+        while (true) {
+            val entry = zip.nextEntry ?: break
+            if (!entry.isDirectory) {
+                when {
+                    isPage(entry.name) -> pageCount++
+                    metadata == null && entry.name.substringAfterLast('/')
+                        .equals("ComicInfo.xml", ignoreCase = true) -> {
+                        // A malformed optional sidecar must not hide otherwise readable pages.
+                        metadata = runCatching { parse(zip) }.getOrNull()
+                    }
+                }
+            }
+            zip.closeEntry()
+        }
+        ArchiveInspection(pageCount, metadata)
+    }
+
+    fun fromArchive(storage: DocumentTreeStorage, archivePath: String): RecognizedMetadata? =
+        inspectArchive(storage, archivePath).metadata
 
     fun parse(input: InputStream): RecognizedMetadata? {
         val parser = Xml.newPullParser().apply {

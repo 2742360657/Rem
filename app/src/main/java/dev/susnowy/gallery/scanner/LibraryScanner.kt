@@ -19,7 +19,6 @@ import java.security.MessageDigest
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
-import java.util.zip.ZipInputStream
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
@@ -68,6 +67,7 @@ data class ScannedFile(
     val capturedAt: Long? = null,
     val latitude: Double? = null,
     val longitude: Double? = null,
+    val pageCount: Int? = null,
 )
 
 /** Prior results keyed by relative path; empty for a first scan or a full rescan. */
@@ -76,16 +76,30 @@ typealias ScanSnapshot = Map<String, ScannedFile>
 /**
  * Whether the previous scan's answers may be reused for a file that looks unchanged.
  *
- * Both the size and the timestamp must match exactly, and a recorded hash must exist:
- * a partial match always re-reads, because keeping a stale fingerprint would silently
- * mis-merge metadata across a Library after an edit.
+ * Both the size and the timestamp must match exactly. Callers additionally require the
+ * particular value they want to reuse (for example a hash or archive page count).
  */
 internal fun ScannedFile.canBeReused(size: Long, modifiedAt: Long): Boolean =
     this.size == size && this.modifiedAt == modifiedAt
 
+internal fun ScannedFile.reusableArchivePageCount(size: Long, modifiedAt: Long): Int? =
+    pageCount?.takeIf { canBeReused(size, modifiedAt) }
+
 private class ScanStatistics {
-    var contentReads: Int = 0
-    var contentReadsSkipped: Int = 0
+    private val readPaths = mutableSetOf<String>()
+    private val reusedPaths = mutableSetOf<String>()
+
+    val contentReads: Int get() = readPaths.size
+    val contentReadsSkipped: Int get() = reusedPaths.size
+
+    fun contentRead(path: String) {
+        readPaths += path
+        reusedPaths -= path
+    }
+
+    fun contentReused(path: String) {
+        if (path !in readPaths) reusedPaths += path
+    }
 }
 
 class LibraryScanner {
@@ -153,12 +167,30 @@ class LibraryScanner {
             }
             val directory = storage.entry(path)
             if (directory != null) {
+                val totalSize = files.sumOf(StorageEntry::size)
+                val modifiedAt = maxOf(
+                    directory.lastModified,
+                    files.maxOfOrNull(StorageEntry::lastModified) ?: 0,
+                )
+                val unchanged = prior[path]?.canBeReused(totalSize, modifiedAt) == true
                 val parentName = path.substringBeforeLast('/', "").substringAfterLast('/').takeIf(String::isNotBlank)
-                val directoryMetadata = mergeRecognizedMetadata(
-                    comicInfo.fromDirectory(storage, path),
+                val inferredMetadata = mergeRecognizedMetadata(
                     DownloadedSourceRecognizer.fromDirectory(path, files.map(StorageEntry::name)),
                     FilenameMetadataParser.parse(path.substringAfterLast('/'), parentName),
                 ) ?: FilenameMetadataParser.parse(path.substringAfterLast('/'), parentName)
+                val comicInfoEntry = files.firstOrNull {
+                    it.name.equals("ComicInfo.xml", ignoreCase = true)
+                }
+                val directoryMetadata = if (unchanged) {
+                    comicInfoEntry?.let { statistics.contentReused(it.relativePath) }
+                    null
+                } else {
+                    comicInfoEntry?.let { statistics.contentRead(it.relativePath) }
+                    mergeRecognizedMetadata(
+                        comicInfo.fromDirectory(storage, path),
+                        inferredMetadata,
+                    ) ?: inferredMetadata
+                }
                 output += ScanCandidate(
                     relativePath = path,
                     uri = directory.uri,
@@ -167,8 +199,8 @@ class LibraryScanner {
                     sourceKind = SourceKind.DIRECTORY,
                     suggestedTitle = path.substringAfterLast('/'),
                     mimeType = null,
-                    size = files.sumOf(StorageEntry::size),
-                    modifiedAt = maxOf(directory.lastModified, images.maxOfOrNull(StorageEntry::lastModified) ?: 0),
+                    size = totalSize,
+                    modifiedAt = modifiedAt,
                     pageCount = images.size,
                     coverPath = sortedPages.firstOrNull()?.relativePath,
                     contentHash = directoryFingerprint(files),
@@ -184,9 +216,9 @@ class LibraryScanner {
                         sourceKind = SourceKind.FILE,
                         contentHash = contentHash(storage, video, prior, statistics),
                         recognizedMetadata = parsed.copy(
-                            authors = parsed.authors.ifEmpty { directoryMetadata.authors },
-                            tags = parsed.tags.ifEmpty { directoryMetadata.tags },
-                            series = parsed.series ?: directoryMetadata.series,
+                            authors = parsed.authors.ifEmpty { (directoryMetadata ?: inferredMetadata).authors },
+                            tags = parsed.tags.ifEmpty { (directoryMetadata ?: inferredMetadata).tags },
+                            series = parsed.series ?: (directoryMetadata ?: inferredMetadata).series,
                         ),
                     )
                 }
@@ -249,18 +281,35 @@ class LibraryScanner {
         }
 
         archives.forEach { archive ->
-            val count = runCatching { countArchivePages(storage, archive) }.getOrElse { error ->
-                warnings += "压缩包 ${archive.relativePath} 无法读取：${error.message.orEmpty()}"
-                0
+            val reusedPageCount = prior[archive.relativePath]
+                ?.reusableArchivePageCount(archive.size, archive.lastModified)
+            val inspection = if (reusedPageCount == null) {
+                statistics.contentRead(archive.relativePath)
+                runCatching {
+                    comicInfo.inspectArchive(
+                        storage = storage,
+                        archivePath = archive.relativePath,
+                        locator = archive.uri,
+                        isPage = { name -> MediaClassifier.isImage(name, null) },
+                    )
+                }.getOrElse { error ->
+                    warnings += "压缩包 ${archive.relativePath} 无法读取：${error.message.orEmpty()}"
+                    ComicInfoReader.ArchiveInspection(0, null)
+                }
+            } else {
+                statistics.contentReused(archive.relativePath)
+                null
             }
             output += archive.toCandidate(
                 kind = MediaKind.IMAGE_SET,
                 domain = MediaDomain.WORKS,
                 sourceKind = SourceKind.ARCHIVE,
-                pageCount = count,
+                pageCount = reusedPageCount ?: inspection?.pageCount ?: 0,
                 contentHash = contentHash(storage, archive, prior, statistics),
-                recognizedMetadata = mergeRecognizedMetadata(
-                    comicInfo.fromArchive(storage, archive.relativePath),
+                // Existing local/portable metadata remains authoritative when the archive
+                // is unchanged, so reopening it only to parse ComicInfo would be redundant.
+                recognizedMetadata = if (inspection == null) null else mergeRecognizedMetadata(
+                    inspection.metadata,
                     DownloadedSourceRecognizer.fromFile(archive.relativePath),
                     FilenameMetadataParser.parse(
                         archive.name,
@@ -291,10 +340,10 @@ class LibraryScanner {
         if (recorded != null && recorded.canBeReused(entry.size, entry.lastModified) &&
             recorded.contentHash != null
         ) {
-            statistics.contentReadsSkipped++
+            statistics.contentReused(entry.relativePath)
             return recorded.contentHash
         }
-        statistics.contentReads++
+        statistics.contentRead(entry.relativePath)
         val document = LibraryDocument(entry.relativePath, entry.name, false, locator = entry.uri)
         val digest = MessageDigest.getInstance("SHA-256")
         storage.openInput(document).use { input ->
@@ -306,21 +355,6 @@ class LibraryScanner {
             }
         }
         return digest.digest().toHex()
-    }
-
-    private fun countArchivePages(storage: DocumentTreeStorage, archive: StorageEntry): Int {
-        val document = LibraryDocument(archive.relativePath, archive.name, false, locator = archive.uri)
-        return storage.openInput(document).buffered().use { stream ->
-            ZipInputStream(stream).use { zip ->
-                var count = 0
-                while (true) {
-                    val entry = zip.nextEntry ?: break
-                    if (!entry.isDirectory && MediaClassifier.isImage(entry.name, null)) count++
-                    zip.closeEntry()
-                }
-                count
-            }
-        }
     }
 
     private fun StorageEntry.toCandidate(
@@ -367,20 +401,22 @@ class LibraryScanner {
     ): CapturedMetadata? {
         val recorded = prior[entry.relativePath]
         if (recorded != null && recorded.canBeReused(entry.size, entry.lastModified)) {
-            statistics.contentReadsSkipped++
+            statistics.contentReused(entry.relativePath)
             return CapturedMetadata(recorded.capturedAt, recorded.latitude, recorded.longitude)
         }
-        statistics.contentReads++
+        statistics.contentRead(entry.relativePath)
         return readCapturedMetadata(storage, entry)
     }
 
-    private fun directoryFingerprint(files: List<StorageEntry>): String {
+    internal fun directoryFingerprint(files: List<StorageEntry>): String {
         val digest = MessageDigest.getInstance("SHA-256")
         files.sortedWith { left, right -> MediaClassifier.naturalCompare(left.name, right.name) }
             .forEach { entry ->
                 digest.update(entry.name.lowercase(Locale.ROOT).encodeToByteArray())
                 digest.update(0.toByte())
                 digest.update(entry.size.toString().encodeToByteArray())
+                digest.update(0.toByte())
+                digest.update(entry.lastModified.toString().encodeToByteArray())
                 digest.update(0.toByte())
             }
         return digest.digest().toHex()

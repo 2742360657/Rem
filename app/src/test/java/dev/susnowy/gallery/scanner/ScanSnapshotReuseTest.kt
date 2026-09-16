@@ -1,6 +1,10 @@
 package dev.susnowy.gallery.scanner
 
+import dev.susnowy.gallery.storage.StorageEntry
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -14,11 +18,13 @@ class ScanSnapshotReuseTest {
         size: Long = 1_024,
         modifiedAt: Long = 1_700_000_000_000,
         contentHash: String? = "abc",
+        pageCount: Int? = 42,
     ) = ScannedFile(
         relativePath = "Images/a.jpg",
         size = size,
         modifiedAt = modifiedAt,
         contentHash = contentHash,
+        pageCount = pageCount,
     )
 
     @Test
@@ -49,5 +55,31 @@ class ScanSnapshotReuseTest {
 
         assertTrue(withoutHash.canBeReused(1_024, 1_700_000_000_000))
         assertFalse(withoutHash.contentHash != null)
+    }
+
+    @Test
+    fun unchangedArchiveReusesItsRecordedPageCount() {
+        assertEquals(42, recorded().reusableArchivePageCount(1_024, 1_700_000_000_000))
+        assertNull(recorded().reusableArchivePageCount(2_048, 1_700_000_000_000))
+        assertNull(recorded(pageCount = null).reusableArchivePageCount(1_024, 1_700_000_000_000))
+    }
+
+    @Test
+    fun directoryFingerprintChangesWhenAnEqualSizedPageIsModified() {
+        fun page(modifiedAt: Long) = StorageEntry(
+            relativePath = "Comics/work/001.jpg",
+            uri = "content://test/page",
+            name = "001.jpg",
+            mimeType = "image/jpeg",
+            isDirectory = false,
+            size = 1_024,
+            lastModified = modifiedAt,
+        )
+        val scanner = LibraryScanner()
+
+        assertNotEquals(
+            scanner.directoryFingerprint(listOf(page(1_700_000_000_000))),
+            scanner.directoryFingerprint(listOf(page(1_700_000_001_000))),
+        )
     }
 }

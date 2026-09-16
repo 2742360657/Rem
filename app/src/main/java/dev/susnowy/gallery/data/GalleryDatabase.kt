@@ -250,6 +250,7 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
             "captured_at",
             "latitude",
             "longitude",
+            "page_count",
         )
         return readableDatabase.query(
             "media",
@@ -273,6 +274,7 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
                             capturedAt = cursor.nullableLong("captured_at"),
                             latitude = cursor.nullableDouble("latitude"),
                             longitude = cursor.nullableDouble("longitude"),
+                            pageCount = cursor.nullableInt("page_count"),
                         ),
                     )
                 }
