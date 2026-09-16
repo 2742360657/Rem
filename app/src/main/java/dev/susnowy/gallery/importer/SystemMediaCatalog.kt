@@ -38,19 +38,23 @@ class SystemMediaCatalog(context: Context) {
     private val appContext = context.applicationContext
     private val resolver = appContext.contentResolver
 
-    fun access(): SystemMediaAccess = when {
-        Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && (
-            granted(Manifest.permission.READ_MEDIA_IMAGES) ||
-                granted(Manifest.permission.READ_MEDIA_VIDEO)
-            ) -> SystemMediaAccess.FULL
-
-        Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE &&
-            granted(Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) -> SystemMediaAccess.PARTIAL
-
-        Build.VERSION.SDK_INT <= Build.VERSION_CODES.S_V2 &&
-            granted(Manifest.permission.READ_EXTERNAL_STORAGE) -> SystemMediaAccess.FULL
-
-        else -> SystemMediaAccess.NONE
+    fun access(): SystemMediaAccess {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val images = granted(Manifest.permission.READ_MEDIA_IMAGES)
+            val videos = granted(Manifest.permission.READ_MEDIA_VIDEO)
+            val selectedOnly = Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE &&
+                granted(Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED)
+            return when {
+                images && videos -> SystemMediaAccess.FULL
+                images || videos || selectedOnly -> SystemMediaAccess.PARTIAL
+                else -> SystemMediaAccess.NONE
+            }
+        }
+        return if (granted(Manifest.permission.READ_EXTERNAL_STORAGE)) {
+            SystemMediaAccess.FULL
+        } else {
+            SystemMediaAccess.NONE
+        }
     }
 
     fun query(): List<SystemMediaEntry> {

@@ -1,6 +1,7 @@
 package dev.susnowy.gallery.ui.screens
 
 import android.net.Uri
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -22,13 +23,20 @@ import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Collections
 import androidx.compose.material.icons.rounded.DeleteForever
+import androidx.compose.material.icons.rounded.DeleteOutline
+import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.Favorite
+import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.Inbox
 import androidx.compose.material.icons.rounded.PhotoLibrary
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Restore
 import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.SelectAll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -50,6 +58,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -72,6 +81,7 @@ import dev.susnowy.gallery.ui.GalleryUiState
 import dev.susnowy.gallery.ui.GalleryViewModel
 import dev.susnowy.gallery.ui.components.MediaCard
 import dev.susnowy.gallery.ui.components.MediaGrid
+import dev.susnowy.gallery.ui.components.label
 
 @Composable
 fun EmptyLibraryScreen(onChooseFolder: () -> Unit) {
@@ -104,6 +114,7 @@ fun GalleryScreenContent(
     onChooseFolder: () -> Unit,
     onRequestSystemMediaAccess: () -> Unit,
     onFallbackMediaPicker: () -> Unit,
+    onOpenAppSettings: () -> Unit,
 ) {
     val visible = state.media.filterNot(MediaItem::trashed)
     when (state.screen) {
@@ -123,6 +134,7 @@ fun GalleryScreenContent(
             viewModel = viewModel,
             onRequestAccess = onRequestSystemMediaAccess,
             onFallbackPicker = onFallbackMediaPicker,
+            onOpenAppSettings = onOpenAppSettings,
         )
         AppScreen.IMAGES -> ImagesScreen(visible.filter { it.kind == MediaKind.IMAGE }, viewModel)
         AppScreen.IMAGE_SETS -> MediaCollectionScreen(
@@ -161,8 +173,9 @@ private fun SystemGalleryScreen(
     viewModel: GalleryViewModel,
     onRequestAccess: () -> Unit,
     onFallbackPicker: () -> Unit,
+    onOpenAppSettings: () -> Unit,
 ) {
-    var selected by remember { mutableStateOf(emptySet<String>()) }
+    var selected by rememberSaveable { mutableStateOf(emptySet<String>()) }
     var sourceFilter by remember { mutableStateOf<String?>(null) }
     var showImportChoices by remember { mutableStateOf(false) }
     var showImageSetTitle by remember { mutableStateOf(false) }
@@ -179,6 +192,10 @@ private fun SystemGalleryScreen(
     val selectedMedia = state.systemMedia.filter { it.uri in selected }
     val canCreateImageSet = selectedMedia.size >= 2 &&
         selectedMedia.all { it.mediaType == SystemMediaType.IMAGE }
+
+    BackHandler(enabled = selected.isNotEmpty() && !showImportChoices && !showImageSetTitle) {
+        selected = emptySet()
+    }
 
     if (state.systemMediaAccess == SystemMediaAccess.NONE) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -208,7 +225,7 @@ private fun SystemGalleryScreen(
             Text(
                 when (state.systemMediaAccess) {
                     SystemMediaAccess.FULL -> "已获得系统相册访问权限"
-                    SystemMediaAccess.PARTIAL -> "当前仅显示系统授权的部分照片和视频"
+                    SystemMediaAccess.PARTIAL -> "当前仅显示系统授权的媒体（可能只含图片、视频或指定项目）"
                     SystemMediaAccess.NONE -> "未授权"
                 },
                 style = MaterialTheme.typography.titleMedium,
@@ -223,8 +240,20 @@ private fun SystemGalleryScreen(
                     Spacer(Modifier.width(6.dp))
                     Text("刷新")
                 }
-                OutlinedButton(onClick = onRequestAccess) {
-                    Text(if (state.systemMediaAccess == SystemMediaAccess.PARTIAL) "调整授权范围" else "权限设置")
+                OutlinedButton(
+                    onClick = if (state.systemMediaAccess == SystemMediaAccess.PARTIAL) {
+                        onRequestAccess
+                    } else {
+                        onOpenAppSettings
+                    },
+                ) {
+                    Text(
+                        if (state.systemMediaAccess == SystemMediaAccess.PARTIAL) {
+                            "调整授权范围"
+                        } else {
+                            "系统权限设置"
+                        },
+                    )
                 }
             }
         }
@@ -399,6 +428,7 @@ private fun HomeScreen(items: List<MediaItem>, viewModel: GalleryViewModel) {
     val inbox = items.count(MediaItem::inInbox)
     val imageSets = items.count { it.kind == MediaKind.IMAGE_SET }
     val videos = items.count { it.kind == MediaKind.VIDEO }
+    val recent = remember(items) { items.sortedByDescending(MediaItem::modifiedAt).take(12) }
     LazyColumn(
         contentPadding = PaddingValues(20.dp),
         verticalArrangement = Arrangement.spacedBy(20.dp),
@@ -413,21 +443,21 @@ private fun HomeScreen(items: List<MediaItem>, viewModel: GalleryViewModel) {
         }
         item {
             LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                item { StatCard("全部内容", items.size.toString()) }
-                item { StatCard("待整理", inbox.toString()) }
-                item { StatCard("ImageSet", imageSets.toString()) }
-                item { StatCard("视频", videos.toString()) }
+                item { StatCard("全部内容", items.size.toString()) { viewModel.navigate(AppScreen.SEARCH) } }
+                item { StatCard("待整理", inbox.toString()) { viewModel.navigate(AppScreen.INBOX) } }
+                item { StatCard("ImageSet", imageSets.toString()) { viewModel.navigate(AppScreen.IMAGE_SETS) } }
+                item { StatCard("视频", videos.toString()) { viewModel.navigate(AppScreen.VIDEOS) } }
             }
         }
         if (items.isNotEmpty()) {
             item { Text("最近内容", style = MaterialTheme.typography.titleLarge) }
             item {
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    items(items.sortedByDescending(MediaItem::modifiedAt).take(12), key = MediaItem::id) { item ->
+                    items(recent, key = MediaItem::id) { item ->
                         MediaCard(
                             item = item,
                             viewModel = viewModel,
-                            onClick = { viewModel.open(item) },
+                            onClick = { viewModel.open(item, recent) },
                             modifier = Modifier.width(170.dp),
                         )
                     }
@@ -438,8 +468,8 @@ private fun HomeScreen(items: List<MediaItem>, viewModel: GalleryViewModel) {
 }
 
 @Composable
-private fun StatCard(label: String, value: String) {
-    Card(modifier = Modifier.width(150.dp)) {
+private fun StatCard(label: String, value: String, onClick: () -> Unit) {
+    Card(onClick = onClick, modifier = Modifier.width(150.dp)) {
         Column(modifier = Modifier.padding(18.dp)) {
             Text(value, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
             Text(label, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -453,6 +483,7 @@ private fun LibrariesScreen(
     viewModel: GalleryViewModel,
     onChooseFolder: () -> Unit,
 ) {
+    var pendingForget by remember { mutableStateOf<dev.susnowy.gallery.model.LibraryRegistration?>(null) }
     LazyColumn(
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -494,7 +525,7 @@ private fun LibrariesScreen(
                             IconButton(onClick = { viewModel.scan(library.libraryId) }) {
                                 Icon(Icons.Rounded.Refresh, contentDescription = "扫描")
                             }
-                            TextButton(onClick = { viewModel.forgetLibrary(library.libraryId) }) {
+                            TextButton(onClick = { pendingForget = library }) {
                                 Text("移除登记")
                             }
                         }
@@ -502,6 +533,22 @@ private fun LibrariesScreen(
                 )
             }
         }
+    }
+    pendingForget?.let { library ->
+        AlertDialog(
+            onDismissRequest = { pendingForget = null },
+            title = { Text("移除 ${library.name}？") },
+            text = {
+                Text("只移除本机索引并释放 Android 目录授权；Library 中的媒体、.gallery 元数据和目录结构都不会删除。")
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.forgetLibrary(library.libraryId)
+                    pendingForget = null
+                }) { Text("移除登记") }
+            },
+            dismissButton = { TextButton(onClick = { pendingForget = null }) { Text("取消") } },
+        )
     }
 }
 
@@ -519,36 +566,174 @@ private fun MediaCollectionScreen(
             }
         }
     } else {
-        MediaGrid(items = items, viewModel = viewModel, onOpen = viewModel::open)
+        MediaGrid(items = items, viewModel = viewModel, onOpen = { viewModel.open(it, items) })
     }
 }
 
 @Composable
 private fun PhotosScreen(items: List<MediaItem>, viewModel: GalleryViewModel) {
-    val stillImages = items.filter { it.kind == MediaKind.PHOTO }
+    var selectionMode by rememberSaveable { mutableStateOf(false) }
+    var selected by rememberSaveable { mutableStateOf(emptySet<String>()) }
     var showCreateDialog by remember { mutableStateOf(false) }
+    var showBatchEditor by remember { mutableStateOf(false) }
+    var confirmBatchTrash by remember { mutableStateOf(false) }
+    val availableIds = remember(items) { items.mapTo(mutableSetOf(), MediaItem::id) }
+    LaunchedEffect(availableIds) { selected = selected.intersect(availableIds) }
+    val selectedItems = items.filter { it.id in selected }
+    val allSelectedAreImages = selectedItems.size >= 2 && selectedItems.all { it.kind == MediaKind.PHOTO }
+
+    BackHandler(enabled = selectionMode && !showCreateDialog && !showBatchEditor && !confirmBatchTrash) {
+        selectionMode = false
+        selected = emptySet()
+    }
+
     Column(Modifier.fillMaxSize()) {
-        if (stillImages.size >= 2) {
-            FilledTonalButton(
-                onClick = { showCreateDialog = true },
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-            ) { Text("从相册图片派生 ImageSet") }
+        if (selectionMode) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp),
+            ) {
+                IconButton(onClick = {
+                    selectionMode = false
+                    selected = emptySet()
+                }) { Icon(Icons.Rounded.Close, contentDescription = "退出选择") }
+                Text("已选择 ${selected.size} 项", style = MaterialTheme.typography.titleMedium)
+                Spacer(Modifier.weight(1f))
+                TextButton(onClick = {
+                    selected = if (selected.size == items.size) emptySet() else availableIds
+                }) {
+                    Icon(Icons.Rounded.SelectAll, contentDescription = null)
+                    Text(if (selected.size == items.size) "清空" else "全选")
+                }
+            }
+            LazyRow(
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                item {
+                    val removeFavorite = selectedItems.isNotEmpty() && selectedItems.all(MediaItem::favorite)
+                    FilledTonalButton(
+                        enabled = selected.isNotEmpty(),
+                        onClick = {
+                            viewModel.setBatchFavorite(selected, !removeFavorite)
+                            selected = emptySet()
+                            selectionMode = false
+                        },
+                    ) {
+                        Icon(
+                            if (removeFavorite) Icons.Rounded.FavoriteBorder else Icons.Rounded.Favorite,
+                            contentDescription = null,
+                        )
+                        Text(if (removeFavorite) "取消收藏" else "收藏")
+                    }
+                }
+                item {
+                    FilledTonalButton(
+                        enabled = selected.isNotEmpty(),
+                        onClick = { showBatchEditor = true },
+                    ) {
+                        Icon(Icons.Rounded.Edit, contentDescription = null)
+                        Text("编辑分类")
+                    }
+                }
+                item {
+                    FilledTonalButton(
+                        enabled = allSelectedAreImages,
+                        onClick = { showCreateDialog = true },
+                    ) {
+                        Icon(Icons.Rounded.Collections, contentDescription = null)
+                        Text("派生 ImageSet")
+                    }
+                }
+                item {
+                    FilledTonalButton(
+                        enabled = selected.isNotEmpty(),
+                        onClick = { confirmBatchTrash = true },
+                    ) {
+                        Icon(Icons.Rounded.DeleteOutline, contentDescription = null)
+                        Text("回收站")
+                    }
+                }
+            }
+        } else if (items.isNotEmpty()) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 4.dp),
+            ) {
+                Text(
+                    "按拍摄时间排列 · 点按查看，长按多选",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Spacer(Modifier.weight(1f))
+                TextButton(onClick = { selectionMode = true }) { Text("选择") }
+            }
         }
         if (items.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text("从系统相册导入，或在 Library 的 Photos 目录中放入媒体")
             }
         } else {
-            MediaGrid(items, viewModel, viewModel::open, Modifier.weight(1f))
+            MediaGrid(
+                items = items,
+                viewModel = viewModel,
+                onOpen = { viewModel.open(it, items) },
+                modifier = Modifier.weight(1f),
+                compact = true,
+                selectionEnabled = true,
+                selectionMode = selectionMode,
+                selectedIds = selected,
+                onSelectionToggle = { item ->
+                    selectionMode = true
+                    selected = if (item.id in selected) selected - item.id else selected + item.id
+                },
+            )
         }
     }
     if (showCreateDialog) {
         CreateImageSetDialog(
-            items = stillImages,
+            items = selectedItems,
+            initialSelected = selected,
             onDismiss = { showCreateDialog = false },
-            onCreate = { selected, title ->
-                viewModel.createImageSet(selected, title)
+            onCreate = { selectedIds, title ->
+                viewModel.createImageSet(selectedIds, title)
                 showCreateDialog = false
+                selectionMode = false
+                selected = emptySet()
+            },
+        )
+    }
+    if (showBatchEditor) {
+        BatchMetadataDialog(
+            count = selected.size,
+            onDismiss = { showBatchEditor = false },
+            onSave = { authors, tags, collections ->
+                viewModel.addBatchMetadata(selected, authors, tags, collections)
+                showBatchEditor = false
+                selectionMode = false
+                selected = emptySet()
+            },
+        )
+    }
+    if (confirmBatchTrash) {
+        AlertDialog(
+            onDismissRequest = { confirmBatchTrash = false },
+            title = { Text("将 ${selected.size} 项移入回收站？") },
+            text = { Text("只写入逻辑回收站状态，真实文件不会移动或删除。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.setTrashedBatch(selected)
+                    confirmBatchTrash = false
+                    selectionMode = false
+                    selected = emptySet()
+                }) { Text("移入回收站") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmBatchTrash = false }) { Text("取消") }
             },
         )
     }
@@ -569,7 +754,7 @@ private fun ImagesScreen(items: List<MediaItem>, viewModel: GalleryViewModel) {
                 Text("Library 中的独立图片会显示在这里")
             }
         } else {
-            MediaGrid(items, viewModel, viewModel::open, Modifier.weight(1f))
+            MediaGrid(items, viewModel, { viewModel.open(it, items) }, Modifier.weight(1f))
         }
     }
     if (showCreateDialog) {
@@ -587,11 +772,14 @@ private fun ImagesScreen(items: List<MediaItem>, viewModel: GalleryViewModel) {
 @Composable
 private fun CreateImageSetDialog(
     items: List<MediaItem>,
+    initialSelected: Set<String> = emptySet(),
     onDismiss: () -> Unit,
     onCreate: (List<String>, String) -> Unit,
 ) {
     var title by remember { mutableStateOf("新 ImageSet") }
-    var selected by remember { mutableStateOf(emptySet<String>()) }
+    var selected by remember(items, initialSelected) {
+        mutableStateOf(initialSelected.intersect(items.mapTo(mutableSetOf(), MediaItem::id)))
+    }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("创建 ImageSet") },
@@ -644,6 +832,48 @@ private fun CreateImageSetDialog(
     )
 }
 
+@Composable
+private fun BatchMetadataDialog(
+    count: Int,
+    onDismiss: () -> Unit,
+    onSave: (authors: String, tags: String, collections: String) -> Unit,
+) {
+    var authors by rememberSaveable { mutableStateOf("") }
+    var tags by rememberSaveable { mutableStateOf("") }
+    var collections by rememberSaveable { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("批量编辑 $count 项") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("输入内容会追加到现有元数据，不会覆盖每张照片已有的值。")
+                OutlinedTextField(
+                    value = authors,
+                    onValueChange = { authors = it },
+                    label = { Text("添加作者（逗号分隔）") },
+                )
+                OutlinedTextField(
+                    value = tags,
+                    onValueChange = { tags = it },
+                    label = { Text("添加 Tag（逗号分隔）") },
+                )
+                OutlinedTextField(
+                    value = collections,
+                    onValueChange = { collections = it },
+                    label = { Text("添加 Collection（逗号分隔）") },
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = authors.isNotBlank() || tags.isNotBlank() || collections.isNotBlank(),
+                onClick = { onSave(authors, tags, collections) },
+            ) { Text("追加到所选") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+    )
+}
+
 private enum class Facet(val emptyText: String) {
     SERIES("编辑作品元数据后，系列会显示在这里"),
     COLLECTION("还没有 Collection"),
@@ -689,7 +919,7 @@ private fun FacetScreen(items: List<MediaItem>, facet: Facet, viewModel: Gallery
                 )
             }
         }
-        MediaGrid(filtered, viewModel, viewModel::open, Modifier.weight(1f))
+        MediaGrid(filtered, viewModel, { viewModel.open(it, filtered) }, Modifier.weight(1f))
     }
 }
 
@@ -744,12 +974,12 @@ private fun SearchScreen(
                 FilterChip(
                     selected = kind == value,
                     onClick = { kind = value },
-                    label = { Text(value.name.lowercase()) },
+                    label = { Text(value.label()) },
                 )
             }
         }
         Text("${filtered.size} 个结果", modifier = Modifier.padding(horizontal = 18.dp, vertical = 8.dp))
-        MediaGrid(filtered, viewModel, viewModel::open, Modifier.weight(1f))
+        MediaGrid(filtered, viewModel, { viewModel.open(it, filtered) }, Modifier.weight(1f))
     }
 }
 

@@ -82,6 +82,59 @@ class PortableMetadataStoreTest {
         assertEquals(8, restored.progress.single().page)
         assertFalse(restored.trash.isNotEmpty())
     }
+
+    @Test
+    fun batchMetadataAndTrashAreWrittenTogether() {
+        val second = item.copy(
+            id = "item-2",
+            relativePath = "Photos/second.jpg",
+            displayTitle = "Second",
+            kind = MediaKind.PHOTO,
+            sourceKind = SourceKind.SYSTEM_IMPORT,
+        )
+        val saved = store.saveItems(
+            listOf(
+                item.copy(tags = listOf("batch")),
+                second.copy(collections = listOf("Trip")),
+            ),
+        )
+
+        assertEquals(listOf(1L, 1L), saved.map { it.revision })
+        val catalog = store.loadCatalog("library-id")
+        assertEquals(1, catalog.revision)
+        assertEquals(2, catalog.items.size)
+        assertEquals(listOf("batch"), catalog.items.first { it.id == "item-id" }.tags)
+
+        store.setTrashed(listOf(item, second), true, deletedAt = 3_000)
+        assertEquals(setOf("item-id", "item-2"), store.loadState("library-id").trash.map { it.itemId }.toSet())
+    }
+
+    @Test
+    fun batchMetadataConflictDoesNotPartiallyWrite() {
+        val second = item.copy(
+            id = "item-2",
+            relativePath = "Photos/second.jpg",
+            displayTitle = "Second",
+            kind = MediaKind.PHOTO,
+            sourceKind = SourceKind.SYSTEM_IMPORT,
+        )
+        val initial = store.saveItems(listOf(item, second))
+        store.saveItem(item.copy(revision = initial[0].revision, displayTitle = "Changed elsewhere"), initial[0].revision)
+
+        assertThrows(RevisionConflictException::class.java) {
+            store.saveItems(
+                listOf(
+                    item.copy(revision = initial[0].revision, tags = listOf("must-not-write")),
+                    second.copy(revision = initial[1].revision, tags = listOf("must-not-write")),
+                ),
+            )
+        }
+
+        val catalog = store.loadCatalog("library-id")
+        assertEquals(2, catalog.revision)
+        assertEquals("Changed elsewhere", catalog.items.first { it.id == "item-id" }.displayTitle)
+        assertFalse(catalog.items.first { it.id == "item-2" }.tags.contains("must-not-write"))
+    }
 }
 
 private class MetadataMemoryAccess : LibraryDocumentAccess {

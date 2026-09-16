@@ -34,22 +34,39 @@ class PortableMetadataStore(
         )
 
     fun saveItem(item: MediaItem, expectedRevision: Long): PortableItemMetadata {
-        val catalog = loadCatalog(item.libraryId)
-        val existing = catalog.items.firstOrNull { it.id == item.id }
-            ?: catalog.items.firstOrNull { it.relativePath == item.relativePath }
-        if (existing != null && existing.revision != expectedRevision) {
-            throw RevisionConflictException(
-                "${item.displayTitle} 已被其他设备修改（磁盘 ${existing.revision}，本机 $expectedRevision）",
+        return saveItemUpdates(listOf(item to expectedRevision)).single()
+    }
+
+    fun saveItems(items: List<MediaItem>): List<PortableItemMetadata> =
+        saveItemUpdates(items.map { it to it.revision })
+
+    private fun saveItemUpdates(updates: List<Pair<MediaItem, Long>>): List<PortableItemMetadata> {
+        if (updates.isEmpty()) return emptyList()
+        val libraryId = updates.first().first.libraryId
+        require(updates.all { it.first.libraryId == libraryId }) { "不能跨 Library 批量修改元数据" }
+        require(updates.map { it.first.id }.distinct().size == updates.size) { "批量修改包含重复媒体" }
+        require(updates.map { it.first.relativePath }.distinct().size == updates.size) {
+            "批量修改包含重复媒体路径"
+        }
+
+        val catalog = loadCatalog(libraryId)
+        val now = Instant.now().toString()
+        val metadata = updates.map { (item, expectedRevision) ->
+            val existing = catalog.items.firstOrNull { it.id == item.id }
+                ?: catalog.items.firstOrNull { it.relativePath == item.relativePath }
+            if (existing != null && existing.revision != expectedRevision) {
+                throw RevisionConflictException(
+                    "${item.displayTitle} 已被其他设备修改（磁盘 ${existing.revision}，本机 $expectedRevision）",
+                )
+            }
+            item.toPortableMetadata(
+                revision = (existing?.revision ?: 0) + 1,
+                updatedAt = now,
             )
         }
-        val now = Instant.now().toString()
-        val metadata = item.toPortableMetadata(
-            revision = (existing?.revision ?: 0) + 1,
-            updatedAt = now,
-        )
-        val remaining = catalog.items.filterNot {
-            it.id == metadata.id || it.relativePath == metadata.relativePath
-        }
+        val updatedIds = metadata.mapTo(mutableSetOf(), PortableItemMetadata::id)
+        val updatedPaths = metadata.mapTo(mutableSetOf(), PortableItemMetadata::relativePath)
+        val remaining = catalog.items.filterNot { it.id in updatedIds || it.relativePath in updatedPaths }
         val updated = catalog.copy(
             revision = catalog.revision + 1,
             updatedAt = now,
@@ -85,14 +102,28 @@ class PortableMetadataStore(
     }
 
     fun setTrashed(item: MediaItem, trashed: Boolean, deletedAt: Long = System.currentTimeMillis()) {
-        val state = loadState(item.libraryId)
-        val remaining = state.trash.filterNot { it.itemId == item.id }
+        setTrashed(listOf(item), trashed, deletedAt)
+    }
+
+    fun setTrashed(
+        items: List<MediaItem>,
+        trashed: Boolean,
+        deletedAt: Long = System.currentTimeMillis(),
+    ) {
+        if (items.isEmpty()) return
+        val libraryId = items.first().libraryId
+        require(items.all { it.libraryId == libraryId }) { "不能跨 Library 批量修改回收站状态" }
+        val itemIds = items.mapTo(mutableSetOf(), MediaItem::id)
+        val state = loadState(libraryId)
+        val remaining = state.trash.filterNot { it.itemId in itemIds }
         val trash = if (trashed) {
-            remaining + PortableTrashEntry(
-                itemId = item.id,
-                relativePath = item.relativePath,
-                deletedAt = Instant.ofEpochMilli(deletedAt).toString(),
-            )
+            remaining + items.distinctBy(MediaItem::id).map { item ->
+                PortableTrashEntry(
+                    itemId = item.id,
+                    relativePath = item.relativePath,
+                    deletedAt = Instant.ofEpochMilli(deletedAt).toString(),
+                )
+            }
         } else remaining
         val updated = state.copy(
             revision = state.revision + 1,

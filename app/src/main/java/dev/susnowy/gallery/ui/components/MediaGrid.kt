@@ -1,5 +1,8 @@
 package dev.susnowy.gallery.ui.components
 
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.border
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -12,12 +15,13 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.BrokenImage
+import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Collections
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.Movie
 import androidx.compose.material.icons.rounded.Photo
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -45,6 +49,11 @@ fun MediaGrid(
     viewModel: GalleryViewModel,
     onOpen: (MediaItem) -> Unit,
     modifier: Modifier = Modifier,
+    compact: Boolean = false,
+    selectionEnabled: Boolean = false,
+    selectionMode: Boolean = false,
+    selectedIds: Set<String> = emptySet(),
+    onSelectionToggle: (MediaItem) -> Unit = {},
 ) {
     if (items.isEmpty()) {
         Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -53,35 +62,75 @@ fun MediaGrid(
         return
     }
     LazyVerticalGrid(
-        columns = GridCells.Adaptive(142.dp),
+        columns = GridCells.Adaptive(if (compact) 92.dp else 142.dp),
         modifier = modifier.fillMaxSize(),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
-        horizontalArrangement = Arrangement.spacedBy(14.dp),
+        contentPadding = if (compact) {
+            androidx.compose.foundation.layout.PaddingValues(
+                start = 3.dp,
+                top = 3.dp,
+                end = 3.dp,
+                bottom = 112.dp,
+            )
+        } else {
+            androidx.compose.foundation.layout.PaddingValues(16.dp)
+        },
+        verticalArrangement = Arrangement.spacedBy(if (compact) 3.dp else 14.dp),
+        horizontalArrangement = Arrangement.spacedBy(if (compact) 3.dp else 14.dp),
     ) {
         items(items, key = MediaItem::id) { item ->
-            MediaCard(item = item, viewModel = viewModel, onClick = { onOpen(item) })
+            MediaCard(
+                item = item,
+                viewModel = viewModel,
+                onClick = {
+                    if (selectionMode) onSelectionToggle(item) else onOpen(item)
+                },
+                onLongClick = if (selectionEnabled) {
+                    { onSelectionToggle(item) }
+                } else null,
+                selected = item.id in selectedIds,
+                compact = compact,
+            )
         }
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun MediaCard(
     item: MediaItem,
     viewModel: GalleryViewModel,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    onLongClick: (() -> Unit)? = null,
+    selected: Boolean = false,
+    compact: Boolean = false,
 ) {
     val thumbnail by produceState<String?>(initialValue = directPreview(item), item.id, item.coverPath) {
         if (value == null && item.coverPath != null) {
             value = runCatching { viewModel.resolvePath(item, item.coverPath) }.getOrNull()
         }
     }
-    Card(onClick = onClick, modifier = modifier.fillMaxWidth()) {
+    Card(
+        modifier = modifier
+            .fillMaxWidth()
+            .then(
+                if (selected) {
+                    Modifier.border(3.dp, MaterialTheme.colorScheme.primary, MaterialTheme.shapes.medium)
+                } else Modifier
+            )
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick),
+        colors = CardDefaults.cardColors(
+            containerColor = if (selected) {
+                MaterialTheme.colorScheme.secondaryContainer
+            } else {
+                MaterialTheme.colorScheme.surfaceContainerLow
+            },
+        ),
+    ) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .aspectRatio(0.9f),
+                .aspectRatio(if (compact) 1f else 0.9f),
         ) {
             if (thumbnail != null) {
                 AsyncImage(
@@ -118,30 +167,64 @@ fun MediaCard(
                     )
                 }
             }
-        }
-        Column(modifier = Modifier.padding(12.dp)) {
-            Text(
-                item.displayTitle,
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text(
-                    item.kind.label(),
-                    style = MaterialTheme.typography.labelSmall,
+            if (selected) {
+                Surface(
                     color = MaterialTheme.colorScheme.primary,
-                )
-                item.pageCount?.let {
-                    Text("$it 页", style = MaterialTheme.typography.labelSmall)
-                }
-                if (item.needsRepair) {
-                    Text(
-                        "需修复",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.error,
+                    shape = MaterialTheme.shapes.extraLarge,
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(6.dp),
+                ) {
+                    Icon(
+                        Icons.Rounded.CheckCircle,
+                        contentDescription = "已选择",
+                        tint = MaterialTheme.colorScheme.onPrimary,
+                        modifier = Modifier.padding(4.dp),
                     )
+                }
+            }
+            if (compact && (item.kind == MediaKind.VIDEO || item.kind == MediaKind.PHOTO_VIDEO)) {
+                Surface(
+                    color = MaterialTheme.colorScheme.scrim.copy(alpha = 0.65f),
+                    shape = MaterialTheme.shapes.small,
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(5.dp),
+                ) {
+                    Icon(
+                        Icons.Rounded.Movie,
+                        contentDescription = "视频",
+                        tint = MaterialTheme.colorScheme.inverseOnSurface,
+                        modifier = Modifier.padding(3.dp),
+                    )
+                }
+            }
+        }
+        if (!compact) {
+            Column(modifier = Modifier.padding(12.dp)) {
+                Text(
+                    item.displayTitle,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(
+                        item.kind.label(),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                    item.pageCount?.let {
+                        Text("$it 页", style = MaterialTheme.typography.labelSmall)
+                    }
+                    if (item.needsRepair) {
+                        Text(
+                            "需修复",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
                 }
             }
         }

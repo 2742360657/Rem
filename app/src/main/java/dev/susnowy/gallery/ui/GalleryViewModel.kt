@@ -7,6 +7,7 @@ import android.util.Log
 import androidx.documentfile.provider.DocumentFile
 import androidx.core.content.edit
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.viewModelScope
 import dev.susnowy.gallery.GalleryApplication
 import dev.susnowy.gallery.data.GalleryRepository
@@ -58,6 +59,7 @@ data class GalleryUiState(
     val allMedia: List<MediaItem> = emptyList(),
     val screen: AppScreen = AppScreen.HOME,
     val selectedItemId: String? = null,
+    val detailItemIds: List<String> = emptyList(),
     val searchQuery: String = "",
     val operation: String? = null,
     val message: String? = null,
@@ -73,14 +75,22 @@ data class GalleryUiState(
         get() = allMedia.firstOrNull { it.id == selectedItemId }
 }
 
-class GalleryViewModel(application: Application) : AndroidViewModel(application) {
+class GalleryViewModel(
+    application: Application,
+    private val savedStateHandle: SavedStateHandle,
+) : AndroidViewModel(application) {
     private val repository: GalleryRepository = (application as GalleryApplication).repository
     private val content = MediaContentService()
     private val preferences = application.getSharedPreferences("gallery-settings", 0)
-    private val activeLibraryId = MutableStateFlow<String?>(null)
-    private val screen = MutableStateFlow(AppScreen.HOME)
-    private val selectedItemId = MutableStateFlow<String?>(null)
-    private val searchQuery = MutableStateFlow("")
+    private val activeLibraryId = MutableStateFlow(preferences.getString(ACTIVE_LIBRARY_KEY, null))
+    private val screen = MutableStateFlow(
+        savedStateHandle.get<String>(SCREEN_KEY)
+            ?.let { value -> runCatching { AppScreen.valueOf(value) }.getOrNull() }
+            ?: AppScreen.HOME,
+    )
+    private val selectedItemId = MutableStateFlow(savedStateHandle.get<String>(SELECTED_ITEM_KEY))
+    private val detailItemIds = MutableStateFlow<List<String>>(emptyList())
+    private val searchQuery = MutableStateFlow(savedStateHandle.get<String>(SEARCH_QUERY_KEY).orEmpty())
     private val message = MutableStateFlow<String?>(null)
     private val autoScan = MutableStateFlow(preferences.getBoolean("auto_scan", true))
     private val retentionDays = MutableStateFlow(preferences.getInt("trash_retention_days", 30))
@@ -97,8 +107,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     val uiState: StateFlow<GalleryUiState> = combine(
         repository.libraries,
         repository.media,
-        combine(screen, selectedItemId, searchQuery) { currentScreen, selected, query ->
-            Triple(currentScreen, selected, query)
+        combine(screen, selectedItemId, searchQuery, detailItemIds) { currentScreen, selected, query, detailIds ->
+            NavigationStatus(currentScreen, selected, query, detailIds)
         },
         combine(
             repository.operation,
@@ -115,15 +125,16 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     ) { libraries, allMedia, navigation, status, activeId ->
         val resolvedActiveId = activeId?.takeIf { id -> libraries.any { it.libraryId == id } }
             ?: libraries.firstOrNull()?.libraryId
-        if (activeLibraryId.value != resolvedActiveId) activeLibraryId.value = resolvedActiveId
+        if (activeLibraryId.value != resolvedActiveId) setActiveLibrary(resolvedActiveId)
         GalleryUiState(
             libraries = libraries,
             activeLibraryId = resolvedActiveId,
             media = allMedia.filter { resolvedActiveId == null || it.libraryId == resolvedActiveId },
             allMedia = allMedia,
-            screen = navigation.first,
-            selectedItemId = navigation.second,
-            searchQuery = navigation.third,
+            screen = navigation.screen,
+            selectedItemId = navigation.selectedItemId,
+            detailItemIds = navigation.detailItemIds,
+            searchQuery = navigation.searchQuery,
             operation = status.operation,
             message = status.message,
             autoScan = status.autoScan,
@@ -152,8 +163,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     ?.takeIf(String::isNotBlank)
                     ?: "Gallery Library"
                 val library = repository.attach(uri, suggestedName)
-                activeLibraryId.value = library.libraryId
-                screen.value = AppScreen.INBOX
+                setActiveLibrary(library.libraryId)
+                setScreen(AppScreen.INBOX)
                 val recovered = repository.recoverInterruptedTransactions(library.libraryId)
                 if (recovered > 0) message.value = "已恢复 $recovered 个未完成整理事务"
                 if (autoScan.value) scan(library.libraryId)
@@ -189,8 +200,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun selectLibrary(libraryId: String) {
-        activeLibraryId.value = libraryId
-        selectedItemId.value = null
+        setActiveLibrary(libraryId)
+        setSelectedItem(null)
+        detailItemIds.value = emptyList()
     }
 
     fun forgetLibrary(libraryId: String) {
@@ -202,22 +214,36 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun navigate(destination: AppScreen) {
-        screen.value = destination
-        selectedItemId.value = null
-        if (destination == AppScreen.SYSTEM_GALLERY) refreshSystemMedia()
+        setScreen(destination)
+        setSelectedItem(null)
+        detailItemIds.value = emptyList()
     }
 
-    fun open(item: MediaItem) {
-        activeLibraryId.value = item.libraryId
-        selectedItemId.value = item.id
+    fun open(item: MediaItem, browsingItems: List<MediaItem> = listOf(item)) {
+        setActiveLibrary(item.libraryId)
+        detailItemIds.value = browsingItems
+            .asSequence()
+            .filter { it.libraryId == item.libraryId && !it.trashed }
+            .map(MediaItem::id)
+            .distinct()
+            .toList()
+            .takeIf { item.id in it }
+            ?: listOf(item.id)
+        setSelectedItem(item.id)
+    }
+
+    fun selectDetailItem(item: MediaItem) {
+        setSelectedItem(item.id)
     }
 
     fun closeDetail() {
-        selectedItemId.value = null
+        setSelectedItem(null)
+        detailItemIds.value = emptyList()
     }
 
     fun updateSearch(query: String) {
         searchQuery.value = query
+        savedStateHandle[SEARCH_QUERY_KEY] = query
     }
 
     fun saveMetadata(
@@ -248,6 +274,50 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             )
             runCatching { repository.updateMedia(updated) }
                 .onSuccess { message.value = "元数据已写入便携 Library" }
+                .onFailure(::showError)
+        }
+    }
+
+    fun addBatchMetadata(
+        itemIds: Collection<String>,
+        authors: String,
+        tags: String,
+        collections: String,
+    ) {
+        val libraryId = activeLibraryId.value ?: return
+        if (itemIds.isEmpty()) return
+        viewModelScope.launch {
+            runCatching {
+                repository.updateMediaBatch(
+                    libraryId = libraryId,
+                    itemIds = itemIds,
+                    addAuthors = authors.splitValues(),
+                    addTags = tags.splitValues(),
+                    addCollections = collections.splitValues(),
+                )
+            }.onSuccess { count -> message.value = "已更新 $count 项媒体的作者 / Tag / Collection" }
+                .onFailure(::showError)
+        }
+    }
+
+    fun setBatchFavorite(itemIds: Collection<String>, favorite: Boolean) {
+        val libraryId = activeLibraryId.value ?: return
+        if (itemIds.isEmpty()) return
+        viewModelScope.launch {
+            runCatching {
+                repository.updateMediaBatch(libraryId, itemIds, favorite = favorite)
+            }.onSuccess { count ->
+                message.value = if (favorite) "已收藏 $count 项媒体" else "已取消收藏 $count 项媒体"
+            }.onFailure(::showError)
+        }
+    }
+
+    fun setTrashedBatch(itemIds: Collection<String>) {
+        val libraryId = activeLibraryId.value ?: return
+        if (itemIds.isEmpty()) return
+        viewModelScope.launch {
+            runCatching { repository.setTrashedBatch(libraryId, itemIds) }
+                .onSuccess { count -> message.value = "已将 $count 项移入逻辑回收站，真实文件未移动" }
                 .onFailure(::showError)
         }
     }
@@ -369,7 +439,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             }.onSuccess { result ->
                 message.value = "已创建 ImageSet：导入 ${result.imported} 页" +
                     if (result.warnings.isEmpty()) "" else "，${result.warnings.size} 条警告"
-                screen.value = AppScreen.IMAGE_SETS
+                setScreen(AppScreen.IMAGE_SETS)
             }.onFailure(::showError)
         }
     }
@@ -433,7 +503,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 target
             }.onSuccess {
                 message.value = "已创建 ImageSet：$it"
-                screen.value = AppScreen.IMAGE_SETS
+                setScreen(AppScreen.IMAGE_SETS)
             }
                 .onFailure(::showError)
         }
@@ -474,6 +544,23 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         message.value = detail ?: "操作失败（${error.javaClass.simpleName}）"
     }
 
+    private fun setActiveLibrary(libraryId: String?) {
+        activeLibraryId.value = libraryId
+        preferences.edit {
+            if (libraryId == null) remove(ACTIVE_LIBRARY_KEY) else putString(ACTIVE_LIBRARY_KEY, libraryId)
+        }
+    }
+
+    private fun setScreen(destination: AppScreen) {
+        screen.value = destination
+        savedStateHandle[SCREEN_KEY] = destination.name
+    }
+
+    private fun setSelectedItem(itemId: String?) {
+        selectedItemId.value = itemId
+        savedStateHandle[SELECTED_ITEM_KEY] = itemId
+    }
+
     private fun String.splitValues(): List<String> =
         split(',', '，', ';', '；').map(String::trim).filter(String::isNotEmpty).distinct()
 
@@ -485,9 +572,23 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         val systemGallery: SystemGalleryStatus,
     )
 
+    private data class NavigationStatus(
+        val screen: AppScreen,
+        val selectedItemId: String?,
+        val searchQuery: String,
+        val detailItemIds: List<String>,
+    )
+
     private data class SystemGalleryStatus(
         val media: List<SystemMediaEntry>,
         val access: SystemMediaAccess,
         val loading: Boolean,
     )
+
+    private companion object {
+        const val ACTIVE_LIBRARY_KEY = "active_library_id"
+        const val SCREEN_KEY = "screen"
+        const val SELECTED_ITEM_KEY = "selected_item_id"
+        const val SEARCH_QUERY_KEY = "search_query"
+    }
 }

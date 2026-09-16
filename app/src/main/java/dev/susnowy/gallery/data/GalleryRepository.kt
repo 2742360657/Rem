@@ -1,6 +1,7 @@
 package dev.susnowy.gallery.data
 
 import android.content.Context
+import android.content.Intent
 import android.net.Uri
 import androidx.core.net.toUri
 import dev.susnowy.gallery.derive.DerivationService
@@ -212,6 +213,41 @@ class GalleryRepository(context: Context) {
         }
     }
 
+    suspend fun updateMediaBatch(
+        libraryId: String,
+        itemIds: Collection<String>,
+        addAuthors: List<String> = emptyList(),
+        addTags: List<String> = emptyList(),
+        addCollections: List<String> = emptyList(),
+        favorite: Boolean? = null,
+    ): Int = runOperation("正在批量保存元数据…") {
+        onIo {
+            val items = itemIds.distinct().mapNotNull(database::mediaItem)
+            require(items.all { it.libraryId == libraryId }) { "不能跨 Library 批量修改" }
+            if (items.isEmpty()) return@onIo 0
+            val updated = items.map { item ->
+                item.copy(
+                    authors = (item.authors + addAuthors).distinct(),
+                    tags = (item.tags + addTags).distinct(),
+                    collections = (item.collections + addCollections).distinct(),
+                    favorite = favorite ?: item.favorite,
+                )
+            }
+            val storage = storageFor(requireLibrary(libraryId))
+            val portable = PortableMetadataStore(storage).saveItems(updated).associateBy { it.id }
+            updated.forEach { item ->
+                database.upsertMedia(
+                    item.copy(
+                        revision = portable.getValue(item.id).revision,
+                        inInbox = false,
+                    ),
+                )
+            }
+            refreshFromDatabase()
+            updated.size
+        }
+    }
+
     suspend fun setTrashed(itemId: String, trashed: Boolean) = runOperation(
         if (trashed) "正在移入回收站…" else "正在恢复…",
     ) {
@@ -224,6 +260,23 @@ class GalleryRepository(context: Context) {
             refreshFromDatabase()
         }
     }
+
+    suspend fun setTrashedBatch(libraryId: String, itemIds: Collection<String>): Int =
+        runOperation("正在批量移入回收站…") {
+            onIo {
+                val items = itemIds.distinct().mapNotNull(database::mediaItem)
+                require(items.all { it.libraryId == libraryId }) { "不能跨 Library 批量修改" }
+                if (items.isEmpty()) return@onIo 0
+                val deletedAt = System.currentTimeMillis()
+                val storage = storageFor(requireLibrary(libraryId))
+                PortableMetadataStore(storage).setTrashed(items, true, deletedAt)
+                items.forEach { item ->
+                    database.upsertMedia(item.copy(trashed = true, deletedAt = deletedAt))
+                }
+                refreshFromDatabase()
+                items.size
+            }
+        }
 
     suspend fun purge(itemId: String) = runOperation("正在永久删除…") {
         onIo {
@@ -359,7 +412,21 @@ class GalleryRepository(context: Context) {
         }
 
     suspend fun forgetLibrary(libraryId: String) = onIo {
+        val registration = database.library(libraryId)
         database.removeLibrary(libraryId)
+        registration?.let { library ->
+            runCatching {
+                val uri = library.treeUri.toUri()
+                val permission = appContext.contentResolver.persistedUriPermissions
+                    .firstOrNull { it.uri == uri }
+                val flags = (if (permission?.isReadPermission == true) {
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                } else 0) or (if (permission?.isWritePermission == true) {
+                    Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                } else 0)
+                if (flags != 0) appContext.contentResolver.releasePersistableUriPermission(uri, flags)
+            }
+        }
         refreshFromDatabase()
     }
 

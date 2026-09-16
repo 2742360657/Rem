@@ -1,8 +1,13 @@
 package dev.susnowy.gallery.ui
 
 import android.Manifest
+import android.app.Activity
 import android.content.Intent
+import android.net.Uri
 import android.os.Build
+import android.os.SystemClock
+import android.provider.Settings
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Box
@@ -54,8 +59,8 @@ import androidx.compose.material3.rememberDrawerState
 import androidx.compose.material3.DrawerValue
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -66,7 +71,9 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.viewmodel.compose.viewModel
+import dev.susnowy.gallery.model.MediaKind
 import dev.susnowy.gallery.ui.screens.EmptyLibraryScreen
 import dev.susnowy.gallery.ui.screens.GalleryScreenContent
 import dev.susnowy.gallery.ui.screens.MediaDetail
@@ -106,6 +113,7 @@ fun GalleryApp(viewModel: GalleryViewModel = viewModel()) {
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val snackbarHostState = remember { SnackbarHostState() }
     var libraryMenuExpanded by remember { mutableStateOf(false) }
+    var lastExitBackAt by remember { mutableLongStateOf(0L) }
     val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         uri ?: return@rememberLauncherForActivityResult
         runCatching {
@@ -125,6 +133,11 @@ fun GalleryApp(viewModel: GalleryViewModel = viewModel()) {
         viewModel.onSystemMediaPermissionResult()
     }
 
+    LifecycleResumeEffect(state.screen) {
+        if (state.screen == AppScreen.SYSTEM_GALLERY) viewModel.refreshSystemMedia()
+        onPauseOrDispose { }
+    }
+
     LaunchedEffect(state.message) {
         state.message?.let {
             snackbarHostState.showSnackbar(it)
@@ -134,12 +147,54 @@ fun GalleryApp(viewModel: GalleryViewModel = viewModel()) {
 
     GalleryTheme {
         if (state.selectedItem != null) {
+            val selected = state.selectedItem!!
+            val contextualItems = state.detailItemIds.mapNotNull { id ->
+                state.allMedia.firstOrNull { it.id == id }
+            }.filter { it.libraryId == selected.libraryId && !it.trashed }
+            val browsingItems = contextualItems.ifEmpty {
+                when (selected.kind) {
+                    MediaKind.PHOTO, MediaKind.PHOTO_VIDEO, MediaKind.LIVE_PHOTO -> state.media
+                        .filter {
+                            !it.trashed && it.kind in setOf(
+                                MediaKind.PHOTO,
+                                MediaKind.PHOTO_VIDEO,
+                                MediaKind.LIVE_PHOTO,
+                            )
+                        }
+                        .sortedByDescending { it.capturedAt ?: it.modifiedAt }
+                    MediaKind.IMAGE -> state.media.filter { !it.trashed && it.kind == MediaKind.IMAGE }
+                    else -> listOf(selected)
+                }
+            }
             MediaDetail(
-                item = state.selectedItem!!,
+                item = selected,
+                browsingItems = browsingItems,
                 viewModel = viewModel,
                 onBack = viewModel::closeDetail,
             )
+            BackHandler(onBack = viewModel::closeDetail)
             return@GalleryTheme
+        }
+
+        BackHandler(enabled = drawerState.isOpen) {
+            scope.launch { drawerState.close() }
+        }
+        BackHandler(enabled = drawerState.isClosed) {
+            if (state.screen != AppScreen.HOME) {
+                viewModel.navigate(AppScreen.HOME)
+                lastExitBackAt = 0L
+            } else {
+                val now = SystemClock.elapsedRealtime()
+                if (now - lastExitBackAt <= EXIT_CONFIRM_WINDOW_MS) {
+                    (context as? Activity)?.finish()
+                } else {
+                    lastExitBackAt = now
+                    scope.launch {
+                        snackbarHostState.currentSnackbarData?.dismiss()
+                        snackbarHostState.showSnackbar("再按一次返回退出 Gallery")
+                    }
+                }
+            }
         }
 
         ModalNavigationDrawer(
@@ -188,7 +243,16 @@ fun GalleryApp(viewModel: GalleryViewModel = viewModel()) {
                         title = {
                             Box {
                                 TextButton(onClick = { libraryMenuExpanded = true }) {
-                                    Text(state.activeLibrary?.name ?: state.screen.title)
+                                    Column {
+                                        Text(state.screen.title)
+                                        state.activeLibrary?.let { library ->
+                                            Text(
+                                                library.name,
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            )
+                                        }
+                                    }
                                 }
                                 DropdownMenu(
                                     expanded = libraryMenuExpanded,
@@ -256,6 +320,14 @@ fun GalleryApp(viewModel: GalleryViewModel = viewModel()) {
                             onFallbackMediaPicker = {
                                 mediaPicker.launch(arrayOf("image/*", "video/*"))
                             },
+                            onOpenAppSettings = {
+                                context.startActivity(
+                                    Intent(
+                                        Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                        Uri.parse("package:${context.packageName}"),
+                                    ),
+                                )
+                            },
                         )
                     }
                     state.operation?.let { operation ->
@@ -291,3 +363,5 @@ private fun systemMediaPermissions(): Array<String> = when {
     )
     else -> arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
 }
+
+private const val EXIT_CONFIRM_WINDOW_MS = 2_000L

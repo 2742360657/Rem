@@ -3,8 +3,10 @@ package dev.susnowy.gallery.ui.screens
 import android.net.Uri
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.rememberTransformableState
-import androidx.compose.foundation.gestures.transformable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -17,6 +19,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.PagerState
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
@@ -55,6 +60,8 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -76,42 +83,69 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 @Composable
 fun MediaDetail(
     item: MediaItem,
+    browsingItems: List<MediaItem> = listOf(item),
     viewModel: GalleryViewModel,
     onBack: () -> Unit,
 ) {
+    val sequence = remember(browsingItems, item.libraryId) {
+        browsingItems.filter { it.libraryId == item.libraryId && !it.trashed }
+            .ifEmpty { listOf(item) }
+    }
+    val initialPage = sequence.indexOfFirst { it.id == item.id }.coerceAtLeast(0)
+    val pagerState = rememberPagerState(initialPage = initialPage) { sequence.size }
+    val currentItem = sequence.getOrNull(pagerState.currentPage) ?: item
     var showEditor by remember { mutableStateOf(false) }
     var confirmTrash by remember { mutableStateOf(false) }
     var showDerivePage by remember { mutableStateOf(false) }
+
+    LaunchedEffect(item.id, sequence) {
+        val target = sequence.indexOfFirst { it.id == item.id }
+        if (target >= 0 && target != pagerState.currentPage) pagerState.scrollToPage(target)
+    }
+    LaunchedEffect(pagerState, sequence) {
+        snapshotFlow { pagerState.currentPage }
+            .distinctUntilChanged()
+            .collect { page -> sequence.getOrNull(page)?.let(viewModel::selectDetailItem) }
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(item.displayTitle, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                title = { Text(currentItem.displayTitle, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回")
                     }
                 },
                 actions = {
-                    IconButton(onClick = {
-                        if (item.kind == MediaKind.IMAGE_SET) showDerivePage = true
-                        else viewModel.deriveImage(item)
-                    }) {
-                        Icon(Icons.Rounded.ContentCopy, contentDescription = "复制派生")
+                    if (currentItem.kind in setOf(
+                            MediaKind.IMAGE_SET,
+                            MediaKind.IMAGE,
+                            MediaKind.PHOTO,
+                            MediaKind.LIVE_PHOTO,
+                        )
+                    ) {
+                        IconButton(onClick = {
+                            if (currentItem.kind == MediaKind.IMAGE_SET) showDerivePage = true
+                            else viewModel.deriveImage(currentItem)
+                        }) {
+                            Icon(Icons.Rounded.ContentCopy, contentDescription = "复制派生")
+                        }
                     }
                     IconButton(onClick = {
                         viewModel.saveMetadata(
-                            item,
-                            item.displayTitle,
-                            item.authors.joinToString(),
-                            item.tags.joinToString(),
-                            item.collections.joinToString(),
-                            item.series?.title.orEmpty(),
-                            item.series?.sortIndex?.toString().orEmpty(),
-                            !item.favorite,
+                            currentItem,
+                            currentItem.displayTitle,
+                            currentItem.authors.joinToString(),
+                            currentItem.tags.joinToString(),
+                            currentItem.collections.joinToString(),
+                            currentItem.series?.title.orEmpty(),
+                            currentItem.series?.sortIndex?.toString().orEmpty(),
+                            !currentItem.favorite,
                         )
                     }) {
                         Icon(
-                            if (item.favorite) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
+                            if (currentItem.favorite) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
                             contentDescription = "收藏",
                         )
                     }
@@ -130,23 +164,26 @@ fun MediaDetail(
                 .fillMaxSize()
                 .padding(padding),
         ) {
-            when (item.kind) {
-                MediaKind.IMAGE_SET -> ImageSetReader(item, viewModel, Modifier.weight(1f))
-                MediaKind.VIDEO, MediaKind.PHOTO_VIDEO -> VideoViewer(item, item.uri, viewModel, Modifier.weight(1f))
-                MediaKind.IMAGE, MediaKind.PHOTO, MediaKind.LIVE_PHOTO ->
-                    ZoomableImage(item.uri, item.displayTitle, Modifier.weight(1f))
+            when {
+                currentItem.kind == MediaKind.IMAGE_SET ->
+                    ImageSetReader(currentItem, viewModel, Modifier.weight(1f))
+                sequence.size > 1 ->
+                    MediaPager(sequence, pagerState, viewModel, Modifier.weight(1f))
+                currentItem.kind == MediaKind.VIDEO || currentItem.kind == MediaKind.PHOTO_VIDEO ->
+                    VideoViewer(currentItem, currentItem.uri, viewModel, Modifier.weight(1f))
+                else -> ZoomableImage(currentItem.uri, currentItem.displayTitle, Modifier.weight(1f))
             }
-            MetadataSummary(item)
+            MetadataSummary(currentItem)
         }
     }
 
     if (showEditor) {
         MetadataEditor(
-            item = item,
+            item = currentItem,
             onDismiss = { showEditor = false },
             onSave = { title, authors, tags, collections, series, sortIndex, favorite ->
                 viewModel.saveMetadata(
-                    item,
+                    currentItem,
                     title,
                     authors,
                     tags,
@@ -166,7 +203,7 @@ fun MediaDetail(
             text = { Text("仅添加逻辑删除标记，真实文件不会移动或删除。") },
             confirmButton = {
                 TextButton(onClick = {
-                    viewModel.setTrashed(item, true)
+                    viewModel.setTrashed(currentItem, true)
                     confirmTrash = false
                 }) { Text("移入回收站") }
             },
@@ -182,17 +219,19 @@ fun MediaDetail(
                 OutlinedTextField(
                     value = pageText,
                     onValueChange = { pageText = it.filter(Char::isDigit).take(6) },
-                    label = { Text("页码（1–${item.pageCount ?: "?"}）") },
+                    label = { Text("页码（1–${currentItem.pageCount ?: "?"}）") },
                     singleLine = true,
                 )
             },
             confirmButton = {
                 TextButton(
                     onClick = {
-                        pageText.toIntOrNull()?.let { viewModel.derivePage(item, it) }
+                        pageText.toIntOrNull()?.let { viewModel.derivePage(currentItem, it) }
                         showDerivePage = false
                     },
-                    enabled = pageText.toIntOrNull()?.let { it >= 1 && (item.pageCount == null || it <= item.pageCount) } == true,
+                    enabled = pageText.toIntOrNull()?.let {
+                        it >= 1 && (currentItem.pageCount == null || it <= currentItem.pageCount)
+                    } == true,
                 ) { Text("复制") }
             },
             dismissButton = { TextButton(onClick = { showDerivePage = false }) { Text("取消") } },
@@ -201,18 +240,102 @@ fun MediaDetail(
 }
 
 @Composable
-private fun ZoomableImage(uri: String, description: String, modifier: Modifier = Modifier) {
+private fun MediaPager(
+    items: List<MediaItem>,
+    pagerState: PagerState,
+    viewModel: GalleryViewModel,
+    modifier: Modifier = Modifier,
+) {
+    var zoomedPage by remember(items) { mutableStateOf<Int?>(null) }
+    LaunchedEffect(pagerState.currentPage) {
+        if (zoomedPage != pagerState.currentPage) zoomedPage = null
+    }
+    Box(modifier.fillMaxSize()) {
+        HorizontalPager(
+            state = pagerState,
+            key = { page -> items[page].id },
+            userScrollEnabled = zoomedPage != pagerState.currentPage,
+            modifier = Modifier.fillMaxSize(),
+        ) { page ->
+            val pageItem = items[page]
+            when (pageItem.kind) {
+                MediaKind.VIDEO, MediaKind.PHOTO_VIDEO ->
+                    VideoViewer(
+                        pageItem,
+                        pageItem.uri,
+                        viewModel,
+                        Modifier.fillMaxSize(),
+                        active = page == pagerState.currentPage,
+                    )
+                MediaKind.IMAGE, MediaKind.PHOTO, MediaKind.LIVE_PHOTO ->
+                    ZoomableImage(
+                        uri = pageItem.uri,
+                        description = pageItem.displayTitle,
+                        modifier = Modifier.fillMaxSize(),
+                        onZoomingChanged = { zooming ->
+                            if (zooming) zoomedPage = page
+                            else if (zoomedPage == page) zoomedPage = null
+                        },
+                    )
+                MediaKind.IMAGE_SET -> Unit
+            }
+        }
+        Surface(
+            color = MaterialTheme.colorScheme.scrim.copy(alpha = 0.68f),
+            shape = MaterialTheme.shapes.extraLarge,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(12.dp),
+        ) {
+            Text(
+                "${pagerState.currentPage + 1} / ${items.size}",
+                color = MaterialTheme.colorScheme.inverseOnSurface,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun ZoomableImage(
+    uri: String,
+    description: String,
+    modifier: Modifier = Modifier,
+    onZoomingChanged: (Boolean) -> Unit = {},
+) {
     var scale by remember { mutableFloatStateOf(1f) }
     var offset by remember { mutableStateOf(Offset.Zero) }
-    val transformState = rememberTransformableState { zoomChange, offsetChange, _ ->
-        scale = (scale * zoomChange).coerceIn(1f, 6f)
-        offset = if (scale <= 1f) Offset.Zero else offset + offsetChange
+    LaunchedEffect(scale) { onZoomingChanged(scale > 1.01f) }
+    DisposableEffect(Unit) {
+        onDispose { onZoomingChanged(false) }
     }
     Box(
         modifier = modifier
             .fillMaxWidth()
             .background(MaterialTheme.colorScheme.surfaceContainerLowest)
-            .transformable(transformState),
+            .pointerInput(uri) {
+                awaitEachGesture {
+                    awaitFirstDown(requireUnconsumed = false)
+                    do {
+                        val event = awaitPointerEvent()
+                        val pointerCount = event.changes.count { it.pressed }
+                        val shouldTransform = pointerCount >= 2 || scale > 1.01f
+                        if (shouldTransform) {
+                            val nextScale = (scale * event.calculateZoom()).coerceIn(1f, 6f)
+                            val pan = event.calculatePan()
+                            scale = nextScale
+                            offset = if (nextScale <= 1.01f) Offset.Zero else offset + pan
+                            event.changes.forEach { change ->
+                                if (change.positionChanged()) change.consume()
+                            }
+                        }
+                    } while (event.changes.any { it.pressed })
+                    if (scale <= 1.01f) {
+                        scale = 1f
+                        offset = Offset.Zero
+                    }
+                }
+            },
         contentAlignment = Alignment.Center,
     ) {
         AsyncImage(
@@ -334,6 +457,7 @@ private fun VideoViewer(
     uri: String,
     viewModel: GalleryViewModel,
     modifier: Modifier = Modifier,
+    active: Boolean = true,
 ) {
     val context = LocalContext.current
     val player = remember(item.id) { ExoPlayer.Builder(context).build() }
@@ -345,7 +469,9 @@ private fun VideoViewer(
         player.setMediaItem(PlayerMediaItem.fromUri(uri.toUri()))
         player.prepare()
         if (position > 0) player.seekTo(position)
-        player.playWhenReady = true
+    }
+    LaunchedEffect(player, active) {
+        player.playWhenReady = active
     }
     DisposableEffect(player) {
         onDispose {

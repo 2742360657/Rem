@@ -34,6 +34,11 @@ Android URIs and mount paths are local-only. Every portable media path uses `/`-
 - Manual portable metadata wins over local and inferred metadata.
 - Duplicate detection reports SHA-256 matches but never deletes or merges them.
 - System media browsing uses read-only `MediaStore` access with full/partial/denied states; it never requests `MANAGE_EXTERNAL_STORAGE`.
+- Forgetting a Library removes only its device-local index and persisted SAF grant; it never mutates the selected tree.
+- Photos View selection is ephemeral UI state. Batch Author/Tag/Collection/favorite edits merge into one portable catalog write, and batch trash uses one portable state write before synchronizing the local index.
+- Image and Photos viewers use a lazy horizontal pager. One-finger swipes page while unzoomed; once zoomed, the current image owns pan gestures until it returns to its base scale.
+- A detail viewer keeps the originating grid/result order as its paging context, so Search and facet browsing do not leak into unrelated media.
+- `SavedStateHandle` retains only small navigation keys (screen, query, selected item); large media collections are reconstructed from the local index instead of being placed in Android saved-state bundles.
 - Every Library has a root `.nomedia` marker so Android media scanners ignore Library copies while Gallery continues to use SAF.
 - System album imports preserve portable source-directory text but never persist Android content URIs in Library metadata.
 - Organizer prunes only verified-empty directories below known Library media roots and never deletes the roots themselves.
