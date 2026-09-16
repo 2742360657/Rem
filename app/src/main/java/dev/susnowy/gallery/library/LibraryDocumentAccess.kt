@@ -7,6 +7,12 @@ interface LibraryDocumentAccess {
     fun find(relativePath: String): LibraryDocument?
     fun ensureDirectory(relativePath: String): LibraryDocument
     fun createFile(relativePath: String, mimeType: String): LibraryDocument
+    /**
+     * Always asks the provider to create a new document, even when the requested path is
+     * already present. The provider's returned name lets callers implement an atomic claim.
+     */
+    fun createFileExclusive(relativePath: String, mimeType: String): LibraryDocument =
+        createFile(relativePath, mimeType)
     fun openInput(document: LibraryDocument): InputStream
     fun openOutput(document: LibraryDocument, truncate: Boolean = true): OutputStream
     fun rename(document: LibraryDocument, displayName: String): Boolean

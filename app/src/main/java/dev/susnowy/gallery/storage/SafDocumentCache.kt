@@ -76,6 +76,16 @@ internal class SafDocumentCache(
         directories[parentDocumentId] = children
     }
 
+    /** Keeps an already-recorded parent listing coherent after this process creates a child. */
+    fun putChild(parentDocumentId: String, child: StorageNode) {
+        val current = directories[parentDocumentId] ?: return
+        directories[parentDocumentId] = current + (child.name to child)
+    }
+
+    fun forgetChildren(parentDocumentId: String?) {
+        if (parentDocumentId != null) directories.remove(parentDocumentId)
+    }
+
     /** Cache-only child lookup; null means the parent listing was never recorded. */
     fun child(parentPath: String, name: String): StorageNode? {
         val parent = paths[parentPath] ?: return null
@@ -91,14 +101,18 @@ internal class SafDocumentCache(
      * bulk operation — hundreds of renames during page ordering — invalidates only the
      * directory it touched instead of discarding the whole cache.
      */
-    fun forgetSubtree(relativePath: String, folderDocumentId: String?) {
-        if (folderDocumentId != null) directories.remove(folderDocumentId)
+    fun forgetSubtree(relativePath: String) {
         if (relativePath.isEmpty()) {
-            paths.clear()
+            clear()
             return
         }
         val prefix = "$relativePath/"
+        val removedDocumentIds = paths
+            .filterKeys { key -> key == relativePath || key.startsWith(prefix) }
+            .values
+            .mapTo(mutableSetOf(), StorageNode::documentId)
         paths.keys.removeAll { key -> key == relativePath || key.startsWith(prefix) }
+        removedDocumentIds.forEach(directories::remove)
     }
 
     fun clear() {

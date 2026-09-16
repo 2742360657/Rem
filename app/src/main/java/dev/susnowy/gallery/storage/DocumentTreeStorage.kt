@@ -106,6 +106,18 @@ class DocumentTreeStorage(
     }
 
     override fun createFile(relativePath: String, mimeType: String): LibraryDocument {
+        return createFile(relativePath, mimeType, requireAbsent = false)
+    }
+
+    override fun createFileExclusive(relativePath: String, mimeType: String): LibraryDocument {
+        return createFile(relativePath, mimeType, requireAbsent = true)
+    }
+
+    private fun createFile(
+        relativePath: String,
+        mimeType: String,
+        requireAbsent: Boolean,
+    ): LibraryDocument {
         val normalized = relativePath.normalizePath()
         val name = normalized.substringAfterLast('/')
         val parentPath = normalized.substringBeforeLast('/', "")
@@ -120,10 +132,12 @@ class DocumentTreeStorage(
                 resolveNode(parentPath) ?: throw FileNotFoundException("无法创建父目录 $parentPath")
             }
         }
-        val existing = lookupChild(parentPath, name)
-        if (existing != null) {
-            if (existing.isFile) return existing.toLibraryDocument(normalized)
-            throw IllegalStateException("$normalized 已存在且不是文件")
+        if (!requireAbsent) {
+            val existing = lookupChild(parentPath, name)
+            if (existing != null) {
+                if (existing.isFile) return existing.toLibraryDocument(normalized)
+                throw IllegalStateException("$normalized 已存在且不是文件")
+            }
         }
         val created = createDocumentChild(parent, name, mimeType)
             ?: throw FileNotFoundException("无法创建文件 $normalized")
@@ -148,7 +162,9 @@ class DocumentTreeStorage(
             )
         }.getOrNull() ?: return null
         val documentId = DocumentsContract.getDocumentId(createdUri)
-        val created = queryNode(createdUri, documentId)
+        val created = queryNode(createdUri, documentId) { actualName ->
+            parent.relativePath.appendPath(actualName)
+        }
             ?: StorageNode(
                 relativePath = parent.relativePath.appendPath(name),
                 name = name,
@@ -156,7 +172,10 @@ class DocumentTreeStorage(
                 uri = createdUri.toString(),
                 isDirectory = mimeType == DocumentsContract.Document.MIME_TYPE_DIR,
             )
-        lock.withLock { cache.put(created) }
+        lock.withLock {
+            cache.put(created)
+            cache.putChild(parent.documentId, created)
+        }
         return created
     }
 
@@ -205,12 +224,10 @@ class DocumentTreeStorage(
     private fun forgetSubtrees(relativePath: String) {
         val normalized = relativePath.normalizePath()
         lock.withLock {
-            var walked = normalized
-            while (true) {
-                cache.forgetSubtree(walked, cache.path(walked)?.documentId)
-                if (walked.isEmpty()) break
-                walked = walked.substringBeforeLast('/', "")
-            }
+            val parentPath = normalized.substringBeforeLast('/', "")
+            val parentDocumentId = cache.path(parentPath)?.documentId
+            cache.forgetSubtree(normalized)
+            cache.forgetChildren(parentDocumentId)
         }
     }
 
@@ -319,7 +336,7 @@ class DocumentTreeStorage(
         val documentId = rootDocumentId ?: DocumentsContract.getTreeDocumentId(treeUri)
             .also { rootDocumentId = it }
         val uri = DocumentsContract.buildDocumentUriUsingTree(treeUri, documentId)
-        val node = queryNode(uri, documentId) ?: return null
+        val node = queryNode(uri, documentId) { "" } ?: return null
         cache.put(node)
         return node
     }
@@ -338,14 +355,18 @@ class DocumentTreeStorage(
             directory.documentId,
         )
         val listed = mutableListOf<StorageNode>()
-        resolver.query(childrenUri, PROJECTION, null, null, null)?.use { cursor ->
-            while (cursor.moveToNext()) {
-                val documentId = cursor.string(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+        val cursor = resolver.query(childrenUri, PROJECTION, null, null, null)
+            ?: throw FileNotFoundException(
+                "文件提供方未返回目录 ${directory.relativePath.ifEmpty { "Library 根目录" }}",
+            )
+        cursor.use {
+            while (it.moveToNext()) {
+                val documentId = it.string(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
                     ?: continue
-                val name = cursor.string(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+                val name = it.string(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
                     ?: continue
                 val uri = DocumentsContract.buildDocumentUriUsingTree(treeUri, documentId)
-                listed += cursor.toNode(directory.relativePath.appendPath(name), name, documentId, uri)
+                listed += it.toNode(directory.relativePath.appendPath(name), name, documentId, uri)
             }
         }
         val byName = listed.associateBy(StorageNode::name)
@@ -354,11 +375,15 @@ class DocumentTreeStorage(
         return byName
     }
 
-    private fun queryNode(uri: Uri, documentId: String): StorageNode? =
+    private fun queryNode(
+        uri: Uri,
+        documentId: String,
+        relativePath: (actualName: String) -> String,
+    ): StorageNode? =
         resolver.query(uri, PROJECTION, null, null, null)?.use { cursor ->
             if (!cursor.moveToFirst()) return@use null
             val name = cursor.string(DocumentsContract.Document.COLUMN_DISPLAY_NAME) ?: ""
-            cursor.toNode("", name, documentId, uri)
+            cursor.toNode(relativePath(name), name, documentId, uri)
         }
 
     private fun Cursor.toNode(

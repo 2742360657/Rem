@@ -89,7 +89,7 @@ class SafDocumentCacheTest {
         cache.putChildren("root", mapOf("dir" to doc("dir", "doc-dir", directory = true)))
         cache.putChildren("doc-dir", mapOf("page.jpg" to doc("dir/page.jpg", "doc-page")))
 
-        cache.forgetSubtree("dir", "doc-dir")
+        cache.forgetSubtree("dir")
 
         assertNull(cache.path("dir"))
         assertNull(cache.path("dir/page.jpg"))
@@ -106,10 +106,40 @@ class SafDocumentCacheTest {
         cache.put(doc("a.jpg", "doc-a"))
         cache.putChildren("root", mapOf("a.jpg" to doc("a.jpg", "doc-a")))
 
-        cache.forgetSubtree("", "root")
+        cache.forgetSubtree("")
 
         assertEquals(0, cache.pathCount)
         assertEquals(0, cache.directoryCount)
+    }
+
+    @Test
+    fun addingAChildUpdatesAnAlreadyRecordedParentListing() {
+        val cache = SafDocumentCache()
+        cache.put(doc("", "root", directory = true))
+        cache.putChildren("root", emptyMap())
+        val created = doc(".gallery", "doc-gallery", directory = true)
+
+        cache.put(created)
+        cache.putChild("root", created)
+
+        assertEquals("doc-gallery", cache.child("", ".gallery")?.documentId)
+        assertEquals("doc-gallery", cache.path(".gallery")?.documentId)
+    }
+
+    @Test
+    fun forgettingAParentListingKeepsResolvedAncestorPaths() {
+        val cache = SafDocumentCache()
+        cache.put(doc("", "root", directory = true))
+        cache.put(doc("dir", "doc-dir", directory = true))
+        cache.put(doc("other", "doc-other", directory = true))
+        cache.putChildren("root", mapOf("dir" to doc("dir", "doc-dir", directory = true)))
+
+        cache.forgetSubtree("dir")
+        cache.forgetChildren("root")
+
+        assertEquals("root", cache.path("")?.documentId)
+        assertEquals("doc-other", cache.path("other")?.documentId)
+        assertNull(cache.children("root"))
     }
 }
 
