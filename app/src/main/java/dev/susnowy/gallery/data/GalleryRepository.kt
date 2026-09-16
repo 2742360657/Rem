@@ -208,6 +208,7 @@ class GalleryRepository(context: Context) {
                 .toMap()
             val foundPaths = result.candidates.mapTo(mutableSetOf()) { it.relativePath }
             val unmatchedExisting = existing.filter { it.relativePath !in foundPaths }.toMutableList()
+            val scanned = ArrayList<MediaItem>(result.candidates.size)
 
             result.candidates.forEach { candidate ->
                 val atPath = existingByPath[candidate.relativePath]
@@ -292,9 +293,11 @@ class GalleryRepository(context: Context) {
                     revision = metadata?.revision ?: local?.revision ?: 0,
                     fieldSources = fieldSources,
                 )
-                database.upsertMedia(item)
+                scanned += item
             }
-            database.markMissing(libraryId, foundPaths)
+            // One transaction for the whole scan: committing per row would flush the WAL
+            // once per candidate, which dominates indexing time on a large Library.
+            database.replaceScannedMedia(libraryId, scanned, foundPaths)
             state.progress.forEach { progress ->
                 if (database.mediaItem(progress.itemId) != null) {
                     database.upsertProgress(

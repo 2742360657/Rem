@@ -189,7 +189,10 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
 
     @Synchronized
     fun upsertMedia(item: MediaItem) {
-        val database = writableDatabase
+        upsertMediaRow(writableDatabase, item)
+    }
+
+    private fun upsertMediaRow(database: SQLiteDatabase, item: MediaItem) {
         val values = item.toValues()
         val updated = database.update("media", values, "id = ?", arrayOf(item.id))
         if (updated == 0) {
@@ -277,15 +280,24 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
         }
     }
 
+    /**
+     * Writes a whole scan result in one transaction.
+     *
+     * A scan of a large Library produces tens of thousands of rows; committing each one
+     * separately costs a journal flush per row, which on a WAL database is the dominant
+     * cost of indexing. Rows the scan did not find are flagged in the same transaction,
+     * so a scan that fails half way cannot leave a partially updated index.
+     */
     @Synchronized
-    fun markMissing(libraryId: String, foundPaths: Set<String>) {
+    fun replaceScannedMedia(libraryId: String, items: List<MediaItem>, foundPaths: Set<String>) {
         val database = writableDatabase
         database.beginTransaction()
         try {
-            media(libraryId).forEach { item ->
-                if (item.relativePath !in foundPaths && !item.trashed) {
-                    val values = ContentValues().apply { put("needs_repair", 1) }
-                    database.update("media", values, "id = ?", arrayOf(item.id))
+            items.forEach { item -> upsertMediaRow(database, item) }
+            val missing = ContentValues().apply { put("needs_repair", 1) }
+            media(libraryId).forEach { existing ->
+                if (existing.relativePath !in foundPaths && !existing.trashed) {
+                    database.update("media", missing, "id = ?", arrayOf(existing.id))
                 }
             }
             database.setTransactionSuccessful()
