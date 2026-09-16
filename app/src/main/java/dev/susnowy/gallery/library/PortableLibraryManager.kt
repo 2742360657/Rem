@@ -12,6 +12,15 @@ import kotlinx.serialization.SerializationException
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
+/**
+ * Another caller is currently creating this Library's identity. Callers should re-inspect
+ * the directory shortly after: the winner publishes `library.json` when it finishes.
+ */
+class InitializationInProgressException(cause: Throwable? = null) : IllegalStateException(
+    "该目录正在被另一个 Rem 实例初始化，请稍后重试",
+    cause,
+)
+
 class PortableLibraryManager(
     private val access: LibraryDocumentAccess,
     private val json: Json = Json {
@@ -21,6 +30,7 @@ class PortableLibraryManager(
     },
 ) {
     private val writer = PortableDocumentWriter(access)
+
     fun inspect(): LibraryInspection {
         val document = access.find(LIBRARY_JSON) ?: return LibraryInspection.Missing
         return try {
@@ -42,12 +52,22 @@ class PortableLibraryManager(
         }
     }
 
+    /**
+     * Creates a Library identity, writing it exactly once.
+     *
+     * [LIBRARY_JSON] is committed last because it is the completion marker, which leaves
+     * a window where a second caller — a repeated folder-selection tap, a second device —
+     * could see "not initialized yet" and create a competing identity. The window is
+     * closed by claiming [INIT_LOCK_FILE] first: creation is atomic at the provider, so
+     * exactly one caller wins and the others are told to retry.
+     */
     fun initialize(name: String): PortableLibrary {
         check(access.find(LIBRARY_JSON) == null) { "Library 已经初始化" }
         val reservedConflicts = listOf(GUIDE_FILE, SCHEMA_FILE).filter { access.find(it) != null }
         check(reservedConflicts.isEmpty()) {
             "目录中已有 Rem 保留文件：${reservedConflicts.joinToString()}。为避免覆盖，请先确认或重命名这些文件"
         }
+        claimInitializationLock()
         REQUIRED_DIRECTORIES.forEach(access::ensureDirectory)
         val now = Instant.now().toString()
         val library = PortableLibrary(
@@ -62,6 +82,24 @@ class PortableLibraryManager(
         // library.json is the completion marker and must be committed last.
         writeAtomically(LIBRARY_JSON, json.encodeToString(library), "application/json")
         return library
+    }
+
+    /**
+     * Takes the initialization lock by creating it and verifying the provider kept the
+     * requested name. A provider that already had the file reports it back suffixed —
+     * ` (1)` on most Android builds — which is how a lost race is detected, since SAF
+     * offers no other compare-and-set.
+     */
+    private fun claimInitializationLock() {
+        val created = try {
+            access.createFile(INIT_LOCK_FILE, "application/octet-stream")
+        } catch (error: Exception) {
+            throw InitializationInProgressException(error)
+        }
+        val recorded = created.name.ifEmpty { access.find(INIT_LOCK_FILE)?.name.orEmpty() }
+        if (recorded != INIT_LOCK_FILE.substringAfterLast('/')) {
+            throw InitializationInProgressException()
+        }
     }
 
     /**
@@ -116,6 +154,13 @@ class PortableLibraryManager(
         const val LIBRARY_JSON = ".gallery/library.json"
         const val SCHEMA_FILE = ".gallery/schema/v3.json"
         const val MEDIA_IGNORE_FILE = ".nomedia"
+
+        /**
+         * Claimed before the identity is written and deliberately left behind: it is the
+         * evidence that this directory was initialized once, so a later `initialize`
+         * fails on [libraryGuide] check rather than creating a second identity.
+         */
+        const val INIT_LOCK_FILE = ".gallery/init.lock"
 
         /**
          * Documents whose `schema_version` is bumped by [migrateSchema]; kept in

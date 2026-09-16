@@ -11,6 +11,7 @@ import dev.susnowy.gallery.importer.SystemMediaCatalog
 import dev.susnowy.gallery.importer.SystemMediaEntry
 import dev.susnowy.gallery.importer.SystemMediaImporter
 import dev.susnowy.gallery.importer.WorkImportKind
+import dev.susnowy.gallery.library.InitializationInProgressException
 import dev.susnowy.gallery.library.PortableLibraryManager
 import dev.susnowy.gallery.library.LibraryDocument
 import dev.susnowy.gallery.media.ImagePage
@@ -25,6 +26,7 @@ import dev.susnowy.gallery.model.LibraryRegistration
 import dev.susnowy.gallery.model.MediaItem
 import dev.susnowy.gallery.model.PermissionState
 import dev.susnowy.gallery.model.PlaybackProgress
+import dev.susnowy.gallery.model.PortableLibrary
 import dev.susnowy.gallery.organizer.OrganizationPlan
 import dev.susnowy.gallery.organizer.OrganizerService
 import dev.susnowy.gallery.organizer.OrganizerTemplate
@@ -57,6 +59,12 @@ class GalleryRepository(context: Context) {
     private val imageSetOrder = ImageSetOrderService()
     private val progressWriteMutex = Mutex()
 
+    /** Serializes attach: a repeated folder-selection tap must not initialize twice. */
+    private val attachMutex = Mutex()
+
+    /** One scan per Library at a time; a second request must not double the queries. */
+    private val scanMutex = Mutex()
+
     private val _libraries = MutableStateFlow<List<LibraryRegistration>>(emptyList())
     val libraries: StateFlow<List<LibraryRegistration>> = _libraries.asStateFlow()
 
@@ -73,38 +81,89 @@ class GalleryRepository(context: Context) {
         refreshFromDatabase()
     }
 
-    suspend fun attach(treeUri: Uri, requestedName: String? = null): LibraryRegistration = onIo {
-        val storage = DocumentTreeStorage(appContext, treeUri)
-        require(storage.isAvailable) { "无法读取所选目录" }
-        val manager = PortableLibraryManager(storage)
-        val portable = when (val inspection = manager.inspect()) {
-            LibraryInspection.Missing -> manager.initialize(requestedName ?: "Gallery Library")
+    suspend fun attach(treeUri: Uri, requestedName: String? = null): LibraryRegistration =
+        attachMutex.withLock {
+            onIo {
+                val storage = DocumentTreeStorage(appContext, treeUri)
+                require(storage.isAvailable) { "无法读取所选目录" }
+                val manager = PortableLibraryManager(storage)
+                val portable = resolveIdentity(storage, manager, treeUri, requestedName)
+                val migrated = manager.migrateSchema(portable)
+                if (migrated.schemaVersion != portable.schemaVersion) {
+                    _events.tryEmit("已把便携元数据升级到 Schema v${migrated.schemaVersion}（原数据已备份）")
+                }
+                manager.ensureMediaStoreIgnored()
+                val registration = LibraryRegistration(
+                    libraryId = migrated.libraryId,
+                    name = migrated.name,
+                    treeUri = treeUri.toString(),
+                    permissionState = PermissionState.AVAILABLE,
+                    schemaVersion = migrated.schemaVersion,
+                    lastScanAt = database.library(migrated.libraryId)?.lastScanAt,
+                )
+                database.claimLibraryTree(registration)
+                refreshFromDatabase()
+                registration
+            }
+        }
+
+    /**
+     * Resolves which Library identity the selected directory has, creating one only when
+     * the directory genuinely has none.
+     *
+     * Reopening a directory that is already registered reuses the on-disk identity rather
+     * than initializing again. When the registered id and the on-disk id disagree, the
+     * registration is replaced by the on-disk identity: the portable `.gallery` documents
+     * are the truth, the local row is only an index of them.
+     */
+    private fun resolveIdentity(
+        storage: DocumentTreeStorage,
+        manager: PortableLibraryManager,
+        treeUri: Uri,
+        requestedName: String?,
+    ): PortableLibrary {
+        val registered = database.libraries().firstOrNull { it.treeUri == treeUri.toString() }
+        val existing = when (val inspection = manager.inspect()) {
             is LibraryInspection.Valid -> inspection.library
             is LibraryInspection.Unsupported -> error(
                 "Library Schema v${inspection.schemaVersion} 高于本客户端支持的版本，已拒绝写入",
             )
             is LibraryInspection.Invalid -> error(inspection.reason)
+            LibraryInspection.Missing -> null
         }
-        val migrated = manager.migrateSchema(portable)
-        if (migrated.schemaVersion != portable.schemaVersion) {
-            _events.tryEmit("已把便携元数据升级到 Schema v${migrated.schemaVersion}（原数据已备份）")
+        if (existing != null) {
+            if (registered != null && registered.libraryId != existing.libraryId) {
+                _events.tryEmit("检测到 Library 身份已变化，已改用磁盘上的身份")
+            }
+            return existing
         }
-        manager.ensureMediaStoreIgnored()
-        val registration = LibraryRegistration(
-            libraryId = migrated.libraryId,
-            name = migrated.name,
-            treeUri = treeUri.toString(),
-            permissionState = PermissionState.AVAILABLE,
-            schemaVersion = migrated.schemaVersion,
-            lastScanAt = database.library(migrated.libraryId)?.lastScanAt,
-        )
-        database.upsertLibrary(registration)
-        refreshFromDatabase()
-        registration
+        // No identity on disk. If this directory is already registered, another instance
+        // is most likely mid-initialization; wait briefly for it rather than racing it.
+        if (registered != null) {
+            awaitPublishedIdentity(manager)?.let { return it }
+        }
+        return try {
+            manager.initialize(requestedName ?: "Gallery Library")
+        } catch (error: InitializationInProgressException) {
+            // Lost the race to another instance. Its identity becomes visible when it
+            // commits library.json, so re-inspect before reporting a failure.
+            awaitPublishedIdentity(manager) ?: throw error
+        }
+    }
+
+    /** Waits briefly for a concurrent initializer to commit its identity. */
+    private fun awaitPublishedIdentity(manager: PortableLibraryManager): PortableLibrary? {
+        repeat(INITIALIZATION_WAIT_ATTEMPTS) {
+            Thread.sleep(INITIALIZATION_WAIT_MILLIS)
+            val published = manager.inspect()
+            if (published is LibraryInspection.Valid) return published.library
+        }
+        return null
     }
 
     suspend fun scan(libraryId: String): ScanResult = runOperation("正在扫描媒体…") {
-        onIo {
+        scanMutex.withLock {
+            onIo {
             val registration = requireLibrary(libraryId)
             val storage = storageFor(registration)
             if (!storage.isAvailable) {
@@ -257,6 +316,7 @@ class GalleryRepository(context: Context) {
             )
             refreshFromDatabase()
             result
+        }
         }
     }
 
@@ -583,4 +643,10 @@ class GalleryRepository(context: Context) {
     }
 
     private suspend fun <T> onIo(block: suspend () -> T): T = withContext(Dispatchers.IO) { block() }
+
+    private companion object {
+        /** How long a second attach waits for the winner to publish `library.json`. */
+        const val INITIALIZATION_WAIT_ATTEMPTS = 8
+        const val INITIALIZATION_WAIT_MILLIS = 250L
+    }
 }

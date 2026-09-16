@@ -160,6 +160,33 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
         writableDatabase.delete("libraries", "library_id = ?", arrayOf(libraryId))
     }
 
+    /**
+     * Makes [library] the only registration for its directory.
+     *
+     * Any row pointing at the same tree under a different library id is dropped first —
+     * it is either a stale registration for a Library whose identity file has since been
+     * replaced, or a sibling of a duplicate initialization, and either way its media rows
+     * are keyed to an id that no longer exists on disk. The delete cascades to `media`,
+     * whose rows the following scan rebuilds against the surviving identity.
+     */
+    @Synchronized
+    fun claimLibraryTree(library: LibraryRegistration) {
+        val database = writableDatabase
+        database.beginTransaction()
+        try {
+            database.delete(
+                "libraries",
+                "tree_uri = ? AND library_id != ?",
+                arrayOf(library.treeUri, library.libraryId),
+            )
+            database.delete("libraries", "library_id = ?", arrayOf(library.libraryId))
+            database.insertOrThrow("libraries", null, library.toValues())
+            database.setTransactionSuccessful()
+        } finally {
+            database.endTransaction()
+        }
+    }
+
     @Synchronized
     fun upsertMedia(item: MediaItem) {
         val database = writableDatabase
