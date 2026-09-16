@@ -364,11 +364,17 @@ class SystemMediaImporter(private val context: Context) {
     private fun mimeFromName(name: String): String = when (
         name.substringAfterLast('.', "").lowercase(Locale.ROOT)
     ) {
-        "jpg", "jpeg" -> "image/jpeg"
+        "jpg", "jpeg", "jpe", "jfif" -> "image/jpeg"
         "png" -> "image/png"
+        "apng" -> "image/apng"
         "gif" -> "image/gif"
         "webp" -> "image/webp"
         "heic", "heif" -> "image/heif"
+        "avif" -> "image/avif"
+        "svg" -> "image/svg+xml"
+        "ico" -> "image/x-icon"
+        "wbmp" -> "image/vnd.wap.wbmp"
+        "dng" -> "image/x-adobe-dng"
         "mp4", "m4v" -> "video/mp4"
         "mkv" -> "video/x-matroska"
         "webm" -> "video/webm"

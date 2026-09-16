@@ -606,6 +606,7 @@ private fun WorksLibraryScreen(items: List<MediaItem>, viewModel: GalleryViewMod
     var selectedFacet by rememberSaveable { mutableStateOf<String?>(null) }
     var sort by rememberSaveable { mutableStateOf(WorkSort.RECENT) }
     var query by rememberSaveable { mutableStateOf("") }
+    var searchExpanded by rememberSaveable { mutableStateOf(false) }
     val typed = remember(works, type) {
         works.filter {
             when (type) {
@@ -659,10 +660,21 @@ private fun WorksLibraryScreen(items: List<MediaItem>, viewModel: GalleryViewMod
                 }
             }.toList()
     }
+    fun closeSearch() {
+        searchExpanded = false
+        query = ""
+        facet = WorkFacet.ALL
+        selectedFacet = null
+        sort = WorkSort.RECENT
+    }
+    BackHandler(enabled = searchExpanded, onBack = ::closeSearch)
     Column(Modifier.fillMaxSize()) {
         Row(
+            verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp),
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 16.dp, top = 8.dp, end = 8.dp, bottom = 8.dp),
         ) {
             WorkType.entries.forEach { value ->
                 FilterChip(
@@ -674,63 +686,74 @@ private fun WorksLibraryScreen(items: List<MediaItem>, viewModel: GalleryViewMod
                     label = { Text("${value.label} ${works.count { if (value == WorkType.COMICS) it.kind == MediaKind.IMAGE_SET else it.kind == MediaKind.VIDEO }}") },
                 )
             }
-        }
-        OutlinedTextField(
-            value = query,
-            onValueChange = { query = it },
-            leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
-            label = { Text("搜索标题、作者、标签或系列") },
-            singleLine = true,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp),
-        )
-        LazyRow(
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            items(WorkFacet.entries) { value ->
-                FilterChip(
-                    selected = facet == value,
-                    onClick = {
-                        facet = value
-                        selectedFacet = null
-                    },
-                    label = { Text(value.label) },
-                )
+            Spacer(Modifier.weight(1f))
+            IconButton(onClick = { searchExpanded = true }) {
+                Icon(Icons.Rounded.Search, contentDescription = "搜索与筛选")
             }
         }
-        if (facetValues.isNotEmpty()) {
+        if (searchExpanded) {
+            OutlinedTextField(
+                value = query,
+                onValueChange = { query = it },
+                leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
+                trailingIcon = {
+                    IconButton(onClick = ::closeSearch) {
+                        Icon(Icons.Rounded.Close, contentDescription = "关闭搜索")
+                    }
+                },
+                label = { Text("搜索标题、作者、标签或系列") },
+                singleLine = true,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp),
+            )
             LazyRow(
-                contentPadding = PaddingValues(horizontal = 16.dp),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                item {
+                items(WorkFacet.entries) { value ->
                     FilterChip(
-                        selected = selectedFacet == null,
-                        onClick = { selectedFacet = null },
-                        label = { Text("全部") },
-                    )
-                }
-                items(facetValues) { value ->
-                    FilterChip(
-                        selected = selectedFacet == value,
-                        onClick = { selectedFacet = value },
-                        label = { Text(value) },
+                        selected = facet == value,
+                        onClick = {
+                            facet = value
+                            selectedFacet = null
+                        },
+                        label = { Text(value.label) },
                     )
                 }
             }
-        }
-        LazyRow(
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            items(WorkSort.entries) { value ->
-                FilterChip(
-                    selected = sort == value,
-                    onClick = { sort = value },
-                    label = { Text(value.label) },
-                )
+            if (facetValues.isNotEmpty()) {
+                LazyRow(
+                    contentPadding = PaddingValues(horizontal = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    item {
+                        FilterChip(
+                            selected = selectedFacet == null,
+                            onClick = { selectedFacet = null },
+                            label = { Text("全部") },
+                        )
+                    }
+                    items(facetValues) { value ->
+                        FilterChip(
+                            selected = selectedFacet == value,
+                            onClick = { selectedFacet = value },
+                            label = { Text(value) },
+                        )
+                    }
+                }
+            }
+            LazyRow(
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                items(WorkSort.entries) { value ->
+                    FilterChip(
+                        selected = sort == value,
+                        onClick = { sort = value },
+                        label = { Text(value.label) },
+                    )
+                }
             }
         }
         Text("${shown.size} 部作品", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(horizontal = 18.dp))
@@ -759,7 +782,9 @@ private fun ClassifiedMediaScreen(
                     .takeIf(String::isNotBlank)
                 else -> null
             }
-        }.distinct().sortedWith(String.CASE_INSENSITIVE_ORDER)
+        }.distinct()
+            .filterNot { currentPath == null && it == "未分类" }
+            .sortedWith(String.CASE_INSENSITIVE_ORDER)
     }
     val visibleItems = remember(items, classifications, currentPath) {
         val target = currentPath ?: "未分类"
@@ -779,7 +804,7 @@ private fun ClassifiedMediaScreen(
                 FilterChip(
                     selected = currentPath == null,
                     onClick = { currentPath = null },
-                    label = { Text("目录 ${items.size}") },
+                    label = { Text("全部目录 ${items.size}") },
                 )
             }
             currentPath?.split('/')?.forEachIndexed { index, segment ->
@@ -793,71 +818,41 @@ private fun ClassifiedMediaScreen(
                 }
             }
         }
+        if (childFolders.isNotEmpty()) {
+            LazyRow(
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                items(childFolders, key = { "folder:$currentPath/$it" }) { folder ->
+                    val path = listOfNotNull(currentPath, folder).joinToString("/")
+                    val count = classifications.count { (_, paths) ->
+                        paths.any { it == path || it.startsWith("$path/") }
+                    }
+                    FilterChip(
+                        selected = false,
+                        onClick = { currentPath = path },
+                        leadingIcon = { Icon(Icons.Rounded.Folder, contentDescription = null) },
+                        label = { Text("$folder · $count") },
+                    )
+                }
+            }
+        }
         if (items.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text(emptyText, modifier = Modifier.padding(20.dp))
             }
-        } else if (visibleItems.isEmpty() && childFolders.isEmpty()) {
+        } else if (visibleItems.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text("这个目录还没有媒体")
+                Text(if (childFolders.isEmpty()) "这个目录还没有媒体" else "从上方选择文件夹")
             }
         } else {
-            LazyVerticalGrid(
-                columns = GridCells.Adaptive(142.dp),
-                contentPadding = PaddingValues(start = 12.dp, top = 8.dp, end = 12.dp, bottom = 96.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            MediaGrid(
+                items = visibleItems,
+                viewModel = viewModel,
+                onOpen = { viewModel.open(it, visibleItems) },
                 modifier = Modifier.weight(1f),
-            ) {
-                gridItems(childFolders, key = { "folder:$currentPath/$it" }) { folder ->
-                    val path = listOfNotNull(currentPath, folder).joinToString("/")
-                    val nestedItems = classifications.filter { (_, paths) ->
-                        paths.any { it == path || it.startsWith("$path/") }
-                    }.keys.toList()
-                    FolderAlbumCard(
-                        name = folder,
-                        count = nestedItems.size,
-                        preview = nestedItems.firstOrNull(),
-                        viewModel = viewModel,
-                        onClick = { currentPath = path },
-                    )
-                }
-                gridItems(visibleItems, key = MediaItem::id) { item ->
-                    MediaCard(
-                        item = item,
-                        viewModel = viewModel,
-                        onClick = { viewModel.open(item, visibleItems) },
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun FolderAlbumCard(
-    name: String,
-    count: Int,
-    preview: MediaItem?,
-    viewModel: GalleryViewModel,
-    onClick: () -> Unit,
-) {
-    Card(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
-        Box(
-            contentAlignment = Alignment.Center,
-            modifier = Modifier
-                .fillMaxWidth()
-                .aspectRatio(1.12f),
-        ) {
-            if (preview == null) {
-                Icon(Icons.Rounded.Folder, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-            } else {
-                MediaThumbnail(preview, viewModel, Modifier.fillMaxSize())
-            }
-        }
-        Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
-            Text(name, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text("$count 项", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                compact = true,
+            )
         }
     }
 }

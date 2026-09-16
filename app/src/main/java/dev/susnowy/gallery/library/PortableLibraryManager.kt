@@ -170,6 +170,9 @@ class PortableLibraryManager(
 
             常见“作者目录/NO.序号 作品名[页数-体积]/顺序图片”结构应保留原目录；Gallery 会尝试从父目录和作品目录名识别作者、标题与顺序。视频优先使用 `S01E02` 等通用集数命名。
 
+            下载器兼容规则：`JM/<纯数字 album_id>/` 识别为禁漫来源；EhViewer 的 `<gid>-<title>/` 需有 `.ehviewer` 标记；Pixiv 文件使用 `<illust_id>_p<page>`，动图转换常见 `<illust_id>_ugoira<尺寸>.webp/gif`。同一扁平目录出现多个 Pixiv 作品 ID 时保持为独立图片，不要合并成一本漫画。
+            `source:jm` / `jm:album:<id>`、`source:ehviewer` / `eh:gid:<id>`、`source:pixiv` / `pixiv:id:<id>` 是稳定的来源 Tag，Agent 整理时应保留。账号、Cookie、Token 不得写入 Library。
+
             ## 修改规则
 
             所有媒体路径必须使用相对于 Library 根目录的路径，禁止写入 Android URI、Windows 盘符或绝对路径。

@@ -188,11 +188,17 @@ class DerivationService {
         .ifBlank { "Untitled" }
 
     private fun mimeForExtension(extension: String): String = when (extension.lowercase(Locale.ROOT)) {
-        "jpg", "jpeg" -> "image/jpeg"
+        "jpg", "jpeg", "jpe", "jfif" -> "image/jpeg"
         "png" -> "image/png"
+        "apng" -> "image/apng"
         "gif" -> "image/gif"
         "webp" -> "image/webp"
         "heic", "heif" -> "image/heif"
+        "avif" -> "image/avif"
+        "svg" -> "image/svg+xml"
+        "ico" -> "image/x-icon"
+        "wbmp" -> "image/vnd.wap.wbmp"
+        "dng" -> "image/x-adobe-dng"
         else -> "application/octet-stream"
     }
 

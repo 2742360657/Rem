@@ -133,7 +133,8 @@ object FilenameMetadataParser {
     private fun String.removePrefixReleaseGroup(): String = replace(Regex("^\\[[^]]+]\\s*"), "")
 
     private val MEDIA_EXTENSIONS = setOf(
-        "jpg", "jpeg", "png", "webp", "gif", "bmp", "heic", "heif", "avif",
+        "jpg", "jpeg", "jpe", "jfif", "png", "webp", "gif", "bmp", "heic", "heif",
+        "avif", "apng", "svg", "ico", "wbmp", "dng",
         "zip", "cbz", "mp4", "mkv", "webm", "mov", "m4v", "avi",
     )
     private val GENERIC_PARENTS = setOf(

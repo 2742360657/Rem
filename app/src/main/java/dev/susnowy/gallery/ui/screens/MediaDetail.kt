@@ -199,7 +199,7 @@ fun MediaDetail(
                     MediaPager(sequence, pagerState, viewModel, Modifier.weight(1f))
                 currentItem.kind == MediaKind.VIDEO || currentItem.kind == MediaKind.PHOTO_VIDEO ->
                     VideoViewer(currentItem, currentItem.uri, viewModel, Modifier.weight(1f))
-                else -> ZoomableImage(currentItem.uri, currentItem.displayTitle, Modifier.weight(1f))
+                else -> ZoomableImage(currentItem, viewModel, Modifier.weight(1f))
             }
             MetadataSummary(currentItem)
         }
@@ -298,8 +298,8 @@ private fun MediaPager(
                     )
                 MediaKind.IMAGE, MediaKind.PHOTO, MediaKind.LIVE_PHOTO ->
                     ZoomableImage(
-                        uri = pageItem.uri,
-                        description = pageItem.displayTitle,
+                        item = pageItem,
+                        viewModel = viewModel,
                         modifier = Modifier.fillMaxSize(),
                         onZoomingChanged = { zooming ->
                             if (zooming) zoomedPage = page
@@ -327,8 +327,8 @@ private fun MediaPager(
 
 @Composable
 private fun ZoomableImage(
-    uri: String,
-    description: String,
+    item: MediaItem,
+    viewModel: GalleryViewModel,
     modifier: Modifier = Modifier,
     onZoomingChanged: (Boolean) -> Unit = {},
 ) {
@@ -342,7 +342,7 @@ private fun ZoomableImage(
         modifier = modifier
             .fillMaxWidth()
             .background(MaterialTheme.colorScheme.surfaceContainerLowest)
-            .pointerInput(uri) {
+            .pointerInput(item.uri) {
                 awaitEachGesture {
                     awaitFirstDown(requireUnconsumed = false)
                     do {
@@ -367,19 +367,39 @@ private fun ZoomableImage(
             },
         contentAlignment = Alignment.Center,
     ) {
-        AsyncImage(
-            model = uri.toUri(),
-            contentDescription = description,
-            contentScale = ContentScale.Fit,
-            modifier = Modifier
-                .fillMaxSize()
-                .graphicsLayer {
-                    scaleX = scale
-                    scaleY = scale
-                    translationX = offset.x
-                    translationY = offset.y
-                },
-        )
+        val oversizedResult by produceState<Result<android.graphics.Bitmap?>?>(
+            initialValue = null,
+            item.id,
+            item.modifiedAt,
+        ) {
+            value = runCatching { viewModel.oversizedBitmap(item, item.relativePath) }
+        }
+        val oversizedBitmap = oversizedResult?.getOrNull()
+        val imageModifier = Modifier
+            .fillMaxSize()
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+                translationX = offset.x
+                translationY = offset.y
+            }
+        if (oversizedResult == null) {
+            CircularProgressIndicator()
+        } else if (oversizedBitmap != null) {
+            Image(
+                bitmap = oversizedBitmap!!.asImageBitmap(),
+                contentDescription = item.displayTitle,
+                contentScale = ContentScale.Fit,
+                modifier = imageModifier,
+            )
+        } else {
+            AsyncImage(
+                model = item.uri.toUri(),
+                contentDescription = item.displayTitle,
+                contentScale = ContentScale.Fit,
+                modifier = imageModifier,
+            )
+        }
     }
 }
 
@@ -597,6 +617,16 @@ private fun ImageSetReader(
             pages[index].relativePath ?: pages[index].archiveEntry ?: pages[index].name
         }) { index ->
             val page = pages[index]
+            val oversizedResult by produceState<Result<android.graphics.Bitmap?>?>(
+                initialValue = null,
+                item.id,
+                page.relativePath,
+            ) {
+                value = runCatching {
+                    page.relativePath?.let { viewModel.oversizedBitmap(item, it) }
+                }
+            }
+            val oversizedBitmap = oversizedResult?.getOrNull()
             ZoomableComicPage(
                 pageKey = page.relativePath ?: page.archiveEntry ?: page.name,
                 onTap = onToggleControls,
@@ -605,6 +635,18 @@ private fun ImageSetReader(
                 },
             ) {
                 when {
+                    page.relativePath != null && oversizedResult == null -> Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(240.dp),
+                        contentAlignment = Alignment.Center,
+                    ) { CircularProgressIndicator(color = Color.White) }
+                    oversizedBitmap != null -> Image(
+                        bitmap = oversizedBitmap!!.asImageBitmap(),
+                        contentDescription = "第 ${index + 1} 页",
+                        contentScale = ContentScale.FillWidth,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
                     page.uri != null -> AsyncImage(
                         model = page.uri,
                         contentDescription = "第 ${index + 1} 页",

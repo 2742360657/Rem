@@ -30,16 +30,20 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
+import coil3.request.ImageRequest
+import coil3.size.Precision
 import dev.susnowy.gallery.model.MediaItem
 import dev.susnowy.gallery.model.MediaDomain
 import dev.susnowy.gallery.model.MediaKind
@@ -246,6 +250,7 @@ fun MediaThumbnail(
     modifier: Modifier = Modifier,
     contentScale: ContentScale = ContentScale.Crop,
 ) {
+    val context = LocalContext.current
     val thumbnail by produceState<String?>(initialValue = directPreview(item), item.id, item.coverPath) {
         if (value == null && item.coverPath != null) {
             value = runCatching { viewModel.resolvePath(item, item.coverPath) }.getOrNull()
@@ -261,10 +266,19 @@ fun MediaThumbnail(
             value = firstEntry?.let { viewModel.archiveBitmap(item, it, 640, 640) }
         }
     }
+    val thumbnailRequest = remember(context, thumbnail) {
+        thumbnail?.let {
+            ImageRequest.Builder(context)
+                .data(it)
+                .size(640, 640)
+                .precision(Precision.INEXACT)
+                .build()
+        }
+    }
     Box(modifier = modifier, contentAlignment = Alignment.Center) {
         when {
             thumbnail != null -> AsyncImage(
-                model = thumbnail,
+                model = thumbnailRequest,
                 contentDescription = item.displayTitle,
                 contentScale = contentScale,
                 modifier = Modifier.fillMaxSize(),

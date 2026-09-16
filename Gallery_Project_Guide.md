@@ -958,9 +958,33 @@ LiveAsset
 
 Gallery 不需要把 ComicInfo.xml 当自己的主格式，它只是可兼容的输入来源。
 
+## 17.2 下载器目录与来源 ID
+
+第一版离线扫描识别以下稳定结构，目录仍然是用户的真实目录，不会因识别而移动：
+
+- 禁漫 / JM：`JM/<album_id>/`，其中 `album_id` 为纯数字；如果还有一层纯数字目录，按 `photo_id` / 章节处理。也识别文件名中的 `JM<id>`。
+- EhViewer：默认下载目录 `<gid>-<title>/`，并以目录中的 `.ehviewer` 作为强校验标记；`gid` 保存为来源 ID。
+- Pixiv：从 `<illust_id>_p<page>` 识别作品和页码，从 `<illust_id>_ugoira<尺寸>` 识别动图来源。同一扁平目录包含多个 Pixiv 作品 ID 时，不得把整个目录误合并为一本漫画。
+
+机器可读 Tag 使用 `source:jm`、`jm:album:<id>`、`source:ehviewer`、
+`eh:gid:<id>`、`source:pixiv`、`pixiv:id:<id>`。这些 Tag 是将来在线 Metadata Provider 的匹配锚点。
+
+在线同步必须是显式启用的 Provider：凭据只进入 Android 安全存储，不得写入
+Library、日志或仓库。Pixiv OAuth、EhViewer Cookie，以及 JM 的域名/登录规则均可能变化，
+因此第一版只做来源识别，不把网页抓取规则硬编码进核心扫描器。
+
+## 17.3 动图和超大图片
+
+- GIF 与 Animated WebP 走动态 Drawable 解码；Android 9 及以上使用平台 `ImageDecoder`。
+- Pixiv ugoira 转换得到的 WebP/GIF 作为单一动态图片播放；原始 `_ugoira…zip` 仍视为压缩内容，不假装成标准视频。
+- SVG 使用独立矢量解码器；HEIF、AVIF、DNG、ICO、WBMP 等由系统解码能力决定。
+- 缩略图必须按视图目标尺寸解码，禁止为小卡片载入原始超高清位图。
+- 对超过 4000 万像素或单边超过 16000 像素的静态图先读取 bounds，再按 800 万解码像素预算降采样；动画不走静态 Bitmap 路径。
+- ZIP/CBZ 页面同样执行像素预算，防止超长条漫或扫描原图导致 OOM。
+
 ---
 
-## 17.2 E-Hentai / ExHentai Provider
+## 17.4 E-Hentai / ExHentai Provider
 
 可以设计独立：
 

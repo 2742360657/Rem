@@ -8,8 +8,10 @@ import dev.susnowy.gallery.model.MediaDomain
 import dev.susnowy.gallery.model.MediaKind
 import dev.susnowy.gallery.model.SourceKind
 import dev.susnowy.gallery.metadata.ComicInfoReader
+import dev.susnowy.gallery.metadata.DownloadedSourceRecognizer
 import dev.susnowy.gallery.metadata.FilenameMetadataParser
 import dev.susnowy.gallery.metadata.RecognizedMetadata
+import dev.susnowy.gallery.metadata.mergeRecognizedMetadata
 import dev.susnowy.gallery.storage.DocumentTreeStorage
 import dev.susnowy.gallery.storage.StorageEntry
 import java.util.Locale
@@ -94,7 +96,7 @@ class LibraryScanner {
             path = path,
             imageCount = images.size,
             hasChildDirectories = directories.isNotEmpty(),
-        )
+        ) && !DownloadedSourceRecognizer.containsMultiplePixivWorks(images.map(StorageEntry::name))
         if (isImageSetDirectory) {
             val sortedPages = images.sortedWith { left, right ->
                 MediaClassifier.naturalCompare(left.name, right.name)
@@ -102,8 +104,11 @@ class LibraryScanner {
             val directory = storage.entry(path)
             if (directory != null) {
                 val parentName = path.substringBeforeLast('/', "").substringAfterLast('/').takeIf(String::isNotBlank)
-                val directoryMetadata = comicInfo.fromDirectory(storage, path)
-                    ?: FilenameMetadataParser.parse(path.substringAfterLast('/'), parentName)
+                val directoryMetadata = mergeRecognizedMetadata(
+                    comicInfo.fromDirectory(storage, path),
+                    DownloadedSourceRecognizer.fromDirectory(path, files.map(StorageEntry::name)),
+                    FilenameMetadataParser.parse(path.substringAfterLast('/'), parentName),
+                ) ?: FilenameMetadataParser.parse(path.substringAfterLast('/'), parentName)
                 output += ScanCandidate(
                     relativePath = path,
                     uri = directory.uri,
@@ -162,6 +167,14 @@ class LibraryScanner {
                     longitude = captured?.longitude,
                     contentHash = contentHash(storage, image),
                     sizeOverride = image.size + (motion?.size ?: 0),
+                    recognizedMetadata = if (inPhotos) null else mergeRecognizedMetadata(
+                        DownloadedSourceRecognizer.fromFile(image.relativePath),
+                        FilenameMetadataParser.parse(
+                            image.name,
+                            image.relativePath.substringBeforeLast('/', "").substringAfterLast('/')
+                                .takeIf(String::isNotBlank),
+                        ),
+                    ),
                 )
             }
             videos.filterNot { it.relativePath in pairedVideoPaths }.forEach { video ->
@@ -196,11 +209,14 @@ class LibraryScanner {
                 sourceKind = SourceKind.ARCHIVE,
                 pageCount = count,
                 contentHash = contentHash(storage, archive),
-                recognizedMetadata = comicInfo.fromArchive(storage, archive.relativePath)
-                    ?: FilenameMetadataParser.parse(
+                recognizedMetadata = mergeRecognizedMetadata(
+                    comicInfo.fromArchive(storage, archive.relativePath),
+                    DownloadedSourceRecognizer.fromFile(archive.relativePath),
+                    FilenameMetadataParser.parse(
                         archive.name,
                         archive.relativePath.substringBeforeLast('/', "").substringAfterLast('/').takeIf(String::isNotBlank),
                     ),
+                ),
             )
         }
 

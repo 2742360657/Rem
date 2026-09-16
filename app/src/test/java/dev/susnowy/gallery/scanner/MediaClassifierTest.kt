@@ -19,6 +19,9 @@ class MediaClassifierTest {
     fun recognizesArchiveAndPhotoSemantics() {
         assertEquals(MediaKind.IMAGE_SET, MediaClassifier.kindForFile("book.cbz", null, false))
         assertEquals(MediaKind.PHOTO, MediaClassifier.kindForFile("IMG_1.HEIC", null, true))
+        assertEquals(MediaKind.IMAGE, MediaClassifier.kindForFile("animation.webp", null, false))
+        assertEquals(MediaKind.IMAGE, MediaClassifier.kindForFile("vector.svg", null, false))
+        assertEquals(MediaKind.IMAGE, MediaClassifier.kindForFile("raw.dng", null, false))
         assertEquals(MediaKind.PHOTO_VIDEO, MediaClassifier.kindForFile("VID_1.mp4", null, true))
         assertNull(MediaClassifier.kindForFile("notes.txt", "text/plain", false))
     }

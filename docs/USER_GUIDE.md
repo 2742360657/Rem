@@ -4,9 +4,10 @@
 
 1. 点击“选择文件夹”，通过 Android 系统目录选择器选择一个空目录或已有媒体目录。
 2. Gallery 会创建 `.gallery/`、`GALLERY_LIBRARY.md`、`.nomedia` 和 Schema v3；原媒体内容不会被改写。`.nomedia` 只阻止系统相册重复收录 Library 副本，不影响 Gallery 扫描。旧 Library 会在接入或扫描时先备份元数据，再做兼容升级。
-3. 扫描完成后，新发现内容进入 Inbox。`Photos/` 始终按相册媒体扫描，`Images/` 始终按单张图片扫描，`Videos/` 按作品视频扫描，`ImageSets/` 中的多图目录或 ZIP/CBZ 才会成为漫画候选；旧 Library 的普通多图叶子目录仍会兼容识别为 ImageSet。
-4. 在详情页编辑标题、作者、标签、Collection 和 Series。保存后这些信息写入 Library，而不是只留在手机数据库中。
-5. 人工修改过的元数据字段会在便携目录中标记为 `manual`，以后增加自动识别或在线元数据刷新时不得覆盖这些字段。
+3. 扫描可识别 `JM/<数字 ID>/`、EhViewer 的 `<gid>-<title>/.ehviewer` 和 Pixiv 的 `<illust_id>_pN` / `_ugoira…`。识别只读取目录与文件名，不需要站点账号。
+4. 扫描完成后，新发现内容进入 Inbox。`Photos/` 始终按相册媒体扫描，`Images/`、`Videos/` 是按真实目录浏览的普通分类媒体；`ImageSets/` 中的多图目录或 ZIP/CBZ 会成为漫画候选，动漫与影视视频推荐放在 `Anime/`、`Movies/`、`Series/` 或 `Works/`。旧 Library 的普通多图叶子目录仍会兼容识别为 ImageSet。
+5. 在详情页编辑标题、作者、标签、Collection 和 Series。保存后这些信息写入 Library，而不是只留在手机数据库中。
+6. 人工修改过的元数据字段会在便携目录中标记为 `manual`，以后增加自动识别或在线元数据刷新时不得覆盖这些字段。
 
 ## 阅读与播放
 

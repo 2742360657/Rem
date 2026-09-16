@@ -365,6 +365,9 @@ class GalleryViewModel(
         height,
     )
 
+    suspend fun oversizedBitmap(item: MediaItem, relativePath: String): Bitmap? =
+        content.decodeOversizedImage(relativePath, repository.storage(item.libraryId))
+
     suspend fun progress(item: MediaItem): PlaybackProgress? = repository.progress(item.id)
 
     fun saveProgress(item: MediaItem, page: Int = 0, positionMs: Long = 0, finished: Boolean = false) {

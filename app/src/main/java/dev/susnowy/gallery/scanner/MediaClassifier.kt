@@ -5,7 +5,8 @@ import java.util.Locale
 
 object MediaClassifier {
     private val imageExtensions = setOf(
-        "jpg", "jpeg", "png", "webp", "gif", "bmp", "heic", "heif", "avif", "apng",
+        "jpg", "jpeg", "jpe", "jfif", "png", "webp", "gif", "bmp", "heic", "heif",
+        "avif", "apng", "svg", "ico", "wbmp", "dng",
     )
     private val videoExtensions = setOf(
         "mp4", "mkv", "webm", "mov", "m4v", "avi", "3gp", "ts", "m2ts",

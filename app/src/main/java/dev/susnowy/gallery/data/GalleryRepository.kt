@@ -17,6 +17,8 @@ import dev.susnowy.gallery.media.ImagePage
 import dev.susnowy.gallery.media.ImageSetOrderResult
 import dev.susnowy.gallery.media.ImageSetOrderService
 import dev.susnowy.gallery.metadata.PortableMetadataStore
+import dev.susnowy.gallery.metadata.FieldSource
+import dev.susnowy.gallery.metadata.MetadataField
 import dev.susnowy.gallery.metadata.withManualEdits
 import dev.susnowy.gallery.model.LibraryInspection
 import dev.susnowy.gallery.model.LibraryRegistration
@@ -162,6 +164,9 @@ class GalleryRepository(context: Context) {
                 val id = metadata?.id ?: local?.id ?: UUID.randomUUID().toString()
                 val trashEntry = state.trash.firstOrNull { it.itemId == id }
                 val recognized = candidate.recognizedMetadata
+                val fieldSources = metadata?.fieldSources ?: local?.fieldSources.orEmpty()
+                fun isManual(field: String): Boolean =
+                    FieldSource.isManual(fieldSources[field])
                 val recognizedSeries = recognized?.series?.let { title ->
                     dev.susnowy.gallery.model.SeriesRef(
                         id = UUID.nameUUIDFromBytes("$libraryId:$title".encodeToByteArray()).toString(),
@@ -182,8 +187,12 @@ class GalleryRepository(context: Context) {
                     // portable v3 catalog explicitly records the user's choice.
                     domain = metadata?.domain ?: candidate.domain,
                     sourceKind = candidate.sourceKind,
-                    displayTitle = metadata?.displayTitle ?: recognized?.title
-                        ?: local?.displayTitle ?: candidate.suggestedTitle,
+                    displayTitle = when {
+                        metadata != null && isManual(MetadataField.DISPLAY_TITLE) -> metadata.displayTitle
+                        recognized?.title != null -> recognized.title
+                        metadata != null -> metadata.displayTitle
+                        else -> local?.displayTitle ?: candidate.suggestedTitle
+                    },
                     originalTitle = metadata?.originalTitle ?: candidate.suggestedTitle,
                     mimeType = candidate.mimeType,
                     size = candidate.size,
@@ -193,13 +202,27 @@ class GalleryRepository(context: Context) {
                     latitude = candidate.latitude ?: local?.latitude,
                     longitude = candidate.longitude ?: local?.longitude,
                     pageCount = candidate.pageCount,
-                    authors = metadata?.authors ?: recognized?.authors?.takeIf { it.isNotEmpty() }
-                        ?: local?.authors.orEmpty(),
-                    tags = metadata?.tags ?: recognized?.let {
-                        it.tags + listOfNotNull(it.language?.let { language -> "language:$language" })
-                    }?.takeIf { it.isNotEmpty() } ?: local?.tags.orEmpty(),
+                    authors = when {
+                        metadata != null && isManual(MetadataField.AUTHORS) -> metadata.authors
+                        !recognized?.authors.isNullOrEmpty() -> recognized?.authors.orEmpty()
+                        metadata != null -> metadata.authors
+                        else -> local?.authors.orEmpty()
+                    },
+                    tags = if (metadata != null && isManual(MetadataField.TAGS)) {
+                        metadata.tags
+                    } else {
+                        (
+                            (metadata?.tags ?: local?.tags.orEmpty()) + recognized?.tags.orEmpty() +
+                                listOfNotNull(recognized?.language?.let { "language:$it" })
+                            ).distinct()
+                    },
                     collections = metadata?.collections ?: local?.collections.orEmpty(),
-                    series = metadata?.series ?: recognizedSeries ?: local?.series,
+                    series = when {
+                        metadata != null && isManual(MetadataField.SERIES) -> metadata.series
+                        recognizedSeries != null -> recognizedSeries
+                        metadata != null -> metadata.series
+                        else -> local?.series
+                    },
                     coverPath = metadata?.coverPath ?: candidate.coverPath ?: local?.coverPath,
                     secondaryPath = metadata?.secondaryPath ?: candidate.secondaryPath ?: local?.secondaryPath,
                     favorite = metadata?.favorite ?: local?.favorite ?: false,
@@ -208,7 +231,7 @@ class GalleryRepository(context: Context) {
                     deletedAt = trashEntry?.deletedAt?.let(java.time.Instant::parse)?.toEpochMilli(),
                     needsRepair = false,
                     revision = metadata?.revision ?: local?.revision ?: 0,
-                    fieldSources = metadata?.fieldSources ?: local?.fieldSources.orEmpty(),
+                    fieldSources = fieldSources,
                 )
                 database.upsertMedia(item)
             }
