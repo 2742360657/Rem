@@ -288,7 +288,9 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
      * A scan of a large Library produces tens of thousands of rows; committing each one
      * separately costs a journal flush per row, which on a WAL database is the dominant
      * cost of indexing. Rows the scan did not find are flagged in the same transaction,
-     * so a scan that fails half way cannot leave a partially updated index.
+     * so a scan that fails half way cannot leave a partially updated index. Missing-file
+     * detection reads only identity and path columns; it must not decode the full media
+     * table (including portable metadata JSON) a second time after the repository merge.
      */
     @Synchronized
     fun replaceScannedMedia(libraryId: String, items: List<MediaItem>, foundPaths: Set<String>) {
@@ -297,10 +299,25 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
         try {
             items.forEach { item -> upsertMediaRow(database, item) }
             val missing = ContentValues().apply { put("needs_repair", 1) }
-            media(libraryId).forEach { existing ->
-                if (existing.relativePath !in foundPaths && !existing.trashed) {
-                    database.update("media", missing, "id = ?", arrayOf(existing.id))
+            val missingIds = database.query(
+                "media",
+                arrayOf("id", "relative_path"),
+                "library_id = ? AND trashed = 0",
+                arrayOf(libraryId),
+                null,
+                null,
+                null,
+            ).use { cursor ->
+                buildList(cursor.count) {
+                    while (cursor.moveToNext()) {
+                        if (cursor.string("relative_path") !in foundPaths) {
+                            add(cursor.string("id"))
+                        }
+                    }
                 }
+            }
+            missingIds.forEach { itemId ->
+                database.update("media", missing, "id = ?", arrayOf(itemId))
             }
             database.setTransactionSuccessful()
         } finally {
