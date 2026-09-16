@@ -9,6 +9,8 @@ import dev.susnowy.gallery.model.UnsupportedSchemaException
 import java.time.Instant
 import java.util.UUID
 import kotlinx.serialization.SerializationException
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
@@ -19,6 +21,12 @@ import kotlinx.serialization.json.Json
 class InitializationInProgressException(cause: Throwable? = null) : IllegalStateException(
     "该目录正在被另一个 Rem 实例初始化，请稍后重试",
     cause,
+)
+
+/** Reads only the declared version out of an existing `schema/v*.json` document. */
+@Serializable
+private data class SchemaVersion(
+    @SerialName("schema_version") val schemaVersion: Int = 0,
 )
 
 class PortableLibraryManager(
@@ -60,13 +68,29 @@ class PortableLibraryManager(
      * could see "not initialized yet" and create a competing identity. The window is
      * closed by claiming [INIT_LOCK_FILE] first: creation is atomic at the provider, so
      * exactly one caller wins and the others are told to retry.
+     *
+     * A directory that already carries a compatible [SCHEMA_FILE] or [GUIDE_FILE] is
+     * *adopted* rather than rejected: those files are Rem's own, and their presence means
+     * the identity was lost — a deleted `.gallery/library.json`, an interrupted first
+     * attach, a hand-copied folder — not that the user has to clear them out by hand.
+     * Only a document this client could not write safely is refused.
      */
     fun initialize(name: String): PortableLibrary {
         check(access.find(LIBRARY_JSON) == null) { "Library 已经初始化" }
-        val reservedConflicts = listOf(GUIDE_FILE, SCHEMA_FILE).filter { access.find(it) != null }
-        check(reservedConflicts.isEmpty()) {
-            "目录中已有 Rem 保留文件：${reservedConflicts.joinToString()}。为避免覆盖，请先确认或重命名这些文件"
+        val existingSchema = access.find(SCHEMA_FILE)
+        if (existingSchema != null) {
+            val declared = runCatching {
+                json.decodeFromString<SchemaVersion>(access.openInput(existingSchema)
+                    .bufferedReader(Charsets.UTF_8).use { it.readText() }).schemaVersion
+            }.getOrNull()
+            if (declared != null && declared > CURRENT_SCHEMA_VERSION) {
+                throw UnsupportedSchemaException(
+                    "目录中的 Schema v$declared 高于本客户端支持的版本，已拒绝写入",
+                )
+            }
         }
+        val hasGuide = access.find(GUIDE_FILE) != null
+
         claimInitializationLock()
         REQUIRED_DIRECTORIES.forEach(access::ensureDirectory)
         val now = Instant.now().toString()
@@ -78,7 +102,9 @@ class PortableLibraryManager(
         )
         ensureMediaStoreIgnored()
         writeAtomically(SCHEMA_FILE, schemaDocument(), "application/json")
-        writeAtomically(GUIDE_FILE, libraryGuide(library), "text/markdown")
+        // A guide that is already present is the user's copy of the Library rules. Adopting
+        // the directory must not silently reset a document they may have edited.
+        if (!hasGuide) writeAtomically(GUIDE_FILE, libraryGuide(library), "text/markdown")
         // library.json is the completion marker and must be committed last.
         writeAtomically(LIBRARY_JSON, json.encodeToString(library), "application/json")
         return library

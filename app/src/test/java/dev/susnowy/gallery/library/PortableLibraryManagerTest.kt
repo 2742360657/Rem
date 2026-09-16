@@ -123,15 +123,49 @@ class PortableLibraryManagerTest {
     }
 
     @Test
-    fun initializationNeverOverwritesReservedUserFile() {
+    fun adoptsADirectoryWhoseGuideSurvivedButIdentityDidNot() {
+        // The state a lost `.gallery/library.json` leaves behind. The guide is Rem's own
+        // document, so a fresh identity is written around it instead of refusing to attach.
         val access = MemoryDocumentAccess().apply {
-            files[PortableLibraryManager.GUIDE_FILE] = "user content".encodeToByteArray()
+            files[PortableLibraryManager.GUIDE_FILE] = "# 用户自己的库说明".encodeToByteArray()
         }
 
-        assertThrows(IllegalStateException::class.java) {
+        val library = PortableLibraryManager(access).initialize("Library")
+
+        assertTrue(access.files.containsKey(PortableLibraryManager.LIBRARY_JSON))
+        assertTrue(PortableLibraryManager(access).inspect() is LibraryInspection.Valid)
+        // Adopting must not reset a document the user may have edited.
+        assertEquals(
+            "# 用户自己的库说明",
+            access.files.getValue(PortableLibraryManager.GUIDE_FILE).decodeToString(),
+        )
+        assertEquals(library.libraryId, (PortableLibraryManager(access).inspect() as LibraryInspection.Valid).library.libraryId)
+    }
+
+    @Test
+    fun adoptsADirectoryWhoseSchemaSurvivedAndRegeneratesTheGuide() {
+        val access = MemoryDocumentAccess().apply {
+            files[PortableLibraryManager.SCHEMA_FILE] =
+                """{"schema_version":3}""".encodeToByteArray()
+        }
+
+        PortableLibraryManager(access).initialize("Library")
+
+        assertTrue(access.files.containsKey(PortableLibraryManager.GUIDE_FILE))
+        assertTrue(PortableLibraryManager(access).inspect() is LibraryInspection.Valid)
+    }
+
+    @Test
+    fun adoptionStillRefusesASchemaFromTheFuture() {
+        val access = MemoryDocumentAccess().apply {
+            files[PortableLibraryManager.SCHEMA_FILE] =
+                """{"schema_version":99}""".encodeToByteArray()
+        }
+
+        assertThrows(UnsupportedSchemaException::class.java) {
             PortableLibraryManager(access).initialize("Library")
         }
-        assertEquals("user content", access.files.getValue(PortableLibraryManager.GUIDE_FILE).decodeToString())
+        assertTrue(!access.files.containsKey(PortableLibraryManager.LIBRARY_JSON))
     }
 
     @Test
