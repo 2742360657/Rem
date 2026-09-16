@@ -35,9 +35,10 @@ Works/                  # 其他作品
 
 Rem 是一个 Android 端、本地优先的媒体库 / 阅读器 / 播放器。
 
-用户可见产品名固定为 **Rem**。为保证旧版可以原地升级、已有 Library 继续接入，
-`dev.susnowy.gallery`、Kotlin 包名、`.gallery/`、`GALLERY_LIBRARY.md` 和 Gallery Schema
-属于兼容性标识，不能仅因品牌改名而迁移或重命名。
+用户可见产品名固定为 **Rem**，正式应用 ID 为 `com.susnowy.rem`。它与早期
+`dev.susnowy.gallery` 开发版是两个 Android 应用，本机索引和 SAF 授权不会自动迁移；
+重新接入实体 Library 后可恢复便携状态。Kotlin 包名、`.gallery/`、`GALLERY_LIBRARY.md`
+和 Gallery Schema 属于 Library 兼容性标识，不能仅因品牌改名而迁移或重命名。
 
 第一阶段主要处理：
 
