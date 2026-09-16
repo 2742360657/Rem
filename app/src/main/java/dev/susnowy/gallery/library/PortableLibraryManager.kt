@@ -173,6 +173,14 @@ class PortableLibraryManager(
             下载器兼容规则：`JM/<纯数字 album_id>/` 识别为禁漫来源；EhViewer 的 `<gid>-<title>/` 需有 `.ehviewer` 标记；Pixiv 文件使用 `<illust_id>_p<page>`，动图转换常见 `<illust_id>_ugoira<尺寸>.webp/gif`。同一扁平目录出现多个 Pixiv 作品 ID 时保持为独立图片，不要合并成一本漫画。
             `source:jm` / `jm:album:<id>`、`source:ehviewer` / `eh:gid:<id>`、`source:pixiv` / `pixiv:id:<id>` 是稳定的来源 Tag，Agent 整理时应保留。账号、Cookie、Token 不得写入 Library。
 
+            ## Agent 辅助识别与同步
+
+            当前版本不由 App 抓取站点或自动联网同步。用户可以明确要求 Agent 根据上述来源 Tag、来源 ID、目录和当前站点信息，补全或校正作品的标题、作者、标签、Series 等元数据。
+            Agent 写入前必须先读取当前条目及其 `field_sources`，逐字段合并，禁止用在线结果替换整条记录。任何来源为 `manual` 的字段都不得修改、清空、追加、翻译、规范化或去重。
+            `tags` 是字段级保护：只要 `field_sources.tags` 为 `manual`，整组标签必须原样保留；未锁定时可以同步并去重，但必须保留 `source:*` 和来源 ID Tag。
+            Agent 获取且已可靠匹配的字段应标记为 `provider:<来源>`；只有用户明确指定的值才标为 `manual`。低置信度、多个候选或来源不可访问时保持原值并请求用户确认，不得猜测。
+            批量写入前先备份 `.gallery`；不得随意改写 `id`、相对路径、`revision`、时间戳或事务状态。完成后让 App 重新扫描，并报告未匹配、冲突与实际变更。账号、Cookie、Token 只能在用户授权的会话中临时使用，不能保存到 Library、日志或 Git。
+
             ## 修改规则
 
             所有媒体路径必须使用相对于 Library 根目录的路径，禁止写入 Android URI、Windows 盘符或绝对路径。

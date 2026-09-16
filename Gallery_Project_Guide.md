@@ -983,11 +983,25 @@ Gallery 不需要把 ComicInfo.xml 当自己的主格式，它只是可兼容的
 机器可读 Tag 使用 `source:jm`、`jm:album:<id>`、`source:ehviewer`、
 `eh:gid:<id>`、`source:pixiv`、`pixiv:id:<id>`。这些 Tag 是将来在线 Metadata Provider 的匹配锚点。
 
-在线同步必须是显式启用的 Provider：凭据只进入 Android 安全存储，不得写入
-Library、日志或仓库。Pixiv OAuth、EhViewer Cookie，以及 JM 的域名/登录规则均可能变化，
-因此第一版只做来源识别，不把网页抓取规则硬编码进核心扫描器。
+第一版不在 App 内实现站点抓取或自动联网同步。需要补全、校正标题、作者、标签、系列等
+信息时，由用户明确要求 Agent 根据稳定来源 ID、目录和当前站点信息进行一次性识别与同步；
+不要把容易失效的网页抓取规则硬编码进核心扫描器。
 
-## 17.3 动图和超大图片
+## 17.3 Agent 辅助识别与同步
+
+Agent 处理 Library 前必须先阅读根目录的 `GALLERY_LIBRARY.md`、Schema 和当前条目，按字段合并，
+不得把在线结果整条覆盖到本地条目：
+
+1. 先使用 `source:*` 与来源 ID Tag 匹配；缺少可靠 ID 时可参考目录名、文件名和页数，但低置信度或多个候选必须交给用户确认。
+2. 每个字段分别检查 `field_sources`。值为 `manual` 的字段是永久人工锁，Agent 不得修改、清空、追加、翻译、规范化或去重。
+3. 没有人工锁的字段可以用已确认的来源数据补全或刷新，并把来源记为 `provider:<id>`；用户明确指定的值才标为 `manual`。
+4. `tags` 当前是字段级保护而不是逐 Tag 保护：只要 `field_sources.tags == "manual"`，整组标签保持原样。未锁定时可以规范化、去重并同步，但必须保留稳定的 `source:*` 和来源 ID Tag。
+5. `id`、相对路径、`revision`、时间戳和事务状态不得由 Agent 随意重写。批量修改前备份 `.gallery` 元数据，完成后让 App 重新扫描并向用户报告匹配失败、冲突和实际变更。
+6. 账号、Cookie、Token 不得写入 Library、日志或 Git。Agent 只在用户授权的会话中临时使用；无法安全访问来源时保持现有数据不变。
+
+这条流程是当前推荐的“同步”方式。将来即使增加 App 内 Provider，也必须复用相同的字段来源和人工锁规则。
+
+## 17.4 动图和超大图片
 
 - GIF 与 Animated WebP 走动态 Drawable 解码；Android 9 及以上使用平台 `ImageDecoder`。
 - Pixiv ugoira 转换得到的 WebP/GIF 作为单一动态图片播放；原始 `_ugoira…zip` 仍视为压缩内容，不假装成标准视频。
@@ -998,7 +1012,7 @@ Library、日志或仓库。Pixiv OAuth、EhViewer Cookie，以及 JM 的域名/
 
 ---
 
-## 17.4 E-Hentai / ExHentai Provider
+## 17.5 E-Hentai / ExHentai Provider（后续可选）
 
 可以设计独立：
 

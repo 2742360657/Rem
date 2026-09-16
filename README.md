@@ -12,7 +12,7 @@ Gallery 是一个 Android 本地优先媒体库。用户通过系统目录选择
 
 扫描器额外识别常见下载结构：`JM/<纯数字 ID>/`、EhViewer 的
 `<gid>-<title>/.ehviewer`，以及 Pixiv 的 `<illust_id>_pN` / `_ugoira…`。
-识别结果保留稳定来源 ID，后续可接入需要用户授权的在线元数据 Provider；当前版本不会保存或内置站点 Cookie。
+识别结果保留稳定来源 ID。当前版本不内置站点抓取；需要补全标题、作者或标签时，可让 Agent 按 Library 自带规则辅助同步，所有标记为 `manual` 的人工字段始终保持不变，站点 Cookie 也不会写入 Library。
 
 图片显示支持 GIF、Animated WebP（Android 9+）、SVG，以及系统可解码的
 HEIF/AVIF/DNG 等格式。缩略图固定按显示尺寸解码；超大静态图会先探测尺寸并安全降采样，避免整张原图直接解码造成内存溢出。

@@ -8,6 +8,7 @@
 4. 扫描完成后，新发现内容进入 Inbox。`Photos/` 始终按相册媒体扫描，`Images/`、`Videos/` 是按真实目录浏览的普通分类媒体；`ImageSets/` 中的多图目录或 ZIP/CBZ 会成为漫画候选，动漫与影视视频推荐放在 `Anime/`、`Movies/`、`Series/` 或 `Works/`。旧 Library 的普通多图叶子目录仍会兼容识别为 ImageSet。
 5. 在详情页编辑标题、作者、标签、Collection 和 Series。保存后这些信息写入 Library，而不是只留在手机数据库中。
 6. 人工修改过的元数据字段会在便携目录中标记为 `manual`，以后增加自动识别或在线元数据刷新时不得覆盖这些字段。
+7. 当前版本不在 App 内抓取站点。以后需要同步 JM、EhViewer/E-Hentai 或 Pixiv 的标题、作者和标签时，可让 Agent 先阅读 Library 根目录的 `GALLERY_LIBRARY.md` 再按来源 ID 辅助整理；Agent 只能更新未标记为 `manual` 的字段。标签采用整组字段锁定，人工改过标签后 Agent 不得擅自追加或改写。
 
 ## 阅读与播放
 
