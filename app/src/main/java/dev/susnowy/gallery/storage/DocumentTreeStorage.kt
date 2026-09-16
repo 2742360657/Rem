@@ -76,6 +76,8 @@ class DocumentTreeStorage(
             var walked = ""
             for (segment in normalized.pathParts()) {
                 walked = if (walked.isEmpty()) segment else "$walked/$segment"
+                val parentPath = walked.substringBeforeLast('/', "")
+                val parentWasListed = cache.children(current.documentId) != null
                 val existing = resolveChildLocked(walked, segment)
                 current = when {
                     existing != null -> {
@@ -85,9 +87,15 @@ class DocumentTreeStorage(
                         existing
                     }
                     // The directory may exist on disk while this instance has never
-                    // listed its parent; refresh the parent once before creating.
+                    // observed an external change; refresh a previously cached parent
+                    // once before creating. A first-time miss has just queried the
+                    // provider and does not need a second round-trip.
                     else -> {
-                        val discovered = lookupChildLocked(walked, segment)
+                        val discovered = if (parentWasListed) {
+                            refreshChildLocked(parentPath, segment)
+                        } else {
+                            null
+                        }
                         when {
                             discovered != null && discovered.isDirectory -> discovered
                             discovered != null ->
@@ -141,7 +149,7 @@ class DocumentTreeStorage(
         }
         val created = createDocumentChild(parent, name, mimeType)
             ?: throw FileNotFoundException("无法创建文件 $normalized")
-        return created.toLibraryDocument(normalized)
+        return created.toLibraryDocument(created.relativePath)
     }
 
     /**
@@ -323,9 +331,19 @@ class DocumentTreeStorage(
         return cache.child(parentPath, name)
     }
 
-    private fun resolveChildLocked(parentPath: String, name: String): StorageNode? {
+    /** Re-queries one known parent after an external mutation may have made its listing stale. */
+    private fun refreshChildLocked(parentPath: String, name: String): StorageNode? {
+        val parent = cache.path(parentPath) ?: return null
+        if (!parent.isDirectory) return null
+        cache.forgetChildren(parent.documentId)
+        childrenOfLocked(parent)
+        return cache.child(parentPath, name)
+    }
+
+    private fun resolveChildLocked(childPath: String, name: String): StorageNode? {
+        val parentPath = childPath.substringBeforeLast('/', "")
         cache.child(parentPath, name)?.let { return it }
-        val parent = cache.path(parentPath.substringBeforeLast('/', "")) ?: return null
+        val parent = cache.path(parentPath) ?: return null
         if (!parent.isDirectory) return null
         childrenOfLocked(parent)
         return cache.child(parentPath, name)
