@@ -22,6 +22,7 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Close
@@ -32,12 +33,14 @@ import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.Folder
+import androidx.compose.material.icons.rounded.Home
 import androidx.compose.material.icons.rounded.Inbox
 import androidx.compose.material.icons.rounded.PhotoLibrary
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Restore
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.SelectAll
+import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -86,6 +89,7 @@ import dev.susnowy.gallery.ui.GalleryViewModel
 import dev.susnowy.gallery.ui.components.MediaCard
 import dev.susnowy.gallery.ui.components.MediaGrid
 import dev.susnowy.gallery.ui.components.MediaThumbnail
+import dev.susnowy.gallery.ui.components.RightSidePanel
 import dev.susnowy.gallery.ui.components.label
 
 @Composable
@@ -143,13 +147,13 @@ fun GalleryScreenContent(
             onOpenAppSettings = onOpenAppSettings,
         )
         AppScreen.IMAGES -> ImagesScreen(visible.filter { it.kind == MediaKind.IMAGE }, viewModel)
-        AppScreen.IMAGE_SETS -> ClassifiedMediaScreen(
+        AppScreen.IMAGE_SETS -> RememberingClassifiedMediaScreen(
             items = visible.filter { it.kind == MediaKind.IMAGE_SET },
             viewModel = viewModel,
             rootDirectory = "ImageSets",
             emptyText = "包含多张图片的叶子目录和 ZIP/CBZ 会显示在这里",
         )
-        AppScreen.VIDEOS -> ClassifiedMediaScreen(
+        AppScreen.VIDEOS -> RememberingClassifiedMediaScreen(
             items = visible.filter { it.kind == MediaKind.VIDEO },
             viewModel = viewModel,
             rootDirectory = "Videos",
@@ -556,6 +560,8 @@ private fun ClassifiedLibraryScreen(items: List<MediaItem>, viewModel: GalleryVi
     val imageCount = classified.count { it.kind == MediaKind.IMAGE }
     val videoCount = classified.count { it.kind == MediaKind.VIDEO }
     var type by rememberSaveable { mutableStateOf(ClassifiedType.IMAGES) }
+    var imagePath by rememberSaveable { mutableStateOf<String?>(null) }
+    var videoPath by rememberSaveable { mutableStateOf<String?>(null) }
     val shown = remember(classified, type) {
         classified.filter {
             when (type) {
@@ -589,6 +595,10 @@ private fun ClassifiedLibraryScreen(items: List<MediaItem>, viewModel: GalleryVi
             } else {
                 "这里按真实目录显示普通视频；动漫和影视作品在“漫画 / 动漫”中"
             },
+            currentPath = if (type == ClassifiedType.IMAGES) imagePath else videoPath,
+            onPathChange = { path ->
+                if (type == ClassifiedType.IMAGES) imagePath = path else videoPath = path
+            },
             modifier = Modifier.weight(1f),
         )
     }
@@ -606,7 +616,7 @@ private fun WorksLibraryScreen(items: List<MediaItem>, viewModel: GalleryViewMod
     var selectedFacet by rememberSaveable { mutableStateOf<String?>(null) }
     var sort by rememberSaveable { mutableStateOf(WorkSort.RECENT) }
     var query by rememberSaveable { mutableStateOf("") }
-    var searchExpanded by rememberSaveable { mutableStateOf(false) }
+    var showTools by rememberSaveable { mutableStateOf(false) }
     val typed = remember(works, type) {
         works.filter {
             when (type) {
@@ -660,14 +670,12 @@ private fun WorksLibraryScreen(items: List<MediaItem>, viewModel: GalleryViewMod
                 }
             }.toList()
     }
-    fun closeSearch() {
-        searchExpanded = false
+    fun clearSearch() {
         query = ""
         facet = WorkFacet.ALL
         selectedFacet = null
         sort = WorkSort.RECENT
     }
-    BackHandler(enabled = searchExpanded, onBack = ::closeSearch)
     Column(Modifier.fillMaxSize()) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -687,77 +695,87 @@ private fun WorksLibraryScreen(items: List<MediaItem>, viewModel: GalleryViewMod
                 )
             }
             Spacer(Modifier.weight(1f))
-            IconButton(onClick = { searchExpanded = true }) {
+            IconButton(onClick = { showTools = true }) {
                 Icon(Icons.Rounded.Search, contentDescription = "搜索与筛选")
             }
         }
-        if (searchExpanded) {
-            OutlinedTextField(
-                value = query,
-                onValueChange = { query = it },
-                leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
-                trailingIcon = {
-                    IconButton(onClick = ::closeSearch) {
-                        Icon(Icons.Rounded.Close, contentDescription = "关闭搜索")
-                    }
-                },
-                label = { Text("搜索标题、作者、标签或系列") },
-                singleLine = true,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp),
+        if (query.isNotBlank() || selectedFacet != null || facet != WorkFacet.ALL || sort != WorkSort.RECENT) {
+            Text(
+                "已启用搜索或筛选 · ${shown.size} 个结果",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(horizontal = 18.dp),
             )
-            LazyRow(
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                items(WorkFacet.entries) { value ->
-                    FilterChip(
-                        selected = facet == value,
-                        onClick = {
-                            facet = value
-                            selectedFacet = null
-                        },
-                        label = { Text(value.label) },
-                    )
-                }
-            }
-            if (facetValues.isNotEmpty()) {
-                LazyRow(
-                    contentPadding = PaddingValues(horizontal = 16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    item {
-                        FilterChip(
-                            selected = selectedFacet == null,
-                            onClick = { selectedFacet = null },
-                            label = { Text("全部") },
-                        )
-                    }
-                    items(facetValues) { value ->
-                        FilterChip(
-                            selected = selectedFacet == value,
-                            onClick = { selectedFacet = value },
-                            label = { Text(value) },
-                        )
-                    }
-                }
-            }
-            LazyRow(
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                items(WorkSort.entries) { value ->
-                    FilterChip(
-                        selected = sort == value,
-                        onClick = { sort = value },
-                        label = { Text(value.label) },
-                    )
-                }
-            }
         }
         Text("${shown.size} 部作品", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(horizontal = 18.dp))
         MediaGrid(shown, viewModel, { viewModel.open(it, shown) }, Modifier.weight(1f))
+    }
+    RightSidePanel(
+        visible = showTools,
+        title = "搜索、索引与排序",
+        onDismiss = { showTools = false },
+    ) {
+        Text(
+            "筛选仅影响当前作品页，不会修改文件或元数据。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        OutlinedTextField(
+            value = query,
+            onValueChange = { query = it },
+            leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
+            label = { Text("标题、作者、标签或系列") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Text("索引", style = MaterialTheme.typography.titleSmall)
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            items(WorkFacet.entries) { value ->
+                FilterChip(
+                    selected = facet == value,
+                    onClick = {
+                        facet = value
+                        selectedFacet = null
+                    },
+                    label = { Text(value.label) },
+                )
+            }
+        }
+        if (facetValues.isNotEmpty()) {
+            Text("${facet.label}值", style = MaterialTheme.typography.titleSmall)
+            FilterChip(
+                selected = selectedFacet == null,
+                onClick = { selectedFacet = null },
+                label = { Text("全部") },
+            )
+            facetValues.take(MAX_CONTEXT_FACETS).forEach { value ->
+                FilterChip(
+                    selected = selectedFacet == value,
+                    onClick = { selectedFacet = value },
+                    label = { Text(value, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+            if (facetValues.size > MAX_CONTEXT_FACETS) {
+                Text(
+                    "索引较多，仅显示前 $MAX_CONTEXT_FACETS 项；可直接在上方搜索。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        Text("排序", style = MaterialTheme.typography.titleSmall)
+        WorkSort.entries.forEach { value ->
+            FilterChip(
+                selected = sort == value,
+                onClick = { sort = value },
+                label = { Text(value.label) },
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+        OutlinedButton(onClick = ::clearSearch, modifier = Modifier.fillMaxWidth()) {
+            Text("清除搜索与筛选")
+        }
     }
 }
 
@@ -768,8 +786,10 @@ private fun ClassifiedMediaScreen(
     rootDirectory: String,
     emptyText: String,
     modifier: Modifier = Modifier,
+    currentPath: String? = null,
+    onPathChange: (String?) -> Unit = {},
 ) {
-    var currentPath by rememberSaveable(rootDirectory) { mutableStateOf<String?>(null) }
+    var showTools by rememberSaveable(rootDirectory) { mutableStateOf(false) }
     val classifications = remember(items, rootDirectory) {
         items.associateWith { item -> item.classificationPaths(rootDirectory) }
     }
@@ -792,30 +812,41 @@ private fun ClassifiedMediaScreen(
     }
 
     BackHandler(enabled = currentPath != null) {
-        currentPath = currentPath?.substringBeforeLast('/', "")?.takeIf(String::isNotBlank)
+        onPathChange(currentPath?.substringBeforeLast('/', "")?.takeIf(String::isNotBlank))
     }
 
     Column(modifier.fillMaxSize()) {
-        LazyRow(
-            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth(),
         ) {
-            item {
-                FilterChip(
-                    selected = currentPath == null,
-                    onClick = { currentPath = null },
-                    label = { Text("全部目录 ${items.size}") },
-                )
-            }
-            currentPath?.split('/')?.forEachIndexed { index, segment ->
-                val target = currentPath!!.split('/').take(index + 1).joinToString("/")
-                item(target) {
+            LazyRow(
+                contentPadding = PaddingValues(start = 12.dp, top = 8.dp, bottom = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.weight(1f),
+            ) {
+                item {
                     FilterChip(
-                        selected = index == currentPath!!.count { it == '/' },
-                        onClick = { currentPath = target },
-                        label = { Text(segment) },
+                        selected = currentPath == null,
+                        onClick = { onPathChange(null) },
+                        label = { Text("全部目录 ${items.size}") },
                     )
                 }
+                currentPath?.let { path ->
+                    path.split('/').forEachIndexed { index, segment ->
+                        val target = path.split('/').take(index + 1).joinToString("/")
+                        item(target) {
+                            FilterChip(
+                                selected = index == path.count { it == '/' },
+                                onClick = { onPathChange(target) },
+                                label = { Text(segment) },
+                            )
+                        }
+                    }
+                }
+            }
+            IconButton(onClick = { showTools = true }) {
+                Icon(Icons.Rounded.Tune, contentDescription = "目录工具")
             }
         }
         if (childFolders.isNotEmpty()) {
@@ -830,7 +861,7 @@ private fun ClassifiedMediaScreen(
                     }
                     FilterChip(
                         selected = false,
-                        onClick = { currentPath = path },
+                        onClick = { onPathChange(path) },
                         leadingIcon = { Icon(Icons.Rounded.Folder, contentDescription = null) },
                         label = { Text("$folder · $count") },
                     )
@@ -855,6 +886,64 @@ private fun ClassifiedMediaScreen(
             )
         }
     }
+    RightSidePanel(
+        visible = showTools,
+        title = "目录与视图",
+        onDismiss = { showTools = false },
+    ) {
+        Text("当前路径", style = MaterialTheme.typography.labelLarge)
+        Text(
+            currentPath?.let { "Library / $it" } ?: "Library / 全部目录",
+            style = MaterialTheme.typography.bodyMedium,
+        )
+        Text(
+            "${visibleItems.size} 项媒体 · ${childFolders.size} 个子文件夹",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        FilledTonalButton(
+            onClick = { onPathChange(null) },
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Icon(Icons.Rounded.Home, contentDescription = null)
+            Text(" 回到全部目录")
+        }
+        if (currentPath != null) {
+            FilledTonalButton(
+                onClick = {
+                    onPathChange(currentPath?.substringBeforeLast('/', "")?.takeIf(String::isNotBlank))
+                },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = null)
+                Text(" 返回上一级")
+            }
+        }
+        if (childFolders.isNotEmpty()) {
+            Text("子文件夹", style = MaterialTheme.typography.titleSmall)
+            childFolders.forEach { folder ->
+                val path = listOfNotNull(currentPath, folder).joinToString("/")
+                val count = classifications.count { (_, paths) ->
+                    paths.any { it == path || it.startsWith("$path/") }
+                }
+                FilledTonalButton(
+                    onClick = {
+                        onPathChange(path)
+                        showTools = false
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Icon(Icons.Rounded.Folder, contentDescription = null)
+                    Text(" $folder · $count", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            }
+        }
+        Text(
+            "点按打开；长按任意缩略图可编辑信息、收藏、复制或移入回收站。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
 }
 
 private fun MediaItem.classificationPaths(rootDirectory: String): List<String> {
@@ -870,6 +959,9 @@ private fun MediaItem.classificationPaths(rootDirectory: String): List<String> {
     return listOf(relativeParent.ifBlank { "未分类" })
 }
 
+private enum class AlbumFilter(val label: String) { ALL("全部"), IMAGES("照片"), VIDEOS("视频"), LIVE("实况") }
+private enum class AlbumOrder(val label: String) { NEWEST("最新优先"), OLDEST("最早优先") }
+
 @Composable
 private fun PhotosScreen(items: List<MediaItem>, viewModel: GalleryViewModel) {
     var selectionMode by rememberSaveable { mutableStateOf(false) }
@@ -877,9 +969,27 @@ private fun PhotosScreen(items: List<MediaItem>, viewModel: GalleryViewModel) {
     var showCreateDialog by remember { mutableStateOf(false) }
     var showBatchEditor by remember { mutableStateOf(false) }
     var confirmBatchTrash by remember { mutableStateOf(false) }
-    val availableIds = remember(items) { items.mapTo(mutableSetOf(), MediaItem::id) }
+    var filter by rememberSaveable { mutableStateOf(AlbumFilter.ALL) }
+    var order by rememberSaveable { mutableStateOf(AlbumOrder.NEWEST) }
+    var showTools by rememberSaveable { mutableStateOf(false) }
+    val shown = remember(items, filter, order) {
+        items.asSequence().filter { item ->
+            when (filter) {
+                AlbumFilter.ALL -> true
+                AlbumFilter.IMAGES -> item.kind == MediaKind.PHOTO
+                AlbumFilter.VIDEOS -> item.kind == MediaKind.PHOTO_VIDEO
+                AlbumFilter.LIVE -> item.kind == MediaKind.LIVE_PHOTO
+            }
+        }.let { sequence ->
+            when (order) {
+                AlbumOrder.NEWEST -> sequence.sortedByDescending { it.capturedAt ?: it.modifiedAt }
+                AlbumOrder.OLDEST -> sequence.sortedBy { it.capturedAt ?: it.modifiedAt }
+            }
+        }.toList()
+    }
+    val availableIds = remember(shown) { shown.mapTo(mutableSetOf(), MediaItem::id) }
     LaunchedEffect(availableIds) { selected = selected.intersect(availableIds) }
-    val selectedItems = items.filter { it.id in selected }
+    val selectedItems = shown.filter { it.id in selected }
     val allSelectedAreImages = selectedItems.size >= 2 && selectedItems.all { it.kind == MediaKind.PHOTO }
 
     BackHandler(enabled = selectionMode && !showCreateDialog && !showBatchEditor && !confirmBatchTrash) {
@@ -902,10 +1012,10 @@ private fun PhotosScreen(items: List<MediaItem>, viewModel: GalleryViewModel) {
                 Text("已选择 ${selected.size} 项", style = MaterialTheme.typography.titleMedium)
                 Spacer(Modifier.weight(1f))
                 TextButton(onClick = {
-                    selected = if (selected.size == items.size) emptySet() else availableIds
+                    selected = if (selected.size == shown.size) emptySet() else availableIds
                 }) {
                     Icon(Icons.Rounded.SelectAll, contentDescription = null)
-                    Text(if (selected.size == items.size) "清空" else "全选")
+                    Text(if (selected.size == shown.size) "清空" else "全选")
                 }
             }
             LazyRow(
@@ -965,11 +1075,14 @@ private fun PhotosScreen(items: List<MediaItem>, viewModel: GalleryViewModel) {
                     .padding(horizontal = 12.dp, vertical = 4.dp),
             ) {
                 Text(
-                    "按拍摄时间排列 · 点按查看，长按多选",
+                    "${order.label} · ${filter.label} ${shown.size} 项 · 长按打开操作",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.bodySmall,
                 )
                 Spacer(Modifier.weight(1f))
+                IconButton(onClick = { showTools = true }) {
+                    Icon(Icons.Rounded.Tune, contentDescription = "相册视图选项")
+                }
                 TextButton(onClick = { selectionMode = true }) { Text("选择") }
             }
         }
@@ -979,9 +1092,9 @@ private fun PhotosScreen(items: List<MediaItem>, viewModel: GalleryViewModel) {
             }
         } else {
             MediaGrid(
-                items = items,
+                items = shown,
                 viewModel = viewModel,
-                onOpen = { viewModel.open(it, items) },
+                onOpen = { viewModel.open(it, shown) },
                 modifier = Modifier.weight(1f),
                 compact = true,
                 selectionEnabled = true,
@@ -993,6 +1106,35 @@ private fun PhotosScreen(items: List<MediaItem>, viewModel: GalleryViewModel) {
                 },
             )
         }
+    }
+    RightSidePanel(
+        visible = showTools,
+        title = "相册视图",
+        onDismiss = { showTools = false },
+    ) {
+        Text("媒体类型", style = MaterialTheme.typography.titleSmall)
+        AlbumFilter.entries.forEach { value ->
+            FilterChip(
+                selected = filter == value,
+                onClick = { filter = value },
+                label = { Text(value.label) },
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+        Text("时间顺序", style = MaterialTheme.typography.titleSmall)
+        AlbumOrder.entries.forEach { value ->
+            FilterChip(
+                selected = order == value,
+                onClick = { order = value },
+                label = { Text(value.label) },
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+        Text(
+            "相册保持纯净，只按拍摄时间与媒体类型浏览；长按项目可编辑标题、收藏或进入多选。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
     if (showCreateDialog) {
         CreateImageSetDialog(
@@ -1049,7 +1191,7 @@ private fun ImagesScreen(items: List<MediaItem>, viewModel: GalleryViewModel) {
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
             ) { Text("从多张图片创建漫画/图集") }
         }
-        ClassifiedMediaScreen(
+        RememberingClassifiedMediaScreen(
             items = items,
             viewModel = viewModel,
             rootDirectory = "Images",
@@ -1067,6 +1209,26 @@ private fun ImagesScreen(items: List<MediaItem>, viewModel: GalleryViewModel) {
             },
         )
     }
+}
+
+@Composable
+private fun RememberingClassifiedMediaScreen(
+    items: List<MediaItem>,
+    viewModel: GalleryViewModel,
+    rootDirectory: String,
+    emptyText: String,
+    modifier: Modifier = Modifier,
+) {
+    var currentPath by rememberSaveable(rootDirectory) { mutableStateOf<String?>(null) }
+    ClassifiedMediaScreen(
+        items = items,
+        viewModel = viewModel,
+        rootDirectory = rootDirectory,
+        emptyText = emptyText,
+        currentPath = currentPath,
+        onPathChange = { currentPath = it },
+        modifier = modifier,
+    )
 }
 
 @Composable
@@ -1519,6 +1681,7 @@ private fun SettingsScreen(state: GalleryUiState, viewModel: GalleryViewModel) {
 }
 
 private val PHOTO_KINDS = setOf(MediaKind.PHOTO, MediaKind.PHOTO_VIDEO, MediaKind.LIVE_PHOTO)
+private const val MAX_CONTEXT_FACETS = 80
 
 private fun Long.formatBytes(): String = when {
     this >= 1_073_741_824 -> "%.1f GB".format(this / 1_073_741_824.0)

@@ -60,6 +60,7 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -104,6 +105,7 @@ fun GalleryApp(viewModel: GalleryViewModel = viewModel()) {
     val scope = rememberCoroutineScope()
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val snackbarHostState = remember { SnackbarHostState() }
+    val screenStateHolder = rememberSaveableStateHolder()
     var libraryMenuExpanded by remember { mutableStateOf(false) }
     var lastExitBackAt by remember { mutableLongStateOf(0L) }
     val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
@@ -164,7 +166,6 @@ fun GalleryApp(viewModel: GalleryViewModel = viewModel()) {
                 viewModel = viewModel,
                 onBack = viewModel::closeDetail,
             )
-            BackHandler(onBack = viewModel::closeDetail)
             return@GalleryTheme
         }
 
@@ -316,25 +317,29 @@ fun GalleryApp(viewModel: GalleryViewModel = viewModel()) {
                     if (state.libraries.isEmpty()) {
                         EmptyLibraryScreen(onChooseFolder = { folderPicker.launch(null) })
                     } else {
-                        GalleryScreenContent(
-                            state = state,
-                            viewModel = viewModel,
-                            onChooseFolder = { folderPicker.launch(null) },
-                            onRequestSystemMediaAccess = {
-                                systemMediaPermission.launch(systemMediaPermissions())
-                            },
-                            onFallbackMediaPicker = {
-                                mediaPicker.launch(arrayOf("image/*", "video/*"))
-                            },
-                            onOpenAppSettings = {
-                                context.startActivity(
-                                    Intent(
-                                        Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                                        Uri.parse("package:${context.packageName}"),
-                                    ),
-                                )
-                            },
-                        )
+                        screenStateHolder.SaveableStateProvider(
+                            key = "${state.activeLibraryId}:${state.screen.name}",
+                        ) {
+                            GalleryScreenContent(
+                                state = state,
+                                viewModel = viewModel,
+                                onChooseFolder = { folderPicker.launch(null) },
+                                onRequestSystemMediaAccess = {
+                                    systemMediaPermission.launch(systemMediaPermissions())
+                                },
+                                onFallbackMediaPicker = {
+                                    mediaPicker.launch(arrayOf("image/*", "video/*"))
+                                },
+                                onOpenAppSettings = {
+                                    context.startActivity(
+                                        Intent(
+                                            Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                            Uri.parse("package:${context.packageName}"),
+                                        ),
+                                    )
+                                },
+                            )
+                        }
                     }
                     state.operation?.let { operation ->
                         Box(

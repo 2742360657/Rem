@@ -4,15 +4,15 @@ import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
 import android.net.Uri
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.foundation.gestures.calculateZoom
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -27,6 +27,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.PagerState
 import androidx.compose.foundation.pager.rememberPagerState
@@ -43,11 +45,13 @@ import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.ArrowDownward
 import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.SwapVert
+import androidx.compose.material.icons.rounded.MoreVert
+import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -64,9 +68,11 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
@@ -96,8 +102,12 @@ import dev.susnowy.gallery.media.ImagePage
 import dev.susnowy.gallery.model.MediaItem
 import dev.susnowy.gallery.model.MediaDomain
 import dev.susnowy.gallery.model.MediaKind
+import dev.susnowy.gallery.model.PlaybackProgress
 import dev.susnowy.gallery.model.SourceKind
 import dev.susnowy.gallery.ui.GalleryViewModel
+import dev.susnowy.gallery.ui.components.MetadataEditor
+import dev.susnowy.gallery.ui.components.MediaThumbnail
+import dev.susnowy.gallery.ui.components.RightSidePanel
 import dev.susnowy.gallery.ui.components.label
 import java.text.DateFormat
 import java.util.Date
@@ -114,9 +124,10 @@ fun MediaDetail(
     onBack: () -> Unit,
 ) {
     if (item.kind == MediaKind.IMAGE_SET) {
-        ImageSetDetail(item = item, viewModel = viewModel, onBack = onBack)
+        ImageSetWorkDetail(item = item, viewModel = viewModel, onBack = onBack)
         return
     }
+    BackHandler(onBack = onBack)
     val sequence = remember(browsingItems, item.libraryId) {
         browsingItems.filter { it.libraryId == item.libraryId && !it.trashed }
             .ifEmpty { listOf(item) }
@@ -269,6 +280,205 @@ fun MediaDetail(
 }
 
 @Composable
+private fun ImageSetWorkDetail(
+    item: MediaItem,
+    viewModel: GalleryViewModel,
+    onBack: () -> Unit,
+) {
+    var reading by rememberSaveable(item.id) { mutableStateOf(false) }
+    if (reading) {
+        BackHandler { reading = false }
+        ImageSetReaderScreen(item = item, viewModel = viewModel, onBack = { reading = false })
+    } else {
+        BackHandler(onBack = onBack)
+        ImageSetOverview(
+            item = item,
+            viewModel = viewModel,
+            onBack = onBack,
+            onRead = { reading = true },
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ImageSetOverview(
+    item: MediaItem,
+    viewModel: GalleryViewModel,
+    onBack: () -> Unit,
+    onRead: () -> Unit,
+) {
+    val progress by produceState<PlaybackProgress?>(initialValue = null, item.id, item.modifiedAt) {
+        value = viewModel.progress(item)
+    }
+    var showTools by rememberSaveable(item.id) { mutableStateOf(false) }
+    var showEditor by remember { mutableStateOf(false) }
+    var confirmTrash by remember { mutableStateOf(false) }
+    val pageCount = item.pageCount ?: 0
+    val readPage = progress?.page?.coerceAtLeast(0) ?: 0
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("作品详情", maxLines = 1) },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回作品列表")
+                    }
+                },
+                actions = {
+                    IconButton(onClick = { showEditor = true }) {
+                        Icon(Icons.Rounded.Edit, contentDescription = "编辑作品信息")
+                    }
+                    IconButton(onClick = { showTools = true }) {
+                        Icon(Icons.Rounded.MoreVert, contentDescription = "作品工具")
+                    }
+                },
+            )
+        },
+    ) { padding ->
+        Column(
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 18.dp, vertical = 12.dp),
+        ) {
+            MediaThumbnail(
+                item = item,
+                viewModel = viewModel,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(300.dp),
+            )
+            Text(item.displayTitle, style = MaterialTheme.typography.headlineSmall)
+            item.originalTitle?.takeIf { it.isNotBlank() && it != item.displayTitle }?.let {
+                Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            if (item.authors.isNotEmpty()) {
+                Text("作者 · ${item.authors.joinToString(" · ")}", style = MaterialTheme.typography.titleSmall)
+            }
+            if (item.tags.isNotEmpty()) {
+                Text(
+                    item.tags.joinToString("  "),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.tertiary,
+                )
+            }
+            Text(
+                buildString {
+                    append(if (pageCount > 0) "$pageCount 页" else "页数待扫描")
+                    item.series?.title?.let { append(" · $it") }
+                    if (progress != null && pageCount > 0) append(" · 已读 ${readPage + 1}/$pageCount")
+                },
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Button(onClick = onRead, modifier = Modifier.fillMaxWidth()) {
+                Icon(Icons.Rounded.PlayArrow, contentDescription = null)
+                Text(if (progress == null || readPage == 0) " 开始阅读" else " 继续阅读 · 第 ${readPage + 1} 页")
+            }
+            Text(
+                "点按进入沉浸阅读；在阅读页长按任意页面可打开当前页操作。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+
+    RightSidePanel(
+        visible = showTools,
+        title = "作品工具",
+        onDismiss = { showTools = false },
+    ) {
+        Text(item.displayTitle, style = MaterialTheme.typography.titleMedium)
+        Text(item.relativePath, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        FilledTonalButton(
+            onClick = {
+                showTools = false
+                onRead()
+            },
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Icon(Icons.Rounded.PlayArrow, contentDescription = null)
+            Text(" 开始 / 继续阅读")
+        }
+        FilledTonalButton(
+            onClick = {
+                showTools = false
+                showEditor = true
+            },
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Icon(Icons.Rounded.Edit, contentDescription = null)
+            Text(" 编辑标题、作者与标签")
+        }
+        FilledTonalButton(
+            onClick = {
+                viewModel.saveMetadata(
+                    item,
+                    item.displayTitle,
+                    item.authors.joinToString(),
+                    item.tags.joinToString(),
+                    item.collections.joinToString(),
+                    item.series?.title.orEmpty(),
+                    item.series?.sortIndex?.toString().orEmpty(),
+                    !item.favorite,
+                )
+                showTools = false
+            },
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Icon(
+                if (item.favorite) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
+                contentDescription = null,
+            )
+            Text(if (item.favorite) " 取消收藏" else " 加入收藏")
+        }
+        TextButton(
+            onClick = {
+                showTools = false
+                confirmTrash = true
+            },
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Icon(Icons.Rounded.DeleteOutline, contentDescription = null)
+            Text(" 移入回收站")
+        }
+        Text(
+            "底层位置：Library / ${item.relativePath}",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+    if (showEditor) {
+        MetadataEditor(
+            item = item,
+            onDismiss = { showEditor = false },
+            onSave = { title, authors, tags, collections, series, sortIndex, favorite, domain ->
+                viewModel.saveMetadata(item, title, authors, tags, collections, series, sortIndex, favorite, domain)
+                showEditor = false
+            },
+        )
+    }
+    if (confirmTrash) {
+        AlertDialog(
+            onDismissRequest = { confirmTrash = false },
+            title = { Text("移入回收站？") },
+            text = { Text("仅添加逻辑删除标记，真实漫画目录或压缩包不会移动或删除。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.setTrashed(item, true)
+                    confirmTrash = false
+                }) { Text("移入回收站") }
+            },
+            dismissButton = { TextButton(onClick = { confirmTrash = false }) { Text("取消") } },
+        )
+    }
+}
+
+@Composable
 private fun MediaPager(
     items: List<MediaItem>,
     pagerState: PagerState,
@@ -404,7 +614,7 @@ private fun ZoomableImage(
 }
 
 @Composable
-private fun ImageSetDetail(
+private fun ImageSetReaderScreen(
     item: MediaItem,
     viewModel: GalleryViewModel,
     onBack: () -> Unit,
@@ -413,16 +623,17 @@ private fun ImageSetDetail(
         value = runCatching { viewModel.pages(item) }
     }
     var controlsVisible by remember { mutableStateOf(true) }
-    var currentPage by remember { mutableStateOf(0) }
+    var currentPage by remember { mutableIntStateOf(0) }
     var showEditor by remember { mutableStateOf(false) }
     var confirmTrash by remember { mutableStateOf(false) }
     var showDerivePage by remember { mutableStateOf(false) }
     var showOrderEditor by remember { mutableStateOf(false) }
+    var showPageTools by remember { mutableStateOf(false) }
     val loadedPages = pages?.getOrNull().orEmpty()
 
     ImmersiveSystemBars(controlsVisible)
-    LaunchedEffect(controlsVisible, showEditor, confirmTrash, showDerivePage, showOrderEditor) {
-        if (controlsVisible && !showEditor && !confirmTrash && !showDerivePage && !showOrderEditor) {
+    LaunchedEffect(controlsVisible, showEditor, confirmTrash, showDerivePage, showOrderEditor, showPageTools) {
+        if (controlsVisible && !showEditor && !confirmTrash && !showDerivePage && !showOrderEditor && !showPageTools) {
             delay(3_000)
             controlsVisible = false
         }
@@ -449,6 +660,11 @@ private fun ImageSetDetail(
                             viewModel = viewModel,
                             onToggleControls = { controlsVisible = !controlsVisible },
                             onPageChanged = { currentPage = it },
+                            onLongPressPage = { page ->
+                                currentPage = page
+                                controlsVisible = true
+                                showPageTools = true
+                            },
                         )
                     }
                 },
@@ -518,6 +734,58 @@ private fun ImageSetDetail(
                 )
             }
         }
+    }
+
+    RightSidePanel(
+        visible = showPageTools,
+        title = "第 ${currentPage + 1} 页",
+        onDismiss = { showPageTools = false },
+    ) {
+        Text(item.displayTitle, style = MaterialTheme.typography.titleMedium)
+        Text(
+            loadedPages.getOrNull(currentPage)?.name.orEmpty(),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        FilledTonalButton(
+            onClick = {
+                viewModel.derivePage(item, currentPage + 1)
+                showPageTools = false
+            },
+            enabled = loadedPages.isNotEmpty(),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Icon(Icons.Rounded.ContentCopy, contentDescription = null)
+            Text(" 复制当前页到分类图片")
+        }
+        FilledTonalButton(
+            onClick = {
+                showPageTools = false
+                showEditor = true
+            },
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Icon(Icons.Rounded.Edit, contentDescription = null)
+            Text(" 编辑作品信息")
+        }
+        if (item.sourceKind == SourceKind.DIRECTORY) {
+            FilledTonalButton(
+                onClick = {
+                    showPageTools = false
+                    showOrderEditor = true
+                },
+                enabled = loadedPages.size >= 2,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Icon(Icons.Rounded.SwapVert, contentDescription = null)
+                Text(" 调整页面顺序")
+            }
+        }
+        Text(
+            "短按页面显示或隐藏阅读控件；长按页面打开此菜单。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 
     if (showEditor) {
@@ -591,6 +859,7 @@ private fun ImageSetReader(
     viewModel: GalleryViewModel,
     onToggleControls: () -> Unit,
     onPageChanged: (Int) -> Unit,
+    onLongPressPage: (Int) -> Unit,
 ) {
     val savedProgress by produceState(initialValue = 0, item.id) {
         value = viewModel.progress(item)?.page ?: 0
@@ -630,6 +899,7 @@ private fun ImageSetReader(
             ZoomableComicPage(
                 pageKey = page.relativePath ?: page.archiveEntry ?: page.name,
                 onTap = onToggleControls,
+                onLongPress = { onLongPressPage(index) },
                 onZoomingChanged = { zooming ->
                     if (zooming) zoomedPage = index else if (zoomedPage == index) zoomedPage = null
                 },
@@ -660,10 +930,12 @@ private fun ImageSetReader(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ZoomableComicPage(
     pageKey: String,
     onTap: () -> Unit,
+    onLongPress: () -> Unit,
     onZoomingChanged: (Boolean) -> Unit,
     content: @Composable () -> Unit,
 ) {
@@ -675,7 +947,7 @@ private fun ZoomableComicPage(
         modifier = Modifier
             .fillMaxWidth()
             .background(Color.Black)
-            .clickable(onClick = onTap)
+            .combinedClickable(onClick = onTap, onLongClick = onLongPress)
             .pointerInput(pageKey) {
                 awaitEachGesture {
                     awaitFirstDown(requireUnconsumed = false)
@@ -994,79 +1266,4 @@ private fun MediaDomain.displayLabel(): String = when (this) {
     MediaDomain.ALBUM -> "相册"
     MediaDomain.CLASSIFIED -> "图片 / 视频"
     MediaDomain.WORKS -> "漫画 / 动漫"
-}
-
-@Composable
-private fun MetadataEditor(
-    item: MediaItem,
-    onDismiss: () -> Unit,
-    onSave: (String, String, String, String, String, String, Boolean, MediaDomain) -> Unit,
-) {
-    var title by remember(item.id) { mutableStateOf(item.displayTitle) }
-    var authors by remember(item.id) { mutableStateOf(item.authors.joinToString()) }
-    var tags by remember(item.id) { mutableStateOf(item.tags.joinToString()) }
-    var collections by remember(item.id) { mutableStateOf(item.collections.joinToString()) }
-    var series by remember(item.id) { mutableStateOf(item.series?.title.orEmpty()) }
-    var sortIndex by remember(item.id) { mutableStateOf(item.series?.sortIndex?.toString().orEmpty()) }
-    var favorite by remember(item.id) { mutableStateOf(item.favorite) }
-    var domain by remember(item.id) { mutableStateOf(item.domain) }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("编辑便携元数据") },
-        text = {
-            Column(
-                modifier = Modifier.verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                if (item.kind == MediaKind.VIDEO) {
-                    Text("显示位置", style = MaterialTheme.typography.labelLarge)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        FilterChip(
-                            selected = domain == MediaDomain.CLASSIFIED,
-                            onClick = { domain = MediaDomain.CLASSIFIED },
-                            label = { Text("图片 / 视频") },
-                        )
-                        FilterChip(
-                            selected = domain == MediaDomain.WORKS,
-                            onClick = { domain = MediaDomain.WORKS },
-                            label = { Text("漫画 / 动漫") },
-                        )
-                    }
-                }
-                OutlinedTextField(title, { title = it }, label = { Text("显示标题") }, singleLine = true)
-                OutlinedTextField(authors, { authors = it }, label = { Text("作者（逗号分隔）") }, singleLine = true)
-                OutlinedTextField(tags, { tags = it }, label = { Text("标签（支持 namespace）") }, singleLine = true)
-                OutlinedTextField(collections, { collections = it }, label = { Text("Collection") }, singleLine = true)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(
-                        series,
-                        { series = it },
-                        label = { Text("系列") },
-                        modifier = Modifier.weight(1f),
-                        singleLine = true,
-                    )
-                    OutlinedTextField(
-                        sortIndex,
-                        { sortIndex = it },
-                        label = { Text("排序") },
-                        modifier = Modifier.weight(0.5f),
-                        singleLine = true,
-                    )
-                }
-                Button(onClick = { favorite = !favorite }) {
-                    Icon(
-                        if (favorite) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
-                        contentDescription = null,
-                    )
-                    Text(if (favorite) " 已收藏" else " 加入收藏")
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = {
-                onSave(title, authors, tags, collections, series, sortIndex, favorite, domain)
-            }) { Text("保存") }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
-    )
 }

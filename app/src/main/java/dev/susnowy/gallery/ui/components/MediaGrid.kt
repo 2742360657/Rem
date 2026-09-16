@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -18,19 +19,30 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Collections
+import androidx.compose.material.icons.rounded.ContentCopy
+import androidx.compose.material.icons.rounded.DeleteOutline
+import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.Movie
+import androidx.compose.material.icons.rounded.OpenInFull
 import androidx.compose.material.icons.rounded.Photo
+import androidx.compose.material.icons.rounded.SelectAll
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -61,43 +73,174 @@ fun MediaGrid(
     selectionMode: Boolean = false,
     selectedIds: Set<String> = emptySet(),
     onSelectionToggle: (MediaItem) -> Unit = {},
+    quickActionsEnabled: Boolean = true,
 ) {
+    var actionItem by remember { mutableStateOf<MediaItem?>(null) }
+    var editItem by remember { mutableStateOf<MediaItem?>(null) }
+    var trashItem by remember { mutableStateOf<MediaItem?>(null) }
     if (items.isEmpty()) {
         Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Text("这里还没有内容", color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         return
     }
-    LazyVerticalGrid(
-        columns = GridCells.Adaptive(if (compact) 92.dp else 142.dp),
-        modifier = modifier.fillMaxSize(),
-        contentPadding = if (compact) {
-            androidx.compose.foundation.layout.PaddingValues(
-                start = 3.dp,
-                top = 3.dp,
-                end = 3.dp,
-                bottom = 112.dp,
-            )
-        } else {
-            androidx.compose.foundation.layout.PaddingValues(16.dp)
-        },
-        verticalArrangement = Arrangement.spacedBy(if (compact) 3.dp else 14.dp),
-        horizontalArrangement = Arrangement.spacedBy(if (compact) 3.dp else 14.dp),
-    ) {
-        items(items, key = MediaItem::id) { item ->
-            MediaCard(
+    Box(modifier = modifier.fillMaxSize()) {
+        LazyVerticalGrid(
+            columns = GridCells.Adaptive(if (compact) 92.dp else 142.dp),
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = if (compact) {
+                androidx.compose.foundation.layout.PaddingValues(
+                    start = 3.dp,
+                    top = 3.dp,
+                    end = 3.dp,
+                    bottom = 112.dp,
+                )
+            } else {
+                androidx.compose.foundation.layout.PaddingValues(16.dp)
+            },
+            verticalArrangement = Arrangement.spacedBy(if (compact) 3.dp else 14.dp),
+            horizontalArrangement = Arrangement.spacedBy(if (compact) 3.dp else 14.dp),
+        ) {
+            items(items, key = MediaItem::id) { item ->
+                MediaCard(
+                    item = item,
+                    viewModel = viewModel,
+                    onClick = {
+                        if (selectionMode) onSelectionToggle(item) else onOpen(item)
+                    },
+                    onLongClick = when {
+                        selectionMode && selectionEnabled -> ({ onSelectionToggle(item) })
+                        quickActionsEnabled -> ({ actionItem = item })
+                        selectionEnabled -> ({ onSelectionToggle(item) })
+                        else -> null
+                    },
+                    selected = item.id in selectedIds,
+                    compact = compact,
+                )
+            }
+        }
+    }
+    actionItem?.let { item ->
+        RightSidePanel(
+            visible = true,
+            title = if (item.kind == MediaKind.IMAGE_SET) "作品操作" else "媒体操作",
+            onDismiss = { actionItem = null },
+        ) {
+            MediaThumbnail(
                 item = item,
                 viewModel = viewModel,
-                onClick = {
-                    if (selectionMode) onSelectionToggle(item) else onOpen(item)
-                },
-                onLongClick = if (selectionEnabled) {
-                    { onSelectionToggle(item) }
-                } else null,
-                selected = item.id in selectedIds,
-                compact = compact,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(180.dp)
+                    .clip(MaterialTheme.shapes.large),
+                contentScale = ContentScale.Crop,
             )
+            Text(item.displayTitle, style = MaterialTheme.typography.titleMedium)
+            Text(
+                item.relativePath,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            HorizontalDivider()
+            FilledTonalButton(
+                onClick = {
+                    actionItem = null
+                    onOpen(item)
+                },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Icon(Icons.Rounded.OpenInFull, contentDescription = null)
+                Text(if (item.kind == MediaKind.IMAGE_SET) " 查看作品详情" else " 打开")
+            }
+            FilledTonalButton(
+                onClick = {
+                    actionItem = null
+                    editItem = item
+                },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Icon(Icons.Rounded.Edit, contentDescription = null)
+                Text(" 编辑信息")
+            }
+            FilledTonalButton(
+                onClick = {
+                    viewModel.setBatchFavorite(setOf(item.id), !item.favorite)
+                    actionItem = null
+                },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Icon(Icons.Rounded.Favorite, contentDescription = null)
+                Text(if (item.favorite) " 取消收藏" else " 加入收藏")
+            }
+            if (item.kind in setOf(MediaKind.IMAGE, MediaKind.PHOTO, MediaKind.LIVE_PHOTO)) {
+                FilledTonalButton(
+                    onClick = {
+                        viewModel.deriveImage(item)
+                        actionItem = null
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Icon(Icons.Rounded.ContentCopy, contentDescription = null)
+                    Text(" 复制到分类图片")
+                }
+            }
+            if (selectionEnabled) {
+                FilledTonalButton(
+                    onClick = {
+                        actionItem = null
+                        onSelectionToggle(item)
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Icon(Icons.Rounded.SelectAll, contentDescription = null)
+                    Text(" 进入多选")
+                }
+            }
+            TextButton(
+                onClick = {
+                    actionItem = null
+                    trashItem = item
+                },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Icon(Icons.Rounded.DeleteOutline, contentDescription = null)
+                Text(" 移入回收站")
+            }
         }
+    }
+    editItem?.let { item ->
+        MetadataEditor(
+            item = item,
+            onDismiss = { editItem = null },
+            onSave = { title, authors, tags, collections, series, sortIndex, favorite, domain ->
+                viewModel.saveMetadata(
+                    item,
+                    title,
+                    authors,
+                    tags,
+                    collections,
+                    series,
+                    sortIndex,
+                    favorite,
+                    domain,
+                )
+                editItem = null
+            },
+        )
+    }
+    trashItem?.let { item ->
+        AlertDialog(
+            onDismissRequest = { trashItem = null },
+            title = { Text("移入回收站？") },
+            text = { Text("只写入逻辑回收站状态，真实文件不会立即删除。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.setTrashed(item, true)
+                    trashItem = null
+                }) { Text("移入回收站") }
+            },
+            dismissButton = { TextButton(onClick = { trashItem = null }) { Text("取消") } },
+        )
     }
 }
 
