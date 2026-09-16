@@ -6,6 +6,7 @@ import dev.susnowy.gallery.model.GALLERY_FORMAT
 import dev.susnowy.gallery.model.LibraryInspection
 import dev.susnowy.gallery.model.PortableLibrary
 import dev.susnowy.gallery.model.UnsupportedSchemaException
+import java.time.Duration
 import java.time.Instant
 import java.util.UUID
 import kotlinx.serialization.SerializationException
@@ -125,7 +126,7 @@ class PortableLibraryManager(
      * ` (1)` on most Android builds — which is how a lost race is detected, since SAF
      * offers no other compare-and-set.
      */
-    private fun claimInitializationLock(): LibraryDocument {
+    private fun claimInitializationLock(allowStaleRecovery: Boolean = true): LibraryDocument {
         val created = try {
             access.createFileExclusive(INIT_LOCK_FILE, "application/octet-stream")
         } catch (error: Exception) {
@@ -134,10 +135,31 @@ class PortableLibraryManager(
         val recorded = created.name.ifEmpty { access.find(INIT_LOCK_FILE)?.name.orEmpty() }
         if (recorded != INIT_LOCK_FILE.substringAfterLast('/')) {
             runCatching { access.delete(created) }
+            val existing = access.find(INIT_LOCK_FILE)
+            if (allowStaleRecovery && existing != null && initializationLockExpired(existing)) {
+                if (runCatching { access.delete(existing) }.getOrDefault(false)) {
+                    return claimInitializationLock(allowStaleRecovery = false)
+                }
+            }
             throw InitializationInProgressException()
         }
-        return created
+        return try {
+            access.openOutput(created).bufferedWriter(Charsets.UTF_8).use { writer ->
+                writer.write(Instant.now().toString())
+            }
+            created
+        } catch (error: Exception) {
+            runCatching { access.delete(created) }
+            throw InitializationInProgressException(error)
+        }
     }
+
+    private fun initializationLockExpired(document: LibraryDocument): Boolean = runCatching {
+        val claimedAt = access.openInput(document).bufferedReader(Charsets.UTF_8).use { reader ->
+            Instant.parse(reader.readText().trim())
+        }
+        Duration.between(claimedAt, Instant.now()) > INITIALIZATION_LOCK_LEASE
+    }.getOrDefault(false)
 
     /**
      * Brings an older Library up to [CURRENT_SCHEMA_VERSION]. Portable metadata is
@@ -197,6 +219,7 @@ class PortableLibraryManager(
          * It is removed after the identity is committed; it is not portable metadata.
          */
         const val INIT_LOCK_FILE = ".rem-library-initializing.lock"
+        private val INITIALIZATION_LOCK_LEASE: Duration = Duration.ofMinutes(15)
 
         /**
          * Documents whose `schema_version` is bumped by [migrateSchema]; kept in

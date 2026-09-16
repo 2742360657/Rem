@@ -237,6 +237,21 @@ class PortableLibraryInitializationLockTest {
     }
 
     @Test
+    fun initializeRecoversAnExpiredLockLeftByAStoppedProcess() {
+        val access = AlreadyTakenNameQualifyingAccess()
+        access.files[PortableLibraryManager.INIT_LOCK_FILE] =
+            "2020-01-01T00:00:00Z".encodeToByteArray()
+
+        val library = PortableLibraryManager(access).initialize("Recovered Library")
+
+        assertEquals(
+            library.libraryId,
+            (PortableLibraryManager(access).inspect() as LibraryInspection.Valid).library.libraryId,
+        )
+        assertTrue(!access.files.containsKey(PortableLibraryManager.INIT_LOCK_FILE))
+    }
+
+    @Test
     fun aSecondInitializeNeverCreatesASecondIdentity() {
         val access = CollisionSuffixingAccess()
         val first = PortableLibraryManager(access).initialize("Library")
