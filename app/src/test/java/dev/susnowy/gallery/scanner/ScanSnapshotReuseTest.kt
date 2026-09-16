@@ -82,4 +82,30 @@ class ScanSnapshotReuseTest {
             scanner.directoryFingerprint(listOf(page(1_700_000_001_000))),
         )
     }
+
+    @Test
+    fun unreadableSubtreeProtectsOnlyItsPreviouslyIndexedItems() {
+        val partial = ScanResult(
+            candidates = emptyList(),
+            ambiguousDirectories = emptyList(),
+            warnings = listOf("无法读取 Comics/Offline"),
+            unreadableDirectories = listOf("Comics/Offline"),
+        )
+
+        assertTrue(partial.protectsPreviouslyIndexed("Comics/Offline"))
+        assertTrue(partial.protectsPreviouslyIndexed("Comics/Offline/001.jpg"))
+        assertFalse(partial.protectsPreviouslyIndexed("Comics/Online/001.jpg"))
+    }
+
+    @Test
+    fun unreadableRootProtectsTheWholePreviousIndex() {
+        val failed = ScanResult(
+            candidates = emptyList(),
+            ambiguousDirectories = emptyList(),
+            warnings = listOf("无法读取 Library 根目录"),
+            unreadableDirectories = listOf(""),
+        )
+
+        assertTrue(failed.protectsPreviouslyIndexed("Images/a.jpg"))
+    }
 }

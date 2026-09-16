@@ -48,9 +48,21 @@ data class ScanResult(
     val candidates: List<ScanCandidate>,
     val ambiguousDirectories: List<String>,
     val warnings: List<String>,
+    val unreadableDirectories: List<String> = emptyList(),
     /** Files whose content was actually opened because no usable prior record existed. */
     val contentReads: Int = 0,
     val contentReadsSkipped: Int = 0,
+) {
+    /** A failed subtree was not evidence that its previously indexed items disappeared. */
+    fun protectsPreviouslyIndexed(path: String): Boolean = unreadableDirectories.any { directory ->
+        directory.isEmpty() || path == directory || path.startsWith("$directory/")
+    }
+}
+
+data class ScanProgress(
+    val directoriesRead: Int,
+    val entriesRead: Int,
+    val candidatesFound: Int,
 )
 
 /**
@@ -88,6 +100,8 @@ internal fun ScannedFile.reusableArchivePageCount(size: Long, modifiedAt: Long):
 private class ScanStatistics {
     private val readPaths = mutableSetOf<String>()
     private val reusedPaths = mutableSetOf<String>()
+    var directoriesRead: Int = 0
+    var entriesRead: Int = 0
 
     val contentReads: Int get() = readPaths.size
     val contentReadsSkipped: Int get() = reusedPaths.size
@@ -100,6 +114,12 @@ private class ScanStatistics {
     fun contentReused(path: String) {
         if (path !in readPaths) reusedPaths += path
     }
+
+    fun progress(candidatesFound: Int) = ScanProgress(
+        directoriesRead = directoriesRead,
+        entriesRead = entriesRead,
+        candidatesFound = candidatesFound,
+    )
 }
 
 class LibraryScanner {
@@ -107,12 +127,25 @@ class LibraryScanner {
     suspend fun scan(
         storage: DocumentTreeStorage,
         prior: ScanSnapshot = emptyMap(),
+        onProgress: (ScanProgress) -> Unit = {},
     ): ScanResult = withContext(Dispatchers.IO) {
         val candidates = mutableListOf<ScanCandidate>()
         val ambiguous = mutableListOf<String>()
         val warnings = mutableListOf<String>()
+        val unreadableDirectories = mutableListOf<String>()
         val statistics = ScanStatistics()
-        scanDirectory(storage, "", candidates, ambiguous, warnings, prior, statistics)
+        scanDirectory(
+            storage,
+            "",
+            candidates,
+            ambiguous,
+            warnings,
+            unreadableDirectories,
+            prior,
+            statistics,
+            onProgress,
+        )
+        onProgress(statistics.progress(candidates.size))
         RemLog.info(
             TAG,
             "扫描完成：候选=${candidates.size}，待确认目录=${ambiguous.size}，" +
@@ -126,6 +159,7 @@ class LibraryScanner {
                 }),
             ambiguousDirectories = ambiguous,
             warnings = warnings,
+            unreadableDirectories = unreadableDirectories,
             contentReads = statistics.contentReads,
             contentReadsSkipped = statistics.contentReadsSkipped,
         )
@@ -137,15 +171,23 @@ class LibraryScanner {
         output: MutableList<ScanCandidate>,
         ambiguous: MutableList<String>,
         warnings: MutableList<String>,
+        unreadableDirectories: MutableList<String>,
         prior: ScanSnapshot,
         statistics: ScanStatistics,
+        onProgress: (ScanProgress) -> Unit,
     ) {
         coroutineContext.ensureActive()
         val entries = runCatching { storage.list(path) }.getOrElse { error ->
             RemLog.warn(TAG, "无法读取 ${path.ifEmpty { "Library 根目录" }}", error)
             warnings += "无法读取 ${path.ifEmpty { "Library 根目录" }}：${error.message.orEmpty()}"
+            unreadableDirectories += path
             return
         }.filterNot { path.isEmpty() && it.name == ".gallery" }
+        statistics.directoriesRead++
+        statistics.entriesRead += entries.size
+        if (statistics.directoriesRead == 1 || statistics.directoriesRead % PROGRESS_DIRECTORY_INTERVAL == 0) {
+            onProgress(statistics.progress(output.size))
+        }
 
         val directories = entries.filter(StorageEntry::isDirectory)
         val files = entries.filterNot(StorageEntry::isDirectory)
@@ -186,8 +228,15 @@ class LibraryScanner {
                     null
                 } else {
                     comicInfoEntry?.let { statistics.contentRead(it.relativePath) }
+                    val localComicInfo = runCatching { comicInfo.fromDirectory(storage, path) }
+                        .getOrElse { error ->
+                            val source = comicInfoEntry?.relativePath ?: path
+                            warnings += "ComicInfo $source 无法读取：${error.message.orEmpty()}"
+                            RemLog.warn(TAG, "ComicInfo 无法读取：$source", error)
+                            null
+                        }
                     mergeRecognizedMetadata(
-                        comicInfo.fromDirectory(storage, path),
+                        localComicInfo,
                         inferredMetadata,
                     ) ?: inferredMetadata
                 }
@@ -320,7 +369,17 @@ class LibraryScanner {
         }
 
         directories.forEach { directory ->
-            scanDirectory(storage, directory.relativePath, output, ambiguous, warnings, prior, statistics)
+            scanDirectory(
+                storage,
+                directory.relativePath,
+                output,
+                ambiguous,
+                warnings,
+                unreadableDirectories,
+                prior,
+                statistics,
+                onProgress,
+            )
         }
     }
 
@@ -484,6 +543,7 @@ class LibraryScanner {
         private const val TAG = "GalleryScanner"
         const val MIN_IMAGE_SET_PAGES = 2
         private const val HASH_SIZE_LIMIT = 64L * 1024L * 1024L
+        private const val PROGRESS_DIRECTORY_INTERVAL = 10
         private val WORK_VIDEO_ROOTS = setOf(
             "anime", "animation", "animations", "works", "movies", "movie", "films", "film",
             "series", "shows", "tv", "动漫", "动画", "番剧", "影视", "电影", "剧集", "作品",

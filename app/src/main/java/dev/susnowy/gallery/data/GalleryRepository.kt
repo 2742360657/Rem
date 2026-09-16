@@ -197,7 +197,10 @@ class GalleryRepository(context: Context) {
             val portableStore = PortableMetadataStore(storage)
             val catalog = portableStore.loadCatalog(libraryId)
             val state = portableStore.loadState(libraryId)
-            val result = scanner.scan(storage, database.scanSnapshot(libraryId))
+            val result = scanner.scan(storage, database.scanSnapshot(libraryId)) { progress ->
+                _operation.value = "正在扫描：已读取 ${progress.directoriesRead} 个目录、" +
+                    "${progress.entriesRead} 个条目，识别 ${progress.candidatesFound} 项"
+            }
             val existing = database.media(libraryId)
             val existingByPath = existing.associateBy(MediaItem::relativePath)
             val metadataById = catalog.items.associateBy { it.id }
@@ -207,6 +210,9 @@ class GalleryRepository(context: Context) {
                 .mapNotNull { (hash, matches) -> matches.singleOrNull()?.let { hash to it } }
                 .toMap()
             val foundPaths = result.candidates.mapTo(mutableSetOf()) { it.relativePath }
+            existing.asSequence()
+                .filter { result.protectsPreviouslyIndexed(it.relativePath) }
+                .forEach { foundPaths += it.relativePath }
             val unmatchedExisting = existing.filter { it.relativePath !in foundPaths }.toMutableList()
             val scanned = ArrayList<MediaItem>(result.candidates.size)
 
