@@ -75,6 +75,7 @@ import dev.susnowy.gallery.importer.SystemMediaEntry
 import dev.susnowy.gallery.importer.SystemMediaType
 import dev.susnowy.gallery.importer.WorkImportKind
 import dev.susnowy.gallery.model.MediaItem
+import dev.susnowy.gallery.model.MediaDomain
 import dev.susnowy.gallery.model.MediaKind
 import dev.susnowy.gallery.model.PermissionState
 import dev.susnowy.gallery.organizer.OrganizationPlan
@@ -122,7 +123,8 @@ fun GalleryScreenContent(
 ) {
     val visible = state.media.filterNot(MediaItem::trashed)
     when (state.screen) {
-        AppScreen.HOME -> HomeScreen(visible, viewModel)
+        AppScreen.MEDIA -> ClassifiedLibraryScreen(visible, viewModel)
+        AppScreen.WORKS -> WorksLibraryScreen(visible, viewModel)
         AppScreen.LIBRARIES -> LibrariesScreen(state, viewModel, onChooseFolder)
         AppScreen.INBOX -> MediaCollectionScreen(
             items = visible.filter(MediaItem::inInbox),
@@ -454,60 +456,6 @@ private fun SystemGalleryScreen(
 private fun SystemMediaEntry.sourceLabel(): String = sourcePath.ifBlank { bucketName.ifBlank { "未分类" } }
 
 @Composable
-private fun HomeScreen(items: List<MediaItem>, viewModel: GalleryViewModel) {
-    val inbox = items.count(MediaItem::inInbox)
-    val imageSets = items.count { it.kind == MediaKind.IMAGE_SET }
-    val videos = items.count { it.kind == MediaKind.VIDEO }
-    val recent = remember(items) { items.sortedByDescending(MediaItem::modifiedAt).take(12) }
-    LazyColumn(
-        contentPadding = PaddingValues(20.dp),
-        verticalArrangement = Arrangement.spacedBy(20.dp),
-        modifier = Modifier.fillMaxSize(),
-    ) {
-        item {
-            Text("你的 Library", style = MaterialTheme.typography.headlineLarge)
-            Text(
-                "真实文件保持原样，分类与进度跟随 Library。",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        item {
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                item { StatCard("全部内容", items.size.toString()) { viewModel.navigate(AppScreen.SEARCH) } }
-                item { StatCard("待整理", inbox.toString()) { viewModel.navigate(AppScreen.INBOX) } }
-                item { StatCard("漫画", imageSets.toString()) { viewModel.navigate(AppScreen.IMAGE_SETS) } }
-                item { StatCard("视频", videos.toString()) { viewModel.navigate(AppScreen.VIDEOS) } }
-            }
-        }
-        if (items.isNotEmpty()) {
-            item { Text("最近内容", style = MaterialTheme.typography.titleLarge) }
-            item {
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    items(recent, key = MediaItem::id) { item ->
-                        MediaCard(
-                            item = item,
-                            viewModel = viewModel,
-                            onClick = { viewModel.open(item, recent) },
-                            modifier = Modifier.width(170.dp),
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun StatCard(label: String, value: String, onClick: () -> Unit) {
-    Card(onClick = onClick, modifier = Modifier.width(150.dp)) {
-        Column(modifier = Modifier.padding(18.dp)) {
-            Text(value, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-            Text(label, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-    }
-}
-
-@Composable
 private fun LibrariesScreen(
     state: GalleryUiState,
     viewModel: GalleryViewModel,
@@ -600,6 +548,196 @@ private fun MediaCollectionScreen(
     }
 }
 
+private enum class ClassifiedType(val label: String) { IMAGES("图片"), VIDEOS("视频") }
+
+@Composable
+private fun ClassifiedLibraryScreen(items: List<MediaItem>, viewModel: GalleryViewModel) {
+    val classified = remember(items) { items.filter { it.domain == MediaDomain.CLASSIFIED } }
+    val imageCount = classified.count { it.kind == MediaKind.IMAGE }
+    val videoCount = classified.count { it.kind == MediaKind.VIDEO }
+    var type by rememberSaveable { mutableStateOf(ClassifiedType.IMAGES) }
+    val shown = remember(classified, type) {
+        classified.filter {
+            when (type) {
+                ClassifiedType.IMAGES -> it.kind == MediaKind.IMAGE
+                ClassifiedType.VIDEOS -> it.kind == MediaKind.VIDEO
+            }
+        }
+    }
+    Column(Modifier.fillMaxSize()) {
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+        ) {
+            FilterChip(
+                selected = type == ClassifiedType.IMAGES,
+                onClick = { type = ClassifiedType.IMAGES },
+                label = { Text("图片 $imageCount") },
+            )
+            FilterChip(
+                selected = type == ClassifiedType.VIDEOS,
+                onClick = { type = ClassifiedType.VIDEOS },
+                label = { Text("视频 $videoCount") },
+            )
+        }
+        ClassifiedMediaScreen(
+            items = shown,
+            viewModel = viewModel,
+            rootDirectory = if (type == ClassifiedType.IMAGES) "Images" else "Videos",
+            emptyText = if (type == ClassifiedType.IMAGES) {
+                "这里按真实目录显示图片，不添加作者或标签层级"
+            } else {
+                "这里按真实目录显示普通视频；动漫和影视作品在“漫画 / 动漫”中"
+            },
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
+private enum class WorkType(val label: String) { COMICS("漫画 / 写真"), ANIME("动漫 / 影视") }
+private enum class WorkFacet(val label: String) { ALL("全部"), AUTHOR("作者"), TAG("标签"), SERIES("系列") }
+private enum class WorkSort(val label: String) { RECENT("最近加入"), TITLE("标题"), CREATOR("作者"), SERIES("系列顺序") }
+
+@Composable
+private fun WorksLibraryScreen(items: List<MediaItem>, viewModel: GalleryViewModel) {
+    val works = remember(items) { items.filter { it.domain == MediaDomain.WORKS } }
+    var type by rememberSaveable { mutableStateOf(WorkType.COMICS) }
+    var facet by rememberSaveable { mutableStateOf(WorkFacet.ALL) }
+    var selectedFacet by rememberSaveable { mutableStateOf<String?>(null) }
+    var sort by rememberSaveable { mutableStateOf(WorkSort.RECENT) }
+    var query by rememberSaveable { mutableStateOf("") }
+    val typed = remember(works, type) {
+        works.filter {
+            when (type) {
+                WorkType.COMICS -> it.kind == MediaKind.IMAGE_SET
+                WorkType.ANIME -> it.kind == MediaKind.VIDEO
+            }
+        }
+    }
+    val facetValues = remember(typed, facet) {
+        typed.flatMap { item ->
+            when (facet) {
+                WorkFacet.ALL -> emptyList()
+                WorkFacet.AUTHOR -> item.authors
+                WorkFacet.TAG -> item.tags
+                WorkFacet.SERIES -> listOfNotNull(item.series?.title)
+            }
+        }.distinct().sortedWith(String.CASE_INSENSITIVE_ORDER)
+    }
+    LaunchedEffect(facet, facetValues) {
+        if (selectedFacet !in facetValues) selectedFacet = null
+    }
+    val shown = remember(typed, facet, selectedFacet, query, sort) {
+        typed.asSequence()
+            .filter { item ->
+                selectedFacet == null || when (facet) {
+                    WorkFacet.ALL -> true
+                    WorkFacet.AUTHOR -> selectedFacet in item.authors
+                    WorkFacet.TAG -> selectedFacet in item.tags
+                    WorkFacet.SERIES -> item.series?.title == selectedFacet
+                }
+            }
+            .filter { item ->
+                query.isBlank() || listOf(
+                    item.displayTitle,
+                    item.originalTitle.orEmpty(),
+                    item.authors.joinToString(),
+                    item.tags.joinToString(),
+                    item.series?.title.orEmpty(),
+                ).any { it.contains(query.trim(), ignoreCase = true) }
+            }
+            .let { sequence ->
+                when (sort) {
+                    WorkSort.RECENT -> sequence.sortedByDescending(MediaItem::modifiedAt)
+                    WorkSort.TITLE -> sequence.sortedBy(MediaItem::displayTitle)
+                    WorkSort.CREATOR -> sequence.sortedBy { it.authors.firstOrNull().orEmpty() }
+                    WorkSort.SERIES -> sequence.sortedWith(
+                        compareBy<MediaItem> { it.series?.title.orEmpty() }
+                            .thenBy { it.series?.season ?: 0 }
+                            .thenBy { it.series?.sortIndex ?: 0.0 },
+                    )
+                }
+            }.toList()
+    }
+    Column(Modifier.fillMaxSize()) {
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+        ) {
+            WorkType.entries.forEach { value ->
+                FilterChip(
+                    selected = type == value,
+                    onClick = {
+                        type = value
+                        selectedFacet = null
+                    },
+                    label = { Text("${value.label} ${works.count { if (value == WorkType.COMICS) it.kind == MediaKind.IMAGE_SET else it.kind == MediaKind.VIDEO }}") },
+                )
+            }
+        }
+        OutlinedTextField(
+            value = query,
+            onValueChange = { query = it },
+            leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
+            label = { Text("搜索标题、作者、标签或系列") },
+            singleLine = true,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp),
+        )
+        LazyRow(
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            items(WorkFacet.entries) { value ->
+                FilterChip(
+                    selected = facet == value,
+                    onClick = {
+                        facet = value
+                        selectedFacet = null
+                    },
+                    label = { Text(value.label) },
+                )
+            }
+        }
+        if (facetValues.isNotEmpty()) {
+            LazyRow(
+                contentPadding = PaddingValues(horizontal = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                item {
+                    FilterChip(
+                        selected = selectedFacet == null,
+                        onClick = { selectedFacet = null },
+                        label = { Text("全部") },
+                    )
+                }
+                items(facetValues) { value ->
+                    FilterChip(
+                        selected = selectedFacet == value,
+                        onClick = { selectedFacet = value },
+                        label = { Text(value) },
+                    )
+                }
+            }
+        }
+        LazyRow(
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            items(WorkSort.entries) { value ->
+                FilterChip(
+                    selected = sort == value,
+                    onClick = { sort = value },
+                    label = { Text(value.label) },
+                )
+            }
+        }
+        Text("${shown.size} 部作品", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(horizontal = 18.dp))
+        MediaGrid(shown, viewModel, { viewModel.open(it, shown) }, Modifier.weight(1f))
+    }
+}
+
 @Composable
 private fun ClassifiedMediaScreen(
     items: List<MediaItem>,
@@ -624,8 +762,12 @@ private fun ClassifiedMediaScreen(
         }.distinct().sortedWith(String.CASE_INSENSITIVE_ORDER)
     }
     val visibleItems = remember(items, classifications, currentPath) {
-        if (currentPath == null) items
-        else items.filter { item -> currentPath in classifications.getValue(item) }
+        val target = currentPath ?: "未分类"
+        items.filter { item -> target in classifications.getValue(item) }
+    }
+
+    BackHandler(enabled = currentPath != null) {
+        currentPath = currentPath?.substringBeforeLast('/', "")?.takeIf(String::isNotBlank)
     }
 
     Column(modifier.fillMaxSize()) {
@@ -637,7 +779,7 @@ private fun ClassifiedMediaScreen(
                 FilterChip(
                     selected = currentPath == null,
                     onClick = { currentPath = null },
-                    label = { Text("全部 ${items.size}") },
+                    label = { Text("目录 ${items.size}") },
                 )
             }
             currentPath?.split('/')?.forEachIndexed { index, segment ->
@@ -651,64 +793,85 @@ private fun ClassifiedMediaScreen(
                 }
             }
         }
-        if (childFolders.isNotEmpty()) {
-            LazyRow(
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                items(childFolders, key = { it }) { folder ->
-                    val path = listOfNotNull(currentPath, folder).joinToString("/")
-                    val count = classifications.count { (_, paths) ->
-                        paths.any { it == path || it.startsWith("$path/") }
-                    }
-                    Card(onClick = { currentPath = path }) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                        ) {
-                            Icon(Icons.Rounded.Folder, contentDescription = null)
-                            Column {
-                                Text(folder, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                Text("$count 项", style = MaterialTheme.typography.labelSmall)
-                            }
-                        }
-                    }
-                }
-            }
-        }
         if (items.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text(emptyText, modifier = Modifier.padding(20.dp))
             }
-        } else if (visibleItems.isEmpty()) {
+        } else if (visibleItems.isEmpty() && childFolders.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text("此分类只包含下级分类")
+                Text("这个目录还没有媒体")
             }
         } else {
-            MediaGrid(
-                items = visibleItems,
-                viewModel = viewModel,
-                onOpen = { viewModel.open(it, visibleItems) },
+            LazyVerticalGrid(
+                columns = GridCells.Adaptive(142.dp),
+                contentPadding = PaddingValues(start = 12.dp, top = 8.dp, end = 12.dp, bottom = 96.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
                 modifier = Modifier.weight(1f),
-            )
+            ) {
+                gridItems(childFolders, key = { "folder:$currentPath/$it" }) { folder ->
+                    val path = listOfNotNull(currentPath, folder).joinToString("/")
+                    val nestedItems = classifications.filter { (_, paths) ->
+                        paths.any { it == path || it.startsWith("$path/") }
+                    }.keys.toList()
+                    FolderAlbumCard(
+                        name = folder,
+                        count = nestedItems.size,
+                        preview = nestedItems.firstOrNull(),
+                        viewModel = viewModel,
+                        onClick = { currentPath = path },
+                    )
+                }
+                gridItems(visibleItems, key = MediaItem::id) { item ->
+                    MediaCard(
+                        item = item,
+                        viewModel = viewModel,
+                        onClick = { viewModel.open(item, visibleItems) },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun FolderAlbumCard(
+    name: String,
+    count: Int,
+    preview: MediaItem?,
+    viewModel: GalleryViewModel,
+    onClick: () -> Unit,
+) {
+    Card(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(1.12f),
+        ) {
+            if (preview == null) {
+                Icon(Icons.Rounded.Folder, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+            } else {
+                MediaThumbnail(preview, viewModel, Modifier.fillMaxSize())
+            }
+        }
+        Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+            Text(name, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text("$count 项", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
 
 private fun MediaItem.classificationPaths(rootDirectory: String): List<String> {
-    val explicit = collections.mapNotNull { value ->
-        value.replace('\\', '/').trim('/').takeIf(String::isNotBlank)
-    }
-    if (explicit.isNotEmpty()) return explicit.distinct()
     val parent = relativePath.substringBeforeLast('/', "")
-    val rootPrefix = "$rootDirectory/"
-    val relativeParent = when {
-        parent.equals(rootDirectory, ignoreCase = true) -> "未分类"
-        parent.startsWith(rootPrefix, ignoreCase = true) -> parent.drop(rootPrefix.length)
-        parent.isBlank() -> "未分类"
-        else -> parent
+    val segments = parent.replace('\\', '/').trim('/').split('/').filter(String::isNotBlank)
+    val relativeSegments = when {
+        segments.firstOrNull().equals(rootDirectory, ignoreCase = true) -> segments.drop(1)
+        segments.firstOrNull().equals("Media", ignoreCase = true) &&
+            segments.getOrNull(1).equals(rootDirectory, ignoreCase = true) -> segments.drop(2)
+        else -> segments
     }
+    val relativeParent = relativeSegments.joinToString("/").ifBlank { "未分类" }
     return listOf(relativeParent.ifBlank { "未分类" })
 }
 

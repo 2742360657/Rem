@@ -1,5 +1,30 @@
 # Gallery 项目工程指导文档
 
+## 0. 当前产品决策（2026-09-16，优先于下文旧描述）
+
+Gallery 的一级信息架构固定为三个入口：
+
+1. **相册**：图片与视频混排，按拍摄时间浏览，并显示来源位置、时间等文件信息；不提供作者、Tag、Series 等作品管理能力。
+2. **图片 / 视频**：一个只按真实目录分层的“可分类相册”。目录就是分类，不用 Collection 或 Tag 伪装文件夹，也不在首页堆叠额外功能。
+3. **漫画 / 动漫**：作品库。漫画、写真集、动漫、电影和剧集在这里使用作者、Tag、Series、搜索、排序、阅读/观看进度等能力。
+
+Library 是用户显式授权的实体文件夹。日常分类只写便携元数据，不移动真实文件；只有预览并确认 Organizer 计划后才能改名或移动。每个 Library 都要生成可供用户、脚本和 Agent 阅读的 `GALLERY_LIBRARY.md`，让外部 Agent 能根据稳定规则整理目录。
+
+Schema v3 使用 `domain` 明确记录条目属于 `album`、`classified` 或 `works`，避免仅凭容易变化的路径猜测上层视图。缺少 `domain` 的旧条目由媒体类型、目录约定和文件名推断；人工选择写回便携元数据并优先于后续自动识别。
+
+第一版推荐约定：
+
+```text
+Photos/                 # 相册导入
+Images/                 # 分类图片
+Videos/                 # 分类视频
+ImageSets/ 或 Comics/   # 漫画、写真、图集
+Anime/ Movies/ Series/  # 动漫、电影、剧集
+Works/                  # 其他作品
+```
+
+这些名称不是接入门槛。任意现有文件夹都可以成为 Library；扫描器应兼容“作者目录/编号作品目录/顺序图片”、漫画“系列/章节/页面”、`S01E02` 视频、ZIP/CBZ、混合图片与附带视频等真实下载结构。自动识别必须可人工修正，失败时仍允许按原目录正常浏览。
+
 > 用途：指导后续本地 Agent 在**现有 Git 仓库**中持续开发 Gallery。  
 > 本文描述项目目标、必须保持的数据语义、推荐技术路线、模块边界和开发顺序。  
 > **不要把它当成“一次性全部实现”的提示词。** Agent 应分模块实现、验证、提交 Git，再进入下一阶段。
@@ -1976,6 +2001,10 @@ transaction recovery
   https://github.com/coil-kt/coil
 - ComicInfo.xml Schema / Documentation  
   https://github.com/anansi-project/comicinfo
+- [Mihon Local Source（系列/章节/页面目录与 ZIP/CBZ）](https://mihon.app/docs/guides/local-source/)
+- [Jellyfin Shows（季、集、附加内容和字幕命名）](https://jellyfin.org/docs/general/server/media/shows/)
+- [Jellyfin Local NFO（可移植侧车元数据）](https://jellyfin.org/docs/general/server/metadata/nfo/)
+- [Komga Libraries（实体根目录与扫描模型）](https://komga.org/docs/guides/libraries/)
 - EhViewer（当前维护分支之一，可研究行为和局部实现）  
   https://github.com/FooIBar/EhViewer
 

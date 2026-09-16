@@ -24,19 +24,13 @@ import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Collections
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Folder
-import androidx.compose.material.icons.rounded.Home
-import androidx.compose.material.icons.rounded.Image
 import androidx.compose.material.icons.rounded.Inventory2
-import androidx.compose.material.icons.rounded.LocalOffer
 import androidx.compose.material.icons.rounded.Menu
-import androidx.compose.material.icons.rounded.Movie
-import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.PhotoLibrary
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Source
-import androidx.compose.material.icons.rounded.VideoLibrary
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -48,6 +42,8 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationDrawerItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
@@ -85,22 +81,18 @@ private data class DrawerDestination(
     val icon: ImageVector,
 )
 
+private val primaryDestinations = listOf(
+    DrawerDestination(AppScreen.PHOTOS, Icons.Rounded.PhotoLibrary),
+    DrawerDestination(AppScreen.MEDIA, Icons.Rounded.Folder),
+    DrawerDestination(AppScreen.WORKS, Icons.Rounded.Collections),
+)
+
 private val destinations = listOf(
-    DrawerDestination(AppScreen.HOME, Icons.Rounded.Home),
     DrawerDestination(AppScreen.LIBRARIES, Icons.Rounded.Folder),
     DrawerDestination(AppScreen.INBOX, Icons.Rounded.Inventory2),
-    DrawerDestination(AppScreen.PHOTOS, Icons.Rounded.PhotoLibrary),
-    DrawerDestination(AppScreen.SYSTEM_GALLERY, Icons.Rounded.PhotoLibrary),
-    DrawerDestination(AppScreen.IMAGES, Icons.Rounded.Image),
-    DrawerDestination(AppScreen.IMAGE_SETS, Icons.Rounded.Collections),
-    DrawerDestination(AppScreen.VIDEOS, Icons.Rounded.VideoLibrary),
-    DrawerDestination(AppScreen.SERIES, Icons.Rounded.Movie),
-    DrawerDestination(AppScreen.COLLECTIONS, Icons.Rounded.Source),
-    DrawerDestination(AppScreen.AUTHORS, Icons.Rounded.Person),
-    DrawerDestination(AppScreen.TAGS, Icons.Rounded.LocalOffer),
     DrawerDestination(AppScreen.SEARCH, Icons.Rounded.Search),
-    DrawerDestination(AppScreen.TRASH, Icons.Rounded.DeleteOutline),
     DrawerDestination(AppScreen.ORGANIZER, Icons.Rounded.Source),
+    DrawerDestination(AppScreen.TRASH, Icons.Rounded.DeleteOutline),
     DrawerDestination(AppScreen.SETTINGS, Icons.Rounded.Settings),
 )
 
@@ -180,8 +172,8 @@ fun GalleryApp(viewModel: GalleryViewModel = viewModel()) {
             scope.launch { drawerState.close() }
         }
         BackHandler(enabled = drawerState.isClosed) {
-            if (state.screen != AppScreen.HOME) {
-                viewModel.navigate(AppScreen.HOME)
+            if (state.screen !in primaryDestinations.map(DrawerDestination::screen)) {
+                viewModel.navigate(AppScreen.PHOTOS)
                 lastExitBackAt = 0L
             } else {
                 val now = SystemClock.elapsedRealtime()
@@ -208,7 +200,7 @@ fun GalleryApp(viewModel: GalleryViewModel = viewModel()) {
                             .padding(vertical = 12.dp),
                     ) {
                         Text(
-                            "Gallery",
+                            "库与管理",
                             style = MaterialTheme.typography.headlineSmall,
                             modifier = Modifier.padding(horizontal = 28.dp, vertical = 12.dp),
                         )
@@ -220,7 +212,7 @@ fun GalleryApp(viewModel: GalleryViewModel = viewModel()) {
                         )
                         Spacer(Modifier.height(12.dp))
                         destinations.forEachIndexed { index, destination ->
-                            if (index == 3 || index == 12) HorizontalDivider(Modifier.padding(vertical = 6.dp))
+                            if (index == 3) HorizontalDivider(Modifier.padding(vertical = 6.dp))
                             NavigationDrawerItem(
                                 label = { Text(destination.screen.title) },
                                 icon = { Icon(destination.icon, contentDescription = null) },
@@ -285,6 +277,20 @@ fun GalleryApp(viewModel: GalleryViewModel = viewModel()) {
                             }
                         },
                     )
+                },
+                bottomBar = {
+                    if (state.libraries.isNotEmpty()) {
+                        NavigationBar {
+                            primaryDestinations.forEach { destination ->
+                                NavigationBarItem(
+                                    selected = state.screen == destination.screen,
+                                    onClick = { viewModel.navigate(destination.screen) },
+                                    icon = { Icon(destination.icon, contentDescription = null) },
+                                    label = { Text(destination.screen.title) },
+                                )
+                            }
+                        }
+                    }
                 },
                 floatingActionButton = {
                     if (state.screen == AppScreen.LIBRARIES || state.libraries.isEmpty()) {

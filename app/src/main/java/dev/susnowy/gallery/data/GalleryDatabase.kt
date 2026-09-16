@@ -7,6 +7,7 @@ import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import dev.susnowy.gallery.model.LibraryRegistration
 import dev.susnowy.gallery.model.MediaItem
+import dev.susnowy.gallery.model.MediaDomain
 import dev.susnowy.gallery.model.MediaKind
 import dev.susnowy.gallery.model.PermissionState
 import dev.susnowy.gallery.model.PlaybackProgress
@@ -49,6 +50,7 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
                 relative_path TEXT NOT NULL,
                 uri TEXT NOT NULL,
                 kind TEXT NOT NULL,
+                domain TEXT NOT NULL,
                 source_kind TEXT NOT NULL,
                 display_title TEXT NOT NULL,
                 original_title TEXT,
@@ -57,6 +59,8 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
                 modified_at INTEGER NOT NULL,
                 content_hash TEXT,
                 captured_at INTEGER,
+                latitude REAL,
+                longitude REAL,
                 page_count INTEGER,
                 authors_json TEXT NOT NULL,
                 tags_json TEXT NOT NULL,
@@ -70,6 +74,7 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
                 deleted_at INTEGER,
                 needs_repair INTEGER NOT NULL,
                 revision INTEGER NOT NULL,
+                field_sources_json TEXT NOT NULL,
                 UNIQUE(library_id, relative_path),
                 FOREIGN KEY(library_id) REFERENCES libraries(library_id) ON DELETE CASCADE
             )
@@ -95,6 +100,16 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         if (oldVersion < 2) {
             db.execSQL("ALTER TABLE media ADD COLUMN content_hash TEXT")
+        }
+        if (oldVersion < 3) {
+            db.execSQL("ALTER TABLE media ADD COLUMN domain TEXT NOT NULL DEFAULT 'CLASSIFIED'")
+            db.execSQL("ALTER TABLE media ADD COLUMN field_sources_json TEXT NOT NULL DEFAULT '{}'")
+            db.execSQL("UPDATE media SET domain = 'ALBUM' WHERE kind IN ('PHOTO', 'PHOTO_VIDEO', 'LIVE_PHOTO')")
+            db.execSQL("UPDATE media SET domain = 'WORKS' WHERE kind = 'IMAGE_SET'")
+        }
+        if (oldVersion < 4) {
+            db.execSQL("ALTER TABLE media ADD COLUMN latitude REAL")
+            db.execSQL("ALTER TABLE media ADD COLUMN longitude REAL")
         } else if (oldVersion != newVersion) {
             db.execSQL("DROP TABLE IF EXISTS progress")
             db.execSQL("DROP TABLE IF EXISTS media")
@@ -269,6 +284,7 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
         put("relative_path", relativePath)
         put("uri", uri)
         put("kind", kind.name)
+        put("domain", domain.name)
         put("source_kind", sourceKind.name)
         put("display_title", displayTitle)
         originalTitle?.let { put("original_title", it) } ?: putNull("original_title")
@@ -277,6 +293,8 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
         put("modified_at", modifiedAt)
         contentHash?.let { put("content_hash", it) } ?: putNull("content_hash")
         capturedAt?.let { put("captured_at", it) } ?: putNull("captured_at")
+        latitude?.let { put("latitude", it) } ?: putNull("latitude")
+        longitude?.let { put("longitude", it) } ?: putNull("longitude")
         pageCount?.let { put("page_count", it) } ?: putNull("page_count")
         put("authors_json", json.encodeToString(authors))
         put("tags_json", json.encodeToString(tags))
@@ -290,6 +308,7 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
         deletedAt?.let { put("deleted_at", it) } ?: putNull("deleted_at")
         put("needs_repair", needsRepair.asInt())
         put("revision", revision)
+        put("field_sources_json", json.encodeToString(fieldSources))
     }
 
     private fun libraryFromCursor(cursor: Cursor) = LibraryRegistration(
@@ -307,6 +326,7 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
         relativePath = cursor.string("relative_path"),
         uri = cursor.string("uri"),
         kind = MediaKind.valueOf(cursor.string("kind")),
+        domain = MediaDomain.valueOf(cursor.string("domain")),
         sourceKind = SourceKind.valueOf(cursor.string("source_kind")),
         displayTitle = cursor.string("display_title"),
         originalTitle = cursor.nullableString("original_title"),
@@ -315,6 +335,8 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
         modifiedAt = cursor.long("modified_at"),
         contentHash = cursor.nullableString("content_hash"),
         capturedAt = cursor.nullableLong("captured_at"),
+        latitude = cursor.nullableDouble("latitude"),
+        longitude = cursor.nullableDouble("longitude"),
         pageCount = cursor.nullableInt("page_count"),
         authors = json.decodeFromString(cursor.string("authors_json")),
         tags = json.decodeFromString(cursor.string("tags_json")),
@@ -328,6 +350,7 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
         deletedAt = cursor.nullableLong("deleted_at"),
         needsRepair = cursor.int("needs_repair") != 0,
         revision = cursor.long("revision"),
+        fieldSources = json.decodeFromString(cursor.string("field_sources_json")),
     )
 
     private fun Boolean.asInt() = if (this) 1 else 0
@@ -341,6 +364,8 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
         getColumnIndexOrThrow(column).let { if (isNull(it)) null else getLong(it) }
     private fun Cursor.nullableInt(column: String): Int? =
         getColumnIndexOrThrow(column).let { if (isNull(it)) null else getInt(it) }
+    private fun Cursor.nullableDouble(column: String): Double? =
+        getColumnIndexOrThrow(column).let { if (isNull(it)) null else getDouble(it) }
 
     private inline fun <T> Cursor.mapRows(transform: (Cursor) -> T): List<T> {
         val output = mutableListOf<T>()
@@ -350,6 +375,6 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
 
     companion object {
         private const val DATABASE_NAME = "gallery-index.db"
-        private const val DATABASE_VERSION = 2
+        private const val DATABASE_VERSION = 4
     }
 }

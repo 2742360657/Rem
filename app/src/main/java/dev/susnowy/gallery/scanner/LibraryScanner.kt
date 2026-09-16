@@ -4,6 +4,7 @@ import android.media.MediaMetadataRetriever
 import android.util.Log
 import androidx.exifinterface.media.ExifInterface
 import dev.susnowy.gallery.library.LibraryDocument
+import dev.susnowy.gallery.model.MediaDomain
 import dev.susnowy.gallery.model.MediaKind
 import dev.susnowy.gallery.model.SourceKind
 import dev.susnowy.gallery.metadata.ComicInfoReader
@@ -26,12 +27,15 @@ data class ScanCandidate(
     val relativePath: String,
     val uri: String,
     val kind: MediaKind,
+    val domain: MediaDomain,
     val sourceKind: SourceKind,
     val suggestedTitle: String,
     val mimeType: String?,
     val size: Long,
     val modifiedAt: Long,
     val capturedAt: Long? = null,
+    val latitude: Double? = null,
+    val longitude: Double? = null,
     val contentHash: String? = null,
     val pageCount: Int? = null,
     val coverPath: String? = null,
@@ -97,10 +101,14 @@ class LibraryScanner {
             }
             val directory = storage.entry(path)
             if (directory != null) {
+                val parentName = path.substringBeforeLast('/', "").substringAfterLast('/').takeIf(String::isNotBlank)
+                val directoryMetadata = comicInfo.fromDirectory(storage, path)
+                    ?: FilenameMetadataParser.parse(path.substringAfterLast('/'), parentName)
                 output += ScanCandidate(
                     relativePath = path,
                     uri = directory.uri,
                     kind = MediaKind.IMAGE_SET,
+                    domain = MediaDomain.WORKS,
                     sourceKind = SourceKind.DIRECTORY,
                     suggestedTitle = path.substringAfterLast('/'),
                     mimeType = null,
@@ -109,9 +117,24 @@ class LibraryScanner {
                     pageCount = images.size,
                     coverPath = sortedPages.firstOrNull()?.relativePath,
                     contentHash = directoryFingerprint(files),
-                    recognizedMetadata = comicInfo.fromDirectory(storage, path)
-                        ?: FilenameMetadataParser.parse(path.substringAfterLast('/')),
+                    recognizedMetadata = directoryMetadata,
                 )
+                // Downloaded image sets often contain one or more bonus videos. Keep the
+                // directory as one readable image set, but never make those video files vanish.
+                videos.forEach { video ->
+                    val parsed = FilenameMetadataParser.parseVideo(video.name, path.substringAfterLast('/'))
+                    output += video.toCandidate(
+                        kind = MediaKind.VIDEO,
+                        domain = MediaDomain.WORKS,
+                        sourceKind = SourceKind.FILE,
+                        contentHash = contentHash(storage, video),
+                        recognizedMetadata = parsed.copy(
+                            authors = parsed.authors.ifEmpty { directoryMetadata.authors },
+                            tags = parsed.tags.ifEmpty { directoryMetadata.tags },
+                            series = parsed.series ?: directoryMetadata.series,
+                        ),
+                    )
+                }
             }
         } else {
             if (!inPhotos && !inImages && !inVideos && images.size >= MIN_IMAGE_SET_PAGES && directories.isNotEmpty()) {
@@ -119,6 +142,7 @@ class LibraryScanner {
             }
             val pairedVideoPaths = mutableSetOf<String>()
             images.forEach { image ->
+                val captured = if (inPhotos) readCapturedMetadata(storage, image) else null
                 val motion = if (inPhotos) videos.firstOrNull {
                     it.name.substringBeforeLast('.').equals(
                         image.name.substringBeforeLast('.'),
@@ -130,19 +154,33 @@ class LibraryScanner {
                     kind = if (motion == null) {
                         if (inPhotos) MediaKind.PHOTO else MediaKind.IMAGE
                     } else MediaKind.LIVE_PHOTO,
+                    domain = if (inPhotos) MediaDomain.ALBUM else MediaDomain.CLASSIFIED,
                     sourceKind = if (inPhotos) SourceKind.SYSTEM_IMPORT else SourceKind.FILE,
                     secondaryPath = motion?.relativePath,
-                    capturedAt = if (inPhotos) readCapturedAt(storage, image) else null,
+                    capturedAt = captured?.capturedAt,
+                    latitude = captured?.latitude,
+                    longitude = captured?.longitude,
                     contentHash = contentHash(storage, image),
                     sizeOverride = image.size + (motion?.size ?: 0),
                 )
             }
             videos.filterNot { it.relativePath in pairedVideoPaths }.forEach { video ->
+                val parentName = video.relativePath.substringBeforeLast('/', "").substringAfterLast('/')
+                    .takeIf(String::isNotBlank)
+                val captured = if (inPhotos) readCapturedMetadata(storage, video) else null
                 output += video.toCandidate(
                     kind = if (inPhotos) MediaKind.PHOTO_VIDEO else MediaKind.VIDEO,
+                    domain = when {
+                        inPhotos -> MediaDomain.ALBUM
+                        isWorkVideo(video.relativePath, video.name) -> MediaDomain.WORKS
+                        else -> MediaDomain.CLASSIFIED
+                    },
                     sourceKind = if (inPhotos) SourceKind.SYSTEM_IMPORT else SourceKind.FILE,
-                    capturedAt = if (inPhotos) readCapturedAt(storage, video) else null,
+                    capturedAt = captured?.capturedAt,
+                    latitude = captured?.latitude,
+                    longitude = captured?.longitude,
                     contentHash = contentHash(storage, video),
+                    recognizedMetadata = if (inPhotos) null else FilenameMetadataParser.parseVideo(video.name, parentName),
                 )
             }
         }
@@ -154,11 +192,15 @@ class LibraryScanner {
             }
             output += archive.toCandidate(
                 kind = MediaKind.IMAGE_SET,
+                domain = MediaDomain.WORKS,
                 sourceKind = SourceKind.ARCHIVE,
                 pageCount = count,
                 contentHash = contentHash(storage, archive),
                 recognizedMetadata = comicInfo.fromArchive(storage, archive.relativePath)
-                    ?: FilenameMetadataParser.parse(archive.name),
+                    ?: FilenameMetadataParser.parse(
+                        archive.name,
+                        archive.relativePath.substringBeforeLast('/', "").substringAfterLast('/').takeIf(String::isNotBlank),
+                    ),
             )
         }
 
@@ -184,10 +226,13 @@ class LibraryScanner {
 
     private fun StorageEntry.toCandidate(
         kind: MediaKind,
+        domain: MediaDomain,
         sourceKind: SourceKind,
         pageCount: Int? = null,
         secondaryPath: String? = null,
         capturedAt: Long? = null,
+        latitude: Double? = null,
+        longitude: Double? = null,
         recognizedMetadata: RecognizedMetadata? = null,
         contentHash: String? = null,
         sizeOverride: Long? = null,
@@ -195,12 +240,15 @@ class LibraryScanner {
         relativePath = relativePath,
         uri = uri,
         kind = kind,
+        domain = domain,
         sourceKind = sourceKind,
         suggestedTitle = name.substringBeforeLast('.', name),
         mimeType = mimeType,
         size = sizeOverride ?: size,
         modifiedAt = lastModified,
         capturedAt = capturedAt,
+        latitude = latitude,
+        longitude = longitude,
         pageCount = pageCount,
         secondaryPath = secondaryPath,
         recognizedMetadata = recognizedMetadata,
@@ -236,15 +284,27 @@ class LibraryScanner {
 
     private fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it) }
 
-    private fun readCapturedAt(storage: DocumentTreeStorage, entry: StorageEntry): Long? = when {
+    private data class CapturedMetadata(
+        val capturedAt: Long? = null,
+        val latitude: Double? = null,
+        val longitude: Double? = null,
+    )
+
+    private fun readCapturedMetadata(storage: DocumentTreeStorage, entry: StorageEntry): CapturedMetadata? = when {
         MediaClassifier.isImage(entry.name, entry.mimeType) -> runCatching {
             val document = LibraryDocument(entry.relativePath, entry.name, false)
             storage.openInput(document).use { input ->
                 val exif = ExifInterface(input)
                 val value = exif.getAttribute(ExifInterface.TAG_DATETIME_ORIGINAL)
                     ?: exif.getAttribute(ExifInterface.TAG_DATETIME)
-                value?.let { EXIF_DATE.parse(it, java.time.LocalDateTime::from) }
+                val capturedAt = value?.let { EXIF_DATE.parse(it, java.time.LocalDateTime::from) }
                     ?.atZone(ZoneId.systemDefault())?.toInstant()?.toEpochMilli()
+                val coordinates = exif.latLong
+                CapturedMetadata(
+                    capturedAt = capturedAt,
+                    latitude = coordinates?.getOrNull(0),
+                    longitude = coordinates?.getOrNull(1),
+                )
             }
         }.getOrNull()
         MediaClassifier.isVideo(entry.name, entry.mimeType) -> runCatching {
@@ -252,9 +312,12 @@ class LibraryScanner {
                 val retriever = MediaMetadataRetriever()
                 try {
                     retriever.setDataSource(descriptor.fileDescriptor)
-                    retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DATE)
+                    val capturedAt = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DATE)
                         ?.replace(Regex("\\.\\d+"), "")
                         ?.let { value -> runCatching { Instant.from(VIDEO_DATE.parse(value)).toEpochMilli() }.getOrNull() }
+                    val coordinates = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_LOCATION)
+                        ?.let(::parseIso6709)
+                    CapturedMetadata(capturedAt, coordinates?.first, coordinates?.second)
                 } finally {
                     retriever.release()
                 }
@@ -263,12 +326,28 @@ class LibraryScanner {
         else -> null
     }
 
+    private fun parseIso6709(value: String): Pair<Double, Double>? {
+        val match = Regex("^([+-]\\d+(?:\\.\\d+)?)([+-]\\d+(?:\\.\\d+)?)").find(value) ?: return null
+        val latitude = match.groupValues[1].toDoubleOrNull() ?: return null
+        val longitude = match.groupValues[2].toDoubleOrNull() ?: return null
+        return latitude to longitude
+    }
+
     private fun String.pathSegments(): List<String> = split('/').filter(String::isNotBlank)
+
+    private fun isWorkVideo(relativePath: String, name: String): Boolean {
+        val root = relativePath.pathSegments().firstOrNull()?.lowercase(Locale.ROOT).orEmpty()
+        return root in WORK_VIDEO_ROOTS || FilenameMetadataParser.looksEpisodic(name)
+    }
 
     companion object {
         private const val TAG = "GalleryScanner"
         const val MIN_IMAGE_SET_PAGES = 2
         private const val HASH_SIZE_LIMIT = 64L * 1024L * 1024L
+        private val WORK_VIDEO_ROOTS = setOf(
+            "anime", "animation", "animations", "works", "movies", "movie", "films", "film",
+            "series", "shows", "tv", "动漫", "动画", "番剧", "影视", "电影", "剧集", "作品",
+        )
         private val EXIF_DATE = DateTimeFormatter.ofPattern("yyyy:MM:dd HH:mm:ss", Locale.ROOT)
         private val VIDEO_DATE = DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmssX", Locale.ROOT)
 

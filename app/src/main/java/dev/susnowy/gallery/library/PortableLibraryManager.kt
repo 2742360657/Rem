@@ -82,11 +82,17 @@ class PortableLibraryManager(
             val name = path.substringAfterLast('/')
             writer.copyTo(path, ".gallery/backups/schema-v${library.schemaVersion}-$stamp-$name", "application/json")
         }
+        writer.copyTo(
+            GUIDE_FILE,
+            ".gallery/backups/schema-v${library.schemaVersion}-$stamp-$GUIDE_FILE",
+            "text/markdown",
+        )
         val migrated = library.copy(
             schemaVersion = CURRENT_SCHEMA_VERSION,
             updatedAt = Instant.now().toString(),
         )
         writer.write(SCHEMA_FILE, schemaDocument(), "application/json")
+        writer.write(GUIDE_FILE, libraryGuide(migrated), "text/markdown")
         writer.write(LIBRARY_JSON, json.encodeToString(migrated), "application/json")
         return migrated
     }
@@ -108,7 +114,7 @@ class PortableLibraryManager(
     companion object {
         const val GUIDE_FILE = "GALLERY_LIBRARY.md"
         const val LIBRARY_JSON = ".gallery/library.json"
-        const val SCHEMA_FILE = ".gallery/schema/v2.json"
+        const val SCHEMA_FILE = ".gallery/schema/v3.json"
         const val MEDIA_IGNORE_FILE = ".nomedia"
 
         /**
@@ -141,7 +147,7 @@ class PortableLibraryManager(
         fun libraryGuide(library: PortableLibrary): String = """
             # ${library.name}
 
-            这是一个 Gallery 便携媒体库。Library 身份位于 `.gallery/library.json`，当前 Schema 版本为 ${library.schemaVersion}，规范位于 `.gallery/schema/v2.json`。
+            这是一个 Gallery 便携媒体库。Library 身份位于 `.gallery/library.json`，当前 Schema 版本为 ${library.schemaVersion}，规范位于 `.gallery/schema/v3.json`。
 
             根目录中的 `.nomedia` 用于阻止 Android 系统相册重复收录 Library 内的媒体副本；Gallery 自己通过 SAF 扫描，不受影响。
 
@@ -154,10 +160,20 @@ class PortableLibraryManager(
             - `.gallery/transactions/`：文件整理事务；未完成事务不得随意删除。
             - `.gallery/backups/`：Schema 迁移和高风险操作前的元数据快照。
 
+            ## 三类内容
+
+            - 相册：`Photos/` 中的图片和视频，按拍摄时间浏览，不需要作者或标签。
+            - 分类媒体：普通图片和视频，主要按真实文件夹浏览；推荐放在 `Images/`、`Videos/`。
+            - 作品：漫画、写真集、动漫、电影和剧集；可使用作者、标签、系列与进度。图片目录或 ZIP/CBZ 默认属于作品；作品视频推荐放在 `Anime/`、`Movies/`、`Series/` 或 `Works/`。
+
+            以上目录名是推荐约定而不是硬限制。条目在 `.gallery/items/catalog.json` 中的 `domain`（`album`、`classified`、`works`）是最终归属，Agent 可以按规则修正它，不需要为了改视图而移动媒体。
+
+            常见“作者目录/NO.序号 作品名[页数-体积]/顺序图片”结构应保留原目录；Gallery 会尝试从父目录和作品目录名识别作者、标题与顺序。视频优先使用 `S01E02` 等通用集数命名。
+
             ## 修改规则
 
             所有媒体路径必须使用相对于 Library 根目录的路径，禁止写入 Android URI、Windows 盘符或绝对路径。
-            可以修改显示标题、作者、标签、Collection、Series、封面选择以及阅读状态；`id`、`revision`、时间戳和事务状态由程序维护。
+            可以修改内容归属、显示标题、作者、标签、Collection、Series、封面选择以及阅读状态；`id`、`revision`、时间戳和事务状态由程序维护。
             新增字段前必须先更新 Schema 说明，不要直接修改 Android 本机索引数据库。
             修改可编辑字段时，请同时把该字段写入条目的 `field_sources` 并标记为 `manual`；标记为 `manual` 的字段不会被自动识别或在线元数据覆盖。
 
@@ -170,11 +186,12 @@ class PortableLibraryManager(
         fun schemaDocument(): String = """
             {
               "${'$'}schema": "https://json-schema.org/draft/2020-12/schema",
-              "title": "Gallery portable metadata schema v2",
-              "schema_version": 2,
+              "title": "Gallery portable metadata schema v3",
+              "schema_version": 3,
               "path_rule": "All media paths are slash-separated and relative to the Library root.",
               "migration": {
-                "from_v1": "Additive. Catalog items gain field_sources; missing values mean the field is still automatic. Documents are stamped with the new version when next written."
+                "from_v1": "Additive. Catalog items gain field_sources; missing values mean the field is still automatic.",
+                "from_v2": "Additive. Catalog items gain domain (album, classified, or works). Missing values are inferred from media type, path convention, and filename."
               },
               "documents": {
                 ".gallery/library.json": {
@@ -185,12 +202,13 @@ class PortableLibraryManager(
                 ".gallery/items/catalog.json": {
                   "required": ["schema_version", "library_id", "revision", "updated_at", "items"],
                   "item_required": ["id", "relative_path", "type", "display_title", "source", "revision", "updated_at"],
-                  "item_editable": ["display_title", "original_title", "authors", "tags", "collections", "series", "cover_path", "favorite"],
+                  "item_optional": ["domain"],
+                  "item_editable": ["domain", "display_title", "original_title", "authors", "tags", "collections", "series", "cover_path", "favorite"],
                   "item_program_managed": ["id", "relative_path", "source", "content_hash", "revision", "updated_at"],
                   "item_field_sources": {
                     "type": "object",
                     "description": "Provenance per editable field. 'manual' means a human set it and automatic metadata must never overwrite it.",
-                    "keys": ["display_title", "original_title", "authors", "tags", "collections", "series", "cover_path", "favorite"],
+                    "keys": ["domain", "display_title", "original_title", "authors", "tags", "collections", "series", "cover_path", "favorite"],
                     "values": ["manual", "import", "filename", "comic_info", "system_import", "provider:<id>"]
                   }
                 },
@@ -203,6 +221,7 @@ class PortableLibraryManager(
                 }
               },
               "media_types": ["image", "image_set", "video", "photo", "photo_video", "live_photo"],
+              "media_domains": ["album", "classified", "works"],
               "source_types": ["file", "directory", "archive", "system_import"]
             }
         """.trimIndent() + "\n"

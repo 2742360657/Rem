@@ -238,6 +238,7 @@ class PortableMetadataStore(
             id = id,
             relativePath = relativePath,
             type = kind,
+            domain = domain,
             displayTitle = displayTitle,
             originalTitle = originalTitle,
             source = sourceKind,

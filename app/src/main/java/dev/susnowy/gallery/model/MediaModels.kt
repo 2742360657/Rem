@@ -13,6 +13,14 @@ enum class MediaKind {
     @SerialName("live_photo") LIVE_PHOTO,
 }
 
+/** The product surface an item belongs to; independent from its file format. */
+@Serializable
+enum class MediaDomain {
+    @SerialName("album") ALBUM,
+    @SerialName("classified") CLASSIFIED,
+    @SerialName("works") WORKS,
+}
+
 @Serializable
 enum class SourceKind {
     @SerialName("file") FILE,
@@ -38,6 +46,7 @@ data class MediaItem(
     val relativePath: String,
     val uri: String,
     val kind: MediaKind,
+    val domain: MediaDomain = MediaDomain.CLASSIFIED,
     val sourceKind: SourceKind,
     val displayTitle: String,
     val originalTitle: String? = null,
@@ -46,6 +55,8 @@ data class MediaItem(
     val modifiedAt: Long = 0,
     val contentHash: String? = null,
     val capturedAt: Long? = null,
+    val latitude: Double? = null,
+    val longitude: Double? = null,
     val pageCount: Int? = null,
     val authors: List<String> = emptyList(),
     val tags: List<String> = emptyList(),
@@ -76,6 +87,8 @@ data class PortableItemMetadata(
     val id: String,
     @SerialName("relative_path") val relativePath: String,
     val type: MediaKind,
+    /** Null only when decoding a pre-v3 catalog; the scanner then infers it. */
+    val domain: MediaDomain? = null,
     @SerialName("display_title") val displayTitle: String,
     @SerialName("original_title") val originalTitle: String? = null,
     val source: SourceKind,

@@ -47,6 +47,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -93,10 +94,13 @@ import androidx.core.view.WindowInsetsControllerCompat
 import coil3.compose.AsyncImage
 import dev.susnowy.gallery.media.ImagePage
 import dev.susnowy.gallery.model.MediaItem
+import dev.susnowy.gallery.model.MediaDomain
 import dev.susnowy.gallery.model.MediaKind
 import dev.susnowy.gallery.model.SourceKind
 import dev.susnowy.gallery.ui.GalleryViewModel
 import dev.susnowy.gallery.ui.components.label
+import java.text.DateFormat
+import java.util.Date
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.delay
@@ -205,7 +209,7 @@ fun MediaDetail(
         MetadataEditor(
             item = currentItem,
             onDismiss = { showEditor = false },
-            onSave = { title, authors, tags, collections, series, sortIndex, favorite ->
+            onSave = { title, authors, tags, collections, series, sortIndex, favorite, domain ->
                 viewModel.saveMetadata(
                     currentItem,
                     title,
@@ -215,6 +219,7 @@ fun MediaDetail(
                     series,
                     sortIndex,
                     favorite,
+                    domain,
                 )
                 showEditor = false
             },
@@ -499,8 +504,8 @@ private fun ImageSetDetail(
         MetadataEditor(
             item = item,
             onDismiss = { showEditor = false },
-            onSave = { title, authors, tags, collections, series, sortIndex, favorite ->
-                viewModel.saveMetadata(item, title, authors, tags, collections, series, sortIndex, favorite)
+            onSave = { title, authors, tags, collections, series, sortIndex, favorite, domain ->
+                viewModel.saveMetadata(item, title, authors, tags, collections, series, sortIndex, favorite, domain)
                 showEditor = false
             },
         )
@@ -917,7 +922,21 @@ private fun MetadataSummary(item: MediaItem) {
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp, vertical = 10.dp),
         ) {
-            Text("${item.kind.label()} · ${item.relativePath}", style = MaterialTheme.typography.labelMedium)
+            Text("${item.kind.label()} · ${item.domain.displayLabel()}", style = MaterialTheme.typography.labelMedium)
+            Text("位置：${item.relativePath}", style = MaterialTheme.typography.bodySmall)
+            val time = item.capturedAt ?: item.modifiedAt
+            if (time > 0) {
+                Text(
+                    "${if (item.capturedAt != null) "拍摄" else "修改"}时间：${DateFormat.getDateTimeInstance().format(Date(time))}",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            if (item.latitude != null && item.longitude != null) {
+                Text(
+                    "拍摄地点：%.5f, %.5f".format(item.latitude, item.longitude),
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
             val details = buildList {
                 if (item.authors.isNotEmpty()) add("作者：${item.authors.joinToString()}")
                 if (item.tags.isNotEmpty()) add("标签：${item.tags.joinToString()}")
@@ -929,11 +948,17 @@ private fun MetadataSummary(item: MediaItem) {
     }
 }
 
+private fun MediaDomain.displayLabel(): String = when (this) {
+    MediaDomain.ALBUM -> "相册"
+    MediaDomain.CLASSIFIED -> "图片 / 视频"
+    MediaDomain.WORKS -> "漫画 / 动漫"
+}
+
 @Composable
 private fun MetadataEditor(
     item: MediaItem,
     onDismiss: () -> Unit,
-    onSave: (String, String, String, String, String, String, Boolean) -> Unit,
+    onSave: (String, String, String, String, String, String, Boolean, MediaDomain) -> Unit,
 ) {
     var title by remember(item.id) { mutableStateOf(item.displayTitle) }
     var authors by remember(item.id) { mutableStateOf(item.authors.joinToString()) }
@@ -942,6 +967,7 @@ private fun MetadataEditor(
     var series by remember(item.id) { mutableStateOf(item.series?.title.orEmpty()) }
     var sortIndex by remember(item.id) { mutableStateOf(item.series?.sortIndex?.toString().orEmpty()) }
     var favorite by remember(item.id) { mutableStateOf(item.favorite) }
+    var domain by remember(item.id) { mutableStateOf(item.domain) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("编辑便携元数据") },
@@ -950,6 +976,21 @@ private fun MetadataEditor(
                 modifier = Modifier.verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
+                if (item.kind == MediaKind.VIDEO) {
+                    Text("显示位置", style = MaterialTheme.typography.labelLarge)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilterChip(
+                            selected = domain == MediaDomain.CLASSIFIED,
+                            onClick = { domain = MediaDomain.CLASSIFIED },
+                            label = { Text("图片 / 视频") },
+                        )
+                        FilterChip(
+                            selected = domain == MediaDomain.WORKS,
+                            onClick = { domain = MediaDomain.WORKS },
+                            label = { Text("漫画 / 动漫") },
+                        )
+                    }
+                }
                 OutlinedTextField(title, { title = it }, label = { Text("显示标题") }, singleLine = true)
                 OutlinedTextField(authors, { authors = it }, label = { Text("作者（逗号分隔）") }, singleLine = true)
                 OutlinedTextField(tags, { tags = it }, label = { Text("标签（支持 namespace）") }, singleLine = true)
@@ -981,7 +1022,7 @@ private fun MetadataEditor(
         },
         confirmButton = {
             TextButton(onClick = {
-                onSave(title, authors, tags, collections, series, sortIndex, favorite)
+                onSave(title, authors, tags, collections, series, sortIndex, favorite, domain)
             }) { Text("保存") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },

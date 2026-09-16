@@ -4,6 +4,7 @@ import dev.susnowy.gallery.library.LibraryDocument
 import dev.susnowy.gallery.library.LibraryDocumentAccess
 import dev.susnowy.gallery.model.CURRENT_SCHEMA_VERSION
 import dev.susnowy.gallery.model.MediaItem
+import dev.susnowy.gallery.model.MediaDomain
 import dev.susnowy.gallery.model.MediaKind
 import dev.susnowy.gallery.model.PlaybackProgress
 import dev.susnowy.gallery.model.SourceKind
@@ -27,6 +28,7 @@ class PortableMetadataStoreTest {
         relativePath = "Inbox/work.cbz",
         uri = "content://work",
         kind = MediaKind.IMAGE_SET,
+        domain = MediaDomain.WORKS,
         sourceKind = SourceKind.ARCHIVE,
         displayTitle = "Work",
         contentHash = "abc",
@@ -38,6 +40,7 @@ class PortableMetadataStoreTest {
         val first = store.saveItem(item, expectedRevision = 0)
         assertEquals(1, first.revision)
         assertEquals("abc", store.loadCatalog("library-id").items.single().contentHash)
+        assertEquals(MediaDomain.WORKS, store.loadCatalog("library-id").items.single().domain)
 
         assertThrows(RevisionConflictException::class.java) {
             store.saveItem(item.copy(displayTitle = "Stale"), expectedRevision = 0)

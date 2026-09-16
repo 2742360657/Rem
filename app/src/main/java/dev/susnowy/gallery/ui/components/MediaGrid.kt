@@ -41,6 +41,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import dev.susnowy.gallery.model.MediaItem
+import dev.susnowy.gallery.model.MediaDomain
 import dev.susnowy.gallery.model.MediaKind
 import dev.susnowy.gallery.model.SourceKind
 import dev.susnowy.gallery.ui.GalleryViewModel
@@ -206,6 +207,30 @@ fun MediaCard(
                             "需修复",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                }
+                if (item.domain == MediaDomain.WORKS) {
+                    item.authors.takeIf { it.isNotEmpty() }?.let { authors ->
+                        Text(
+                            authors.joinToString(" · "),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    val descriptors = buildList {
+                        item.series?.title?.let(::add)
+                        addAll(item.tags.take(2))
+                    }
+                    if (descriptors.isNotEmpty()) {
+                        Text(
+                            descriptors.joinToString(" · "),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.tertiary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                         )
                     }
                 }

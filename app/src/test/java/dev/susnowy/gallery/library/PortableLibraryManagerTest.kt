@@ -23,7 +23,7 @@ class PortableLibraryManagerTest {
         assertTrue(access.files.containsKey(".gallery/library.json"))
         assertTrue(access.files.containsKey("GALLERY_LIBRARY.md"))
         assertTrue(access.files.containsKey(PortableLibraryManager.SCHEMA_FILE))
-        assertEquals(".gallery/schema/v2.json", PortableLibraryManager.SCHEMA_FILE)
+        assertEquals(".gallery/schema/v3.json", PortableLibraryManager.SCHEMA_FILE)
         assertTrue(access.files.containsKey(PortableLibraryManager.MEDIA_IGNORE_FILE))
         assertTrue(PortableLibraryManager(access).inspect() is LibraryInspection.Valid)
     }
@@ -48,8 +48,8 @@ class PortableLibraryManagerTest {
         val migrated = manager.migrateSchema((manager.inspect() as LibraryInspection.Valid).library)
 
         assertEquals(CURRENT_SCHEMA_VERSION, migrated.schemaVersion)
-        assertTrue(access.files.containsKey(".gallery/schema/v2.json"))
-        assertTrue(access.files.getValue(PortableLibraryManager.LIBRARY_JSON).decodeToString().contains("\"schema_version\": 2"))
+        assertTrue(access.files.containsKey(".gallery/schema/v3.json"))
+        assertTrue(access.files.getValue(PortableLibraryManager.LIBRARY_JSON).decodeToString().contains("\"schema_version\": 3"))
         // The original documents stay available as a pre-migration snapshot.
         val backups = access.files.keys.filter { it.startsWith(".gallery/backups/schema-v1-") }
         assertEquals(3, backups.size)

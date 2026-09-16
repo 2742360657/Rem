@@ -7,13 +7,14 @@ Gallery is an Android 8.0+ local-first media library. The project intentionally 
 1. Media bytes remain in the user-selected Storage Access Framework tree.
 2. Portable truth lives under `.gallery/` in that tree. It contains the versioned Library identity, catalog overrides, progress, logical trash, imports, backups, and recoverable file transactions.
 3. `gallery-index.db` is a device-local SQLite index. It stores SAF URIs and query-friendly projections and can be rebuilt from the Library.
-4. Compose screens consume repository state. Thumbnail and decoder data never enters the portable Library.
+4. Every item has a portable `domain`: `album`, `classified`, or `works`. Compose exposes these as exactly three primary destinations; file type and product surface are not conflated.
+5. Compose screens consume repository state. Thumbnail and decoder data never enters the portable Library.
 
 Android URIs and mount paths are local-only. Every portable media path uses `/`-separated paths relative to the Library root.
 
 ## Packages
 
-- `library`: initialization, identity, additive Schema v2 migration, and generated Library guide.
+- `library`: initialization, identity, additive Schema v3 migration, and generated Library guide.
 - `storage`: the only layer that directly traverses or mutates SAF documents.
 - `scanner`: nested-directory classification, content fingerprints, EXIF/video dates, ZIP/CBZ discovery, and Inbox candidates.
 - `metadata`: portable catalog/state persistence, revision checks, ComicInfo, and provider contracts.
@@ -32,6 +33,7 @@ Android URIs and mount paths are local-only. Every portable media path uses `/`-
 - Schema and Organizer changes create portable metadata backups.
 - A newer unsupported Library Schema is never written.
 - Manual portable metadata wins over local and inferred metadata.
+- Album media stays metadata-light, classified media uses physical folders as its hierarchy, and author/tag/series facets are confined to works.
 - Duplicate detection reports SHA-256 matches but never deletes or merges them.
 - System media browsing uses read-only `MediaStore` access with full/partial/denied states; it never requests `MANAGE_EXTERNAL_STORAGE`.
 - Forgetting a Library removes only its device-local index and persisted SAF grant; it never mutates the selected tree.

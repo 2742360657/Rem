@@ -8,10 +8,10 @@ const val GALLERY_FORMAT = "gallery-library"
 /**
  * v1 → v2 adds per-field provenance (`field_sources`) to catalog items so that
  * automatic metadata can never silently overwrite a manual edit.
- * v2 is an additive change: v1 documents decode with defaults and are stamped
- * with the new version the next time they are written.
+ * v2 → v3 adds an explicit media domain. This keeps the three product surfaces
+ * (album, classified folders, and works) independent of mutable path names.
  */
-const val CURRENT_SCHEMA_VERSION = 2
+const val CURRENT_SCHEMA_VERSION = 3
 
 /** Raised instead of writing to a Library that declares a newer Schema. */
 class UnsupportedSchemaException(message: String) : IllegalStateException(message)

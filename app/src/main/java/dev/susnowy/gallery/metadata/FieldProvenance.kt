@@ -22,6 +22,7 @@ object FieldSource {
 
 /** Portable field names used as keys in `field_sources`. */
 object MetadataField {
+    const val DOMAIN = "domain"
     const val DISPLAY_TITLE = "display_title"
     const val ORIGINAL_TITLE = "original_title"
     const val AUTHORS = "authors"
@@ -32,6 +33,7 @@ object MetadataField {
     const val FAVORITE = "favorite"
 
     val EDITABLE = listOf(
+        DOMAIN,
         DISPLAY_TITLE,
         ORIGINAL_TITLE,
         AUTHORS,
@@ -51,6 +53,7 @@ object MetadataField {
 fun MediaItem.withManualEdits(previous: MediaItem?): Map<String, String> {
     val manual = fieldSources.filterValues { it == FieldSource.MANUAL }.toMutableMap()
     if (previous == null) return manual
+    if (previous.domain != domain) manual[MetadataField.DOMAIN] = FieldSource.MANUAL
     if (previous.displayTitle != displayTitle) manual[MetadataField.DISPLAY_TITLE] = FieldSource.MANUAL
     if (previous.originalTitle != originalTitle) manual[MetadataField.ORIGINAL_TITLE] = FieldSource.MANUAL
     if (previous.authors != authors) manual[MetadataField.AUTHORS] = FieldSource.MANUAL

@@ -167,6 +167,8 @@ class GalleryRepository(context: Context) {
                         id = UUID.nameUUIDFromBytes("$libraryId:$title".encodeToByteArray()).toString(),
                         title = title,
                         sortIndex = recognized.sortIndex ?: 0.0,
+                        season = recognized.season,
+                        episode = recognized.episode,
                         volume = recognized.volume,
                     )
                 }
@@ -176,15 +178,20 @@ class GalleryRepository(context: Context) {
                     relativePath = candidate.relativePath,
                     uri = candidate.uri,
                     kind = candidate.kind,
+                    // Pre-v3 local rows defaulted to CLASSIFIED. Trust the current scan unless a
+                    // portable v3 catalog explicitly records the user's choice.
+                    domain = metadata?.domain ?: candidate.domain,
                     sourceKind = candidate.sourceKind,
                     displayTitle = metadata?.displayTitle ?: recognized?.title
                         ?: local?.displayTitle ?: candidate.suggestedTitle,
-                    originalTitle = metadata?.originalTitle ?: recognized?.title ?: local?.originalTitle,
+                    originalTitle = metadata?.originalTitle ?: candidate.suggestedTitle,
                     mimeType = candidate.mimeType,
                     size = candidate.size,
                     modifiedAt = candidate.modifiedAt,
                     contentHash = candidate.contentHash,
                     capturedAt = candidate.capturedAt ?: local?.capturedAt,
+                    latitude = candidate.latitude ?: local?.latitude,
+                    longitude = candidate.longitude ?: local?.longitude,
                     pageCount = candidate.pageCount,
                     authors = metadata?.authors ?: recognized?.authors?.takeIf { it.isNotEmpty() }
                         ?: local?.authors.orEmpty(),

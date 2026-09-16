@@ -18,6 +18,7 @@ import dev.susnowy.gallery.media.ImagePage
 import dev.susnowy.gallery.media.MediaContentService
 import dev.susnowy.gallery.model.LibraryRegistration
 import dev.susnowy.gallery.model.MediaItem
+import dev.susnowy.gallery.model.MediaDomain
 import dev.susnowy.gallery.model.MediaKind
 import dev.susnowy.gallery.model.PlaybackProgress
 import dev.susnowy.gallery.model.SeriesRef
@@ -35,7 +36,8 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 enum class AppScreen(val title: String) {
-    HOME("首页"),
+    MEDIA("图片 / 视频"),
+    WORKS("漫画 / 动漫"),
     LIBRARIES("媒体库"),
     INBOX("Inbox"),
     PHOTOS("相册"),
@@ -58,7 +60,7 @@ data class GalleryUiState(
     val activeLibraryId: String? = null,
     val media: List<MediaItem> = emptyList(),
     val allMedia: List<MediaItem> = emptyList(),
-    val screen: AppScreen = AppScreen.HOME,
+    val screen: AppScreen = AppScreen.PHOTOS,
     val selectedItemId: String? = null,
     val detailItemIds: List<String> = emptyList(),
     val searchQuery: String = "",
@@ -87,7 +89,7 @@ class GalleryViewModel(
     private val screen = MutableStateFlow(
         savedStateHandle.get<String>(SCREEN_KEY)
             ?.let { value -> runCatching { AppScreen.valueOf(value) }.getOrNull() }
-            ?: AppScreen.HOME,
+            ?: AppScreen.PHOTOS,
     )
     private val selectedItemId = MutableStateFlow(savedStateHandle.get<String>(SELECTED_ITEM_KEY))
     private val detailItemIds = MutableStateFlow<List<String>>(emptyList())
@@ -256,6 +258,7 @@ class GalleryViewModel(
         seriesTitle: String,
         sortIndex: String,
         favorite: Boolean,
+        domain: MediaDomain = item.domain,
     ) {
         viewModelScope.launch {
             val series = seriesTitle.trim().takeIf(String::isNotEmpty)?.let { value ->
@@ -266,6 +269,7 @@ class GalleryViewModel(
                 )
             }
             val updated = item.copy(
+                domain = domain,
                 displayTitle = title.trim().ifBlank { item.displayTitle },
                 authors = authors.splitValues(),
                 tags = tags.splitValues(),
@@ -440,7 +444,7 @@ class GalleryViewModel(
             }.onSuccess { result ->
                 message.value = "已创建漫画/图集：导入 ${result.imported} 页" +
                     if (result.warnings.isEmpty()) "" else "，${result.warnings.size} 条警告"
-                setScreen(AppScreen.IMAGE_SETS)
+                setScreen(AppScreen.WORKS)
             }.onFailure(::showError)
         }
     }
@@ -457,7 +461,7 @@ class GalleryViewModel(
                 val label = if (kind == WorkImportKind.IMAGE) "图片" else "视频"
                 message.value = "已按来源分类导入 ${result.imported} 项$label，跳过 ${result.skipped} 项" +
                     if (result.warnings.isEmpty()) "" else "，${result.warnings.size} 条警告"
-                setScreen(if (kind == WorkImportKind.IMAGE) AppScreen.IMAGES else AppScreen.VIDEOS)
+                setScreen(AppScreen.MEDIA)
             }.onFailure(::showError)
         }
     }
@@ -521,7 +525,7 @@ class GalleryViewModel(
                 target
             }.onSuccess {
                 message.value = "已创建漫画/图集：$it"
-                setScreen(AppScreen.IMAGE_SETS)
+                setScreen(AppScreen.WORKS)
             }
                 .onFailure(::showError)
         }
