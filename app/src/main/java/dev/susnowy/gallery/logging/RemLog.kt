@@ -3,16 +3,20 @@ package dev.susnowy.gallery.logging
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import androidx.core.content.FileProvider
 import dev.susnowy.gallery.BuildConfig
 import java.io.File
 import java.io.PrintWriter
 import java.io.StringWriter
-import java.text.SimpleDateFormat
-import java.util.Date
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import java.util.Locale
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 
 /**
@@ -44,8 +48,10 @@ object RemLog {
     private val executor = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "rem-log").apply { isDaemon = true }
     }
-    private val formatter = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.ROOT)
-    private val fileStamp = SimpleDateFormat("yyyyMMdd", Locale.ROOT)
+    private val formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS", Locale.ROOT)
+        .withZone(ZoneId.systemDefault())
+    private val fileStamp = DateTimeFormatter.ofPattern("yyyyMMdd", Locale.ROOT)
+        .withZone(ZoneId.systemDefault())
     private val initialized = AtomicReference<File?>(null)
 
     /** Wires up crash capture and rolls old records out. Safe to call more than once. */
@@ -79,6 +85,13 @@ object RemLog {
      * Library's log without loading all of it.
      */
     fun tail(context: Context): String {
+        val appContext = context.applicationContext
+        return runCatching {
+            executor.submit<String> { tailNow(appContext) }.get(TAIL_WAIT_SECONDS, TimeUnit.SECONDS)
+        }.getOrElse { tailNow(appContext) }
+    }
+
+    private fun tailNow(context: Context): String {
         val directory = directory(context)
         val session = sessionFile(directory)
         val crash = File(directory, CRASH_FILE)
@@ -114,9 +127,11 @@ object RemLog {
      * needs storage permission and the user picks the destination.
      */
     fun share(context: Context) {
-        val files = reportFiles(context)
-        if (files.isEmpty()) return
+        val appContext = context.applicationContext
         executor.execute {
+            // All records queued before the click have reached disk before this runs.
+            val files = reportFiles(appContext)
+            if (files.isEmpty()) return@execute
             val intent = Intent(Intent.ACTION_SEND_MULTIPLE).apply {
                 type = "text/plain"
                 putParcelableArrayListExtra(
@@ -124,8 +139,8 @@ object RemLog {
                     ArrayList(
                         files.map { file ->
                             FileProvider.getUriForFile(
-                                context,
-                                "${context.packageName}.fileprovider",
+                                appContext,
+                                "${appContext.packageName}.fileprovider",
                                 file,
                             )
                         },
@@ -133,11 +148,13 @@ object RemLog {
                 )
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
-            context.startActivity(
-                Intent.createChooser(intent, "导出 Rem 诊断日志")
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION),
-            )
+            Handler(Looper.getMainLooper()).post {
+                appContext.startActivity(
+                    Intent.createChooser(intent, "导出 Rem 诊断日志")
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION),
+                )
+            }
         }
     }
 
@@ -161,7 +178,7 @@ object RemLog {
             Level.ERROR -> Log.e(tag, message, error)
         }
         val line = buildString {
-            append(formatter.format(Date()))
+            append(formatter.format(Instant.now()))
             append(' ').append(level.name.first())
             append(' ').append(tag)
             append(" | ").append(scrub(message).take(MAX_MESSAGE_CHARS))
@@ -176,16 +193,17 @@ object RemLog {
         BuildConfig.DEBUG || level == Level.WARN || level == Level.ERROR
 
     /** One line per failure, keeping the first few frames so a report stays readable. */
-    private fun describe(error: Throwable): String {
+    internal fun describe(error: Throwable): String {
         val trace = StringWriter().also { error.printStackTrace(PrintWriter(it)) }.toString()
         val relevant = trace.lineSequence()
             .filter { line -> line.contains("dev.susnowy.gallery") || !line.trimStart().startsWith("at ") }
             .take(8)
             .joinToString(" <- ")
             .replace('\n', ' ')
-        return "${error.javaClass.name}: ${scrub(error.message.orEmpty())}".let { headline ->
+        val description = "${error.javaClass.name}: ${error.message.orEmpty()}".let { headline ->
             if (relevant.isBlank()) headline else "$headline [$relevant]"
         }
+        return scrub(description)
     }
 
     private fun installCrashHandler(context: Context, directory: File) {
@@ -193,7 +211,7 @@ object RemLog {
         Thread.setDefaultUncaughtExceptionHandler { thread, error ->
             runCatching {
                 val report = buildString {
-                    appendLine("时间: ${formatter.format(Date())}")
+                    appendLine("时间: ${formatter.format(Instant.now())}")
                     appendLine("线程: ${thread.name}")
                     appendLine("版本: ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
                     appendLine("设备: ${Build.MANUFACTURER} ${Build.MODEL} / Android ${Build.VERSION.RELEASE} (SDK ${Build.VERSION.SDK_INT})")
@@ -213,7 +231,7 @@ object RemLog {
             appendLine("版本: ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
             appendLine("设备: ${Build.MANUFACTURER} ${Build.MODEL}")
             appendLine("Android: ${Build.VERSION.RELEASE} (SDK ${Build.VERSION.SDK_INT})")
-            appendLine("开始: ${formatter.format(Date())}")
+            appendLine("开始: ${formatter.format(Instant.now())}")
         }
         runCatching { File(directory, HEADER_FILE).writeText(header) }
         appendTo(sessionFile(directory), "启动 | ${header.replace('\n', ' ')}")
@@ -225,7 +243,7 @@ object RemLog {
     private fun sessionFile(directory: File) =
         File(
             directory,
-            "${LogRetention.SESSION_PREFIX}${fileStamp.format(Date())}${LogRetention.SESSION_SUFFIX}",
+            "${LogRetention.SESSION_PREFIX}${fileStamp.format(Instant.now())}${LogRetention.SESSION_SUFFIX}",
         )
 
     private fun sessionFiles(directory: File): List<File> = LogRetention.sessions(directory)
@@ -251,4 +269,5 @@ object RemLog {
 
     private val CONTENT_URI = Regex("""content://[^\s"']*""")
     private val WINDOWS_PATH = Regex("""[A-Za-z]:[\\/][^\s"']*""")
+    private const val TAIL_WAIT_SECONDS = 2L
 }

@@ -51,4 +51,18 @@ class RemLogScrubTest {
         assertEquals("", RemLog.scrub(""))
         assertEquals("扫描完成：候选=27835", RemLog.scrub("扫描完成：候选=27835"))
     }
+
+    @Test
+    fun removesSensitivePathsFromTheEntireExceptionDescription() {
+        val description = RemLog.describe(
+            IllegalStateException(
+                "无法打开 content://provider/tree/1A2B-3C4D%3ARem-lib，备份位于 E:\\Rem-lib\\backup",
+            ),
+        )
+
+        assertFalse(description.contains("1A2B-3C4D"))
+        assertFalse(description.contains("Rem-lib"))
+        assertFalse(description.contains("E:"))
+        assertTrue(description.contains("IllegalStateException"))
+    }
 }
