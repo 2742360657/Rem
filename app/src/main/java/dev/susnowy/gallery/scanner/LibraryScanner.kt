@@ -7,6 +7,7 @@ import dev.susnowy.gallery.logging.RemLog
 import dev.susnowy.gallery.model.MediaDomain
 import dev.susnowy.gallery.model.MediaKind
 import dev.susnowy.gallery.model.SourceKind
+import dev.susnowy.gallery.model.DiscoveryReason
 import dev.susnowy.gallery.metadata.ComicInfoReader
 import dev.susnowy.gallery.metadata.DownloadedSourceRecognizer
 import dev.susnowy.gallery.metadata.FieldSource
@@ -46,9 +47,20 @@ data class ScanCandidate(
     val recognizedMetadata: RecognizedMetadata? = null,
 )
 
+data class ScanDiscoveryCandidate(
+    val relativePath: String,
+    val uri: String? = null,
+    val isDirectory: Boolean,
+    val mimeType: String? = null,
+    val size: Long = 0,
+    val modifiedAt: Long = 0,
+    val reason: DiscoveryReason,
+)
+
 data class ScanResult(
     val candidates: List<ScanCandidate>,
     val ambiguousDirectories: List<String>,
+    val discoveries: List<ScanDiscoveryCandidate> = emptyList(),
     val warnings: List<String>,
     val unreadableDirectories: List<String> = emptyList(),
     /** Files whose content was actually opened because no usable prior record existed. */
@@ -133,6 +145,7 @@ class LibraryScanner {
     ): ScanResult = withContext(Dispatchers.IO) {
         val candidates = mutableListOf<ScanCandidate>()
         val ambiguous = mutableListOf<String>()
+        val discoveries = mutableListOf<ScanDiscoveryCandidate>()
         val warnings = mutableListOf<String>()
         val unreadableDirectories = mutableListOf<String>()
         val statistics = ScanStatistics()
@@ -141,6 +154,7 @@ class LibraryScanner {
             "",
             candidates,
             ambiguous,
+            discoveries,
             warnings,
             unreadableDirectories,
             prior,
@@ -150,7 +164,7 @@ class LibraryScanner {
         onProgress(statistics.progress(candidates.size))
         RemLog.info(
             TAG,
-            "扫描完成：候选=${candidates.size}，待确认目录=${ambiguous.size}，" +
+            "扫描完成：候选=${candidates.size}，其他待判断=${discoveries.size}，" +
                 "警告=${warnings.size}，读取内容=${statistics.contentReads}，" +
                 "复用未变化文件=${statistics.contentReadsSkipped}",
         )
@@ -160,6 +174,9 @@ class LibraryScanner {
                     MediaClassifier.naturalCompare(left.relativePath, right.relativePath)
                 }),
             ambiguousDirectories = ambiguous,
+            discoveries = discoveries.sortedWith { left, right ->
+                MediaClassifier.naturalCompare(left.relativePath, right.relativePath)
+            },
             warnings = warnings,
             unreadableDirectories = unreadableDirectories,
             contentReads = statistics.contentReads,
@@ -172,6 +189,7 @@ class LibraryScanner {
         path: String,
         output: MutableList<ScanCandidate>,
         ambiguous: MutableList<String>,
+        discoveries: MutableList<ScanDiscoveryCandidate>,
         warnings: MutableList<String>,
         unreadableDirectories: MutableList<String>,
         prior: ScanSnapshot,
@@ -184,7 +202,7 @@ class LibraryScanner {
             warnings += "无法读取 ${path.ifEmpty { "Library 根目录" }}：${error.message.orEmpty()}"
             unreadableDirectories += path
             return
-        }.filterNot { path.isEmpty() && it.name == ".gallery" }
+        }.filterNot { path.isEmpty() && it.isDirectory && DiscoveryPolicy.ignoreRootDirectory(it.name) }
         statistics.directoriesRead++
         statistics.entriesRead += entries.size
         if (statistics.directoriesRead == 1 || statistics.directoriesRead % PROGRESS_DIRECTORY_INTERVAL == 0) {
@@ -200,6 +218,20 @@ class LibraryScanner {
         val images = files.filter { MediaClassifier.isImage(it.name, it.mimeType) }
         val videos = files.filter { MediaClassifier.isVideo(it.name, it.mimeType) }
         val archives = files.filter { MediaClassifier.isImageArchive(it.name) }
+        val recognizedPaths = (images + videos + archives).mapTo(mutableSetOf(), StorageEntry::relativePath)
+        files.asSequence()
+            .filterNot { it.relativePath in recognizedPaths || DiscoveryPolicy.ignoreFile(it.name) }
+            .forEach { entry ->
+                discoveries += ScanDiscoveryCandidate(
+                    relativePath = entry.relativePath,
+                    uri = entry.uri,
+                    isDirectory = false,
+                    mimeType = entry.mimeType,
+                    size = entry.size,
+                    modifiedAt = entry.lastModified,
+                    reason = DiscoveryReason.UNSUPPORTED_FILE,
+                )
+            }
         val isImageSetDirectory = shouldTreatDirectoryAsImageSet(
             path = path,
             imageCount = images.size,
@@ -279,8 +311,18 @@ class LibraryScanner {
                 }
             }
         } else {
-            if (!inPhotos && !inImages && !inVideos && images.size >= MIN_IMAGE_SET_PAGES && directories.isNotEmpty()) {
+            if (path.isNotBlank() && !inPhotos && !inImages && !inVideos &&
+                images.size >= MIN_IMAGE_SET_PAGES && directories.isNotEmpty()
+            ) {
                 ambiguous += path
+                val directory = storage.entry(path)
+                discoveries += ScanDiscoveryCandidate(
+                    relativePath = path,
+                    uri = directory?.uri,
+                    isDirectory = true,
+                    modifiedAt = directory?.lastModified ?: 0,
+                    reason = DiscoveryReason.AMBIGUOUS_DIRECTORY,
+                )
             }
             val pairedVideoPaths = mutableSetOf<String>()
             images.forEach { image ->
@@ -384,6 +426,7 @@ class LibraryScanner {
                 directory.relativePath,
                 output,
                 ambiguous,
+                discoveries,
                 warnings,
                 unreadableDirectories,
                 prior,

@@ -22,6 +22,7 @@
 2. 用户只能进入编辑器并保存才能离开 Inbox；没有“保持当前自动建议”的单项或批量确认动作。
 3. `withManualEdits()` 只保留已有 `manual` 来源。新识别项即使携带自动来源，经过编辑保存也会丢掉 `filename` / `comic_info` provenance。
 4. 当前样本中的 `eh/` 根目录、`JM/数字.zip` 和“系列目录/编号标题_hash.cbz”没有稳定落入现有识别规则。
+5. 不支持的扩展名会被扫描器静默忽略；同时，“包含多图且还有子目录”的结构虽然被计入 `ambiguousDirectories`，但没有持久索引和可见入口。把所有未知内容都强行建成 `MediaItem` 又会虚构可解码能力与作品边界。
 
 ### 措施
 
@@ -30,16 +31,22 @@
 - `RecognizedMetadata` 携带逐字段自动来源；ComicInfo 与文件名推断合并时保留真正提供标题、作者、标签和系列的来源。
 - 修正 `withManualEdits()`：保留未修改字段的自动 provenance，只把实际变化的字段升级为 `manual`。
 - 增加上述三类确定性路径识别，但仍只作为 Inbox 建议，目录名不会直接成为不可覆盖的用户真相。
+- 新增独立的本机 `discoveries` 索引，把不支持的用户文件与结构不明确的目录显示在 Inbox“其他待判断”中；发现记录不写入便携 catalog，不移动文件，也不冒充可打开媒体。
+- 增加显式发现过滤策略：忽略 `.gallery/`、隔离目录、`.nomedia`、`.ehviewer`、`ComicInfo.xml` 和常见系统缩略图；未登记的 TXT、CBR 等仍保持可见，便于后续交给 Agent 或新增解码器处理。
+- 本机数据库从 v4 增量升级到 v5，只新增 `discoveries` 表；扫描成功后按 Library 替换可重建发现结果，遇到暂时不可读子树时与媒体索引一样保留该子树旧记录。
 
 ### 验证
 
-- `testDebugUnitTest`：**95 项通过，0 失败，0 跳过**。
+- 第一阶段 `testDebugUnitTest`：**95 项通过，0 失败，0 跳过**；发现索引加入后：**96 项通过，0 失败，0 跳过**。
 - 新增测试覆盖字段来源合并、接受未改建议时保留自动来源、单字段编辑只锁定该字段、`eh/` 别名、JM 数字 ZIP 和下载器 CBZ 父系列。
+- 新增发现策略测试，锁定已知 sidecar/内部文件会被隐藏，而普通 TXT、CBR 和下载目录不会因“不认识”而消失。
+- `lintDebug`：**0 errors、31 warnings**；警告仍为依赖更新、KTX 建议和启动图标轮廓等既有类别。`assembleDebug` 与 `assembleDebugAndroidTest` 均成功。
+- 当前 ADB 没有连接设备，且本机 Android SDK 未安装命令行 Emulator 组件，因此本轮尚未执行真实 SAF 扫描与数据库 v4→v5 的设备升级回归。
 - 首次沙箱测试被既有 Gradle 锁文件 ACL 阻止；改用授权的现有 Gradle 缓存后构建成功。临时创建的 `.gradle-codex/` 已删除。
 
 ### 后续
 
-- 设计独立的 discovered-entry 索引，使不支持的扩展名与结构不明确目录也能进入 Inbox，而不是被扫描器忽略。
+- 为 discovered-entry 增加可便携的“忽略 / 已处理 / 手动分类”用户决定；当前发现记录刻意保持为可重建的本机扫描证据。
 - 在引入逻辑 Group / Edition 前，不继续用更多文件名正则代替作品关系。
 
 ---

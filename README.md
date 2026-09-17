@@ -16,6 +16,8 @@ Rem 是一个 Android 本地优先媒体库，当前版本为 **0.0.3**。用户
 `<gid>-<title>/.ehviewer`，以及 Pixiv 的 `<illust_id>_pN` / `_ugoira…`。
 识别结果保留稳定来源 ID，并且只作为 Inbox 建议；用户编辑或明确接受后才进入正式媒体视图。直接接受保留自动字段来源，只有实际编辑的字段才标记为 `manual`。当前版本不内置站点抓取；需要补全标题、作者或标签时，可让 Agent 按 Library 自带规则辅助同步，所有标记为 `manual` 的人工字段始终保持不变，站点 Cookie 也不会写入 Library。
 
+扫描还会把当前无法安全分类的扩展名和结构不明确的目录列在 Inbox 的“其他待判断”中。它们只是可重建的本机发现记录，不会被伪装成媒体、写入便携 catalog 或移动原文件；`.gallery/`、`.nomedia`、`.ehviewer`、`ComicInfo.xml` 等 Rem 内部文件和已登记 sidecar 会被排除。后续可由用户、Agent 或新增格式支持继续处理。
+
 图片显示支持 GIF、Animated WebP（Android 9+）、SVG，以及系统可解码的
 HEIF/AVIF/DNG 等格式。缩略图固定按显示尺寸解码；超大静态图会先探测尺寸并安全降采样，避免整张原图直接解码造成内存溢出。
 

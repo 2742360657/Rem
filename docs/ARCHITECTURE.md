@@ -8,7 +8,7 @@ The public product name is Rem and its release application ID is `com.susnowy.re
 
 1. Media bytes remain in the user-selected Storage Access Framework tree.
 2. Portable truth lives under `.gallery/` in that tree. It contains the versioned Library identity, catalog overrides, progress, logical trash, imports, backups, and recoverable file transactions.
-3. `gallery-index.db` is a device-local SQLite index. It stores SAF URIs and query-friendly projections and can be rebuilt from the Library.
+3. `gallery-index.db` is a device-local SQLite index. It stores SAF URIs, query-friendly media projections, and rebuildable discovery records for unsupported files or ambiguous directories. It can be rebuilt from the Library; a discovery row is evidence that a path exists, not a portable classification decision.
 4. Every item has a portable `domain`: `album`, `classified`, or `works`. Compose exposes these as exactly three primary destinations; file type and product surface are not conflated.
 5. Compose screens consume repository state. Thumbnail and decoder data never enters the portable Library.
 
@@ -18,7 +18,7 @@ Android URIs and mount paths are local-only. Every portable media path uses `/`-
 
 - `library`: initialization, identity, additive Schema v3 migration, and generated Library guide.
 - `storage`: the only layer that directly traverses or mutates SAF documents.
-- `scanner`: nested-directory classification, content fingerprints, EXIF/video dates, ZIP/CBZ discovery, and Inbox candidates.
+- `scanner`: nested-directory discovery and classification, explicit sidecar/internal ignore rules, content fingerprints, EXIF/video dates, ZIP/CBZ inspection, and Inbox candidates.
 - `metadata`: portable catalog/state persistence, revision checks, ComicInfo, and provider contracts.
 - `data`: local SQLite index and application repository.
 - `media`: lazy folder/archive access, sampled archive decoding, a bounded decoded-page cache, and direction-aware comic preloading.
@@ -74,6 +74,7 @@ re-reads because keeping a stale fingerprint would silently mis-merge metadata.
 - A portable document is only committed once it is addressable under exactly the requested path. A provider that publishes a qualified copy instead of replacing the target gets that duplicate removed and the previous revision restored.
 - Diagnostics are written to the app's private files directory, never into the Library, and are reduced before writing: complete messages and exception summaries have content URIs and host filesystem paths stripped. Export waits for queued writes and grants read-only FileProvider URIs through the system share sheet.
 - A scan reports directory, entry, and candidate counts while it runs. A failed directory query marks the scan incomplete and protects that subtree's previous local rows; temporary provider failure is not treated as media deletion.
+- Unsupported user-visible files and structurally ambiguous directories remain in a separate local discovery index and appear under Inbox. Known internal files and registered sidecars are ignored. Discovery alone never creates portable metadata or claims that Android can decode the path.
 
 ## Build and verification
 

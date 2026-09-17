@@ -2,7 +2,9 @@ package dev.susnowy.gallery.scanner
 
 import dev.susnowy.gallery.model.MediaKind
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class MediaClassifierTest {
@@ -48,5 +50,19 @@ class MediaClassifierTest {
             true,
             LibraryScanner.shouldTreatDirectoryAsImageSet("Legacy/Book", 20, false),
         )
+    }
+
+    @Test
+    fun discoveryPolicyHidesOnlyKnownInternalAndSidecarEntries() {
+        assertTrue(DiscoveryPolicy.ignoreFile("ComicInfo.xml"))
+        assertTrue(DiscoveryPolicy.ignoreFile(".ehviewer"))
+        assertTrue(DiscoveryPolicy.ignoreFile(".thumb"))
+        assertTrue(DiscoveryPolicy.ignoreFile("GALLERY_LIBRARY.md"))
+        assertTrue(DiscoveryPolicy.ignoreRootDirectory(".gallery"))
+        assertTrue(DiscoveryPolicy.ignoreRootDirectory(".gallery-quarantine-20260916-182409"))
+
+        assertFalse(DiscoveryPolicy.ignoreFile("notes.txt"))
+        assertFalse(DiscoveryPolicy.ignoreFile("book.cbr"))
+        assertFalse(DiscoveryPolicy.ignoreRootDirectory("downloads"))
     }
 }

@@ -35,6 +35,7 @@ import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.Home
 import androidx.compose.material.icons.rounded.Inbox
+import androidx.compose.material.icons.automirrored.rounded.InsertDriveFile
 import androidx.compose.material.icons.rounded.PhotoLibrary
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Restore
@@ -82,6 +83,8 @@ import dev.susnowy.gallery.importer.SystemMediaType
 import dev.susnowy.gallery.importer.WorkImportKind
 import dev.susnowy.gallery.logging.RemLog
 import dev.susnowy.gallery.model.MediaItem
+import dev.susnowy.gallery.model.DiscoveredEntry
+import dev.susnowy.gallery.model.DiscoveryReason
 import dev.susnowy.gallery.model.MediaDomain
 import dev.susnowy.gallery.model.MediaKind
 import dev.susnowy.gallery.model.PermissionState
@@ -135,7 +138,11 @@ fun GalleryScreenContent(
         AppScreen.MEDIA -> ClassifiedLibraryScreen(accepted, viewModel)
         AppScreen.WORKS -> WorksLibraryScreen(accepted, viewModel)
         AppScreen.LIBRARIES -> LibrariesScreen(state, viewModel, onChooseFolder)
-        AppScreen.INBOX -> InboxScreen(visible.filter(MediaItem::inInbox), viewModel)
+        AppScreen.INBOX -> InboxScreen(
+            items = visible.filter(MediaItem::inInbox),
+            discoveries = state.discoveries,
+            viewModel = viewModel,
+        )
         AppScreen.PHOTOS -> PhotosScreen(
             items = accepted.filter { it.kind in PHOTO_KINDS }.sortedByDescending { it.capturedAt ?: it.modifiedAt },
             viewModel = viewModel,
@@ -553,15 +560,28 @@ private fun MediaCollectionScreen(
     }
 }
 
+private enum class InboxSection(val label: String) { MEDIA("媒体建议"), OTHER("其他待判断") }
+
 @Composable
-private fun InboxScreen(items: List<MediaItem>, viewModel: GalleryViewModel) {
+private fun InboxScreen(
+    items: List<MediaItem>,
+    discoveries: List<DiscoveredEntry>,
+    viewModel: GalleryViewModel,
+) {
     var selectionMode by rememberSaveable { mutableStateOf(false) }
     var selected by remember { mutableStateOf(emptySet<String>()) }
+    var section by rememberSaveable {
+        mutableStateOf(if (items.isNotEmpty()) InboxSection.MEDIA else InboxSection.OTHER)
+    }
     LaunchedEffect(items.map(MediaItem::id)) {
         selected = selected.intersect(items.mapTo(mutableSetOf(), MediaItem::id))
         if (items.isEmpty()) selectionMode = false
+        if (items.isEmpty() && discoveries.isNotEmpty()) section = InboxSection.OTHER
     }
-    if (items.isEmpty()) {
+    LaunchedEffect(discoveries.map(DiscoveredEntry::id)) {
+        if (discoveries.isEmpty() && items.isNotEmpty()) section = InboxSection.MEDIA
+    }
+    if (items.isEmpty() && discoveries.isEmpty()) {
         MediaCollectionScreen(
             items = emptyList(),
             viewModel = viewModel,
@@ -570,6 +590,73 @@ private fun InboxScreen(items: List<MediaItem>, viewModel: GalleryViewModel) {
         return
     }
     Column(Modifier.fillMaxSize()) {
+        Row(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            FilterChip(
+                selected = section == InboxSection.MEDIA,
+                onClick = { section = InboxSection.MEDIA },
+                label = { Text("媒体建议 ${items.size}") },
+                enabled = items.isNotEmpty(),
+            )
+            FilterChip(
+                selected = section == InboxSection.OTHER,
+                onClick = { section = InboxSection.OTHER },
+                label = { Text("其他待判断 ${discoveries.size}") },
+                enabled = discoveries.isNotEmpty(),
+            )
+        }
+        if (section == InboxSection.OTHER) {
+            Text(
+                "这些路径已被发现，但当前不能安全分类或打开。Rem 不会移动或伪装它们，可交由 Agent 或后续版本处理。",
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            LazyColumn(
+                modifier = Modifier.weight(1f),
+                contentPadding = PaddingValues(bottom = 96.dp),
+            ) {
+                items(discoveries, key = DiscoveredEntry::id) { entry ->
+                    ListItem(
+                        headlineContent = {
+                            Text(
+                                entry.relativePath.substringAfterLast('/'),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        },
+                        supportingContent = {
+                            Column {
+                                Text(
+                                    when (entry.reason) {
+                                        DiscoveryReason.UNSUPPORTED_FILE -> "当前版本不支持此文件格式"
+                                        DiscoveryReason.AMBIGUOUS_DIRECTORY -> "目录结构不明确，需要确认作品边界"
+                                    },
+                                )
+                                Text(
+                                    entry.relativePath,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            }
+                        },
+                        leadingContent = {
+                            Icon(
+                                if (entry.isDirectory) Icons.Rounded.Folder else Icons.AutoMirrored.Rounded.InsertDriveFile,
+                                contentDescription = null,
+                            )
+                        },
+                        trailingContent = {
+                            if (!entry.isDirectory && entry.size > 0) Text(entry.size.formatBytes())
+                        },
+                    )
+                }
+            }
+            return@Column
+        }
         Row(
             modifier = Modifier
                 .fillMaxWidth()

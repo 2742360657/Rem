@@ -5,6 +5,9 @@ import android.content.Context
 import android.database.Cursor
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
+import androidx.core.database.sqlite.transaction
+import dev.susnowy.gallery.model.DiscoveredEntry
+import dev.susnowy.gallery.model.DiscoveryReason
 import dev.susnowy.gallery.model.LibraryRegistration
 import dev.susnowy.gallery.model.MediaItem
 import dev.susnowy.gallery.model.MediaDomain
@@ -96,6 +99,26 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
         db.execSQL("CREATE INDEX media_library_kind ON media(library_id, kind)")
         db.execSQL("CREATE INDEX media_search_title ON media(display_title)")
         db.execSQL("CREATE INDEX media_trash ON media(trashed, deleted_at)")
+        createDiscoveriesTable(db)
+    }
+
+    private fun createDiscoveriesTable(db: SQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS discoveries (
+                library_id TEXT NOT NULL,
+                relative_path TEXT NOT NULL,
+                uri TEXT,
+                is_directory INTEGER NOT NULL,
+                mime_type TEXT,
+                size INTEGER NOT NULL,
+                modified_at INTEGER NOT NULL,
+                reason TEXT NOT NULL,
+                PRIMARY KEY(library_id, relative_path),
+                FOREIGN KEY(library_id) REFERENCES libraries(library_id) ON DELETE CASCADE
+            )
+            """.trimIndent(),
+        )
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -111,8 +134,13 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
         if (oldVersion < 4) {
             db.execSQL("ALTER TABLE media ADD COLUMN latitude REAL")
             db.execSQL("ALTER TABLE media ADD COLUMN longitude REAL")
-        } else if (oldVersion != newVersion) {
+        }
+        if (oldVersion < 5) {
+            createDiscoveriesTable(db)
+        }
+        if (oldVersion > newVersion) {
             db.execSQL("DROP TABLE IF EXISTS progress")
+            db.execSQL("DROP TABLE IF EXISTS discoveries")
             db.execSQL("DROP TABLE IF EXISTS media")
             db.execSQL("DROP TABLE IF EXISTS libraries")
             onCreate(db)
@@ -235,6 +263,21 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
         "1",
     ).use { cursor -> if (cursor.moveToFirst()) mediaFromCursor(cursor) else null }
 
+    @Synchronized
+    fun discoveries(libraryId: String? = null): List<DiscoveredEntry> {
+        val selection = libraryId?.let { "library_id = ?" }
+        val args = if (libraryId == null) null else arrayOf(libraryId)
+        return readableDatabase.query(
+            "discoveries",
+            null,
+            selection,
+            args,
+            null,
+            null,
+            "relative_path COLLATE NOCASE",
+        ).use { cursor -> cursor.mapRows(::discoveryFromCursor) }
+    }
+
     /**
      * Only the columns a rescan needs to decide whether a file still has to be opened,
      * so the whole media table does not have to be materialized into [MediaItem] objects
@@ -325,6 +368,49 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
         }
     }
 
+    /** Replaces rebuildable unknown/ambiguous scan results while protecting unreadable subtrees. */
+    @Synchronized
+    fun replaceDiscoveries(
+        libraryId: String,
+        entries: List<DiscoveredEntry>,
+        protectedPaths: Set<String> = emptySet(),
+    ) {
+        require(entries.all { it.libraryId == libraryId }) { "不能跨 Library 写入待判断索引" }
+        writableDatabase.transaction {
+            entries.forEach { entry ->
+                insertWithOnConflict(
+                    "discoveries",
+                    null,
+                    entry.toValues(),
+                    SQLiteDatabase.CONFLICT_REPLACE,
+                )
+            }
+            val foundPaths = entries.mapTo(mutableSetOf(), DiscoveredEntry::relativePath) + protectedPaths
+            val stalePaths = query(
+                "discoveries",
+                arrayOf("relative_path"),
+                "library_id = ?",
+                arrayOf(libraryId),
+                null,
+                null,
+                null,
+            ).use { cursor ->
+                buildList(cursor.count) {
+                    while (cursor.moveToNext()) {
+                        cursor.string("relative_path").takeIf { it !in foundPaths }?.let(::add)
+                    }
+                }
+            }
+            stalePaths.forEach { path ->
+                delete(
+                    "discoveries",
+                    "library_id = ? AND relative_path = ?",
+                    arrayOf(libraryId, path),
+                )
+            }
+        }
+    }
+
     @Synchronized
     fun removeMedia(itemId: String) {
         writableDatabase.delete("media", "id = ?", arrayOf(itemId))
@@ -333,6 +419,7 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
     @Synchronized
     fun clearMediaIndex(libraryId: String) {
         writableDatabase.delete("media", "library_id = ?", arrayOf(libraryId))
+        writableDatabase.delete("discoveries", "library_id = ?", arrayOf(libraryId))
     }
 
     @Synchronized
@@ -415,6 +502,17 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
         put("field_sources_json", json.encodeToString(fieldSources))
     }
 
+    private fun DiscoveredEntry.toValues() = ContentValues().apply {
+        put("library_id", libraryId)
+        put("relative_path", relativePath)
+        uri?.let { put("uri", it) } ?: putNull("uri")
+        put("is_directory", isDirectory.asInt())
+        mimeType?.let { put("mime_type", it) } ?: putNull("mime_type")
+        put("size", size)
+        put("modified_at", modifiedAt)
+        put("reason", reason.name)
+    }
+
     private fun libraryFromCursor(cursor: Cursor) = LibraryRegistration(
         libraryId = cursor.string("library_id"),
         name = cursor.string("name"),
@@ -457,6 +555,17 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
         fieldSources = json.decodeFromString(cursor.string("field_sources_json")),
     )
 
+    private fun discoveryFromCursor(cursor: Cursor) = DiscoveredEntry(
+        libraryId = cursor.string("library_id"),
+        relativePath = cursor.string("relative_path"),
+        uri = cursor.nullableString("uri"),
+        isDirectory = cursor.int("is_directory") != 0,
+        mimeType = cursor.nullableString("mime_type"),
+        size = cursor.long("size"),
+        modifiedAt = cursor.long("modified_at"),
+        reason = DiscoveryReason.valueOf(cursor.string("reason")),
+    )
+
     private fun Boolean.asInt() = if (this) 1 else 0
 
     private fun Cursor.string(column: String): String = getString(getColumnIndexOrThrow(column))
@@ -479,6 +588,6 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
 
     companion object {
         private const val DATABASE_NAME = "gallery-index.db"
-        private const val DATABASE_VERSION = 4
+        private const val DATABASE_VERSION = 5
     }
 }

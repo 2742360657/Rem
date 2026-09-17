@@ -17,6 +17,7 @@ import dev.susnowy.gallery.media.ImagePage
 import dev.susnowy.gallery.media.MediaContentService
 import dev.susnowy.gallery.logging.RemLog
 import dev.susnowy.gallery.model.LibraryRegistration
+import dev.susnowy.gallery.model.DiscoveredEntry
 import dev.susnowy.gallery.model.MediaItem
 import dev.susnowy.gallery.model.MediaDomain
 import dev.susnowy.gallery.model.MediaKind
@@ -59,6 +60,7 @@ data class GalleryUiState(
     val libraries: List<LibraryRegistration> = emptyList(),
     val activeLibraryId: String? = null,
     val media: List<MediaItem> = emptyList(),
+    val discoveries: List<DiscoveredEntry> = emptyList(),
     val allMedia: List<MediaItem> = emptyList(),
     val screen: AppScreen = AppScreen.PHOTOS,
     val selectedItemId: String? = null,
@@ -109,7 +111,9 @@ class GalleryViewModel(
 
     val uiState: StateFlow<GalleryUiState> = combine(
         repository.libraries,
-        repository.media,
+        combine(repository.media, repository.discoveries) { media, discoveries ->
+            IndexedContent(media, discoveries)
+        },
         combine(screen, selectedItemId, searchQuery, detailItemIds) { currentScreen, selected, query, detailIds ->
             NavigationStatus(currentScreen, selected, query, detailIds)
         },
@@ -125,15 +129,18 @@ class GalleryViewModel(
             SettingsStatus(operation, currentMessage, scan, days, gallery)
         },
         activeLibraryId,
-    ) { libraries, allMedia, navigation, status, activeId ->
+    ) { libraries, indexed, navigation, status, activeId ->
         val resolvedActiveId = activeId?.takeIf { id -> libraries.any { it.libraryId == id } }
             ?: libraries.firstOrNull()?.libraryId
         if (activeLibraryId.value != resolvedActiveId) setActiveLibrary(resolvedActiveId)
         GalleryUiState(
             libraries = libraries,
             activeLibraryId = resolvedActiveId,
-            media = allMedia.filter { resolvedActiveId == null || it.libraryId == resolvedActiveId },
-            allMedia = allMedia,
+            media = indexed.media.filter { resolvedActiveId == null || it.libraryId == resolvedActiveId },
+            allMedia = indexed.media,
+            discoveries = indexed.discoveries.filter {
+                resolvedActiveId == null || it.libraryId == resolvedActiveId
+            },
             screen = navigation.screen,
             selectedItemId = navigation.selectedItemId,
             detailItemIds = navigation.detailItemIds,
@@ -183,8 +190,8 @@ class GalleryViewModel(
                 .onSuccess { result ->
                     message.value = buildString {
                         append("扫描完成：发现 ${result.candidates.size} 项")
-                        if (result.ambiguousDirectories.isNotEmpty()) {
-                            append("，${result.ambiguousDirectories.size} 个目录待确认")
+                        if (result.discoveries.isNotEmpty()) {
+                            append("，${result.discoveries.size} 项其他内容待判断")
                         }
                         if (result.warnings.isNotEmpty()) append("，${result.warnings.size} 条警告")
                     }
@@ -628,6 +635,11 @@ class GalleryViewModel(
         val selectedItemId: String?,
         val searchQuery: String,
         val detailItemIds: List<String>,
+    )
+
+    private data class IndexedContent(
+        val media: List<MediaItem>,
+        val discoveries: List<DiscoveredEntry>,
     )
 
     private data class SystemGalleryStatus(

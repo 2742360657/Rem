@@ -76,7 +76,7 @@ The sample proves that the Library contains app-generated metadata, manually arr
 - A mixed leaf directory is emitted as one `IMAGE_SET` plus independent video items. The shared parent/series is not an explicit logical relationship.
 - `IMAGE_SET` currently implies `WORKS`, while directories below `Images/` are deliberately prevented from becoming image sets. This blocks photo-set grouping in 图片 / 视频.
 - `SeriesRef` is embedded in each item. There is no portable series membership document, no explicit group membership, and no edition relationship.
-- Unknown extensions are ignored instead of becoming reviewable discovery records. Sidecars and unsupported user files therefore need separate handling.
+- Discovery rows are currently rebuildable device-local evidence only. There is not yet a portable user decision for “ignore”, “handled”, or a manually chosen classification, so such decisions would be lost after rebuilding the index.
 - Automatic hashes stop above 64 MiB, and directory fingerprints describe structure rather than byte-identical pages. Current duplicate detection cannot merge two image-set editions page by page.
 - Inbox acceptance is represented indirectly by the presence of portable item metadata. Any new review-state design must remain portable and survive index rebuilds.
 - The current Works screen is a flat item grid with facet filtering. Series is a sort/filter property, not a first-class series presentation.
@@ -87,13 +87,14 @@ The sample proves that the Library contains app-generated metadata, manually arr
 - Inbox supports single-item and multi-select acceptance. Acceptance persists automatic provenance; only changed fields become `manual`.
 - ComicInfo and filename/path recognizers now retain field provenance through merge.
 - The sample's `eh/` alias, numeric archives below a JM-like root, and numbered CBZ files below a series folder are recognized as Inbox suggestions.
+- Unsupported user-visible files and ambiguous directory structures are indexed separately and shown under Inbox's “其他待判断”. Known Rem internals and sidecars are filtered explicitly. These discovery rows do not enter the portable catalog.
 
 ## Preferred implementation path
 
 Do not start with a broad UI rewrite.
 
 1. **Freeze fixtures and decisions**: add anonymized/minimal test trees for mixed sets, nested works, downloader CBZ, JM archives, EhViewer aliases, unsupported files, and two overlapping editions. Write the target portable model and migration rules first.
-2. **Separate discovery from classification**: introduce discovered-entry records, explicit ignore/sidecar rules, suggestion evidence/confidence, and a durable review state. Preserve current scan performance characteristics.
+2. **Finish separating discovery from classification**: discovered-entry records and explicit ignore/sidecar rules now exist; next add portable user decisions plus structured suggestion evidence/confidence. Preserve current scan performance characteristics.
 3. **Add portable logical relationships**: evolve the Schema additively to first-class works/groups/series/editions or an equivalent normalized design. Keep existing v3 item IDs and manual fields stable during migration.
 4. **Build 图片 / 视频 grouping**: show folders and logical groups; a mixed group opens once and exposes its images and videos together. Grouping must not require moving files.
 5. **Build comic series presentation**: series shelf -> ordered entries -> work detail -> reader. Allow optional volume/chapter/episode values plus drag/manual order.

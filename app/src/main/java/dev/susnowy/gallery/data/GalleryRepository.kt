@@ -23,6 +23,7 @@ import dev.susnowy.gallery.metadata.MetadataField
 import dev.susnowy.gallery.metadata.withManualEdits
 import dev.susnowy.gallery.model.LibraryInspection
 import dev.susnowy.gallery.model.LibraryRegistration
+import dev.susnowy.gallery.model.DiscoveredEntry
 import dev.susnowy.gallery.model.MediaItem
 import dev.susnowy.gallery.model.PermissionState
 import dev.susnowy.gallery.model.PlaybackProgress
@@ -70,6 +71,9 @@ class GalleryRepository(context: Context) {
 
     private val _media = MutableStateFlow<List<MediaItem>>(emptyList())
     val media: StateFlow<List<MediaItem>> = _media.asStateFlow()
+
+    private val _discoveries = MutableStateFlow<List<DiscoveredEntry>>(emptyList())
+    val discoveries: StateFlow<List<DiscoveredEntry>> = _discoveries.asStateFlow()
 
     private val _operation = MutableStateFlow<String?>(null)
     val operation: StateFlow<String?> = _operation.asStateFlow()
@@ -317,6 +321,23 @@ class GalleryRepository(context: Context) {
             // One transaction for the whole scan: committing per row would flush the WAL
             // once per candidate, which dominates indexing time on a large Library.
             database.replaceScannedMedia(libraryId, scanned, foundPaths)
+            val discovered = result.discoveries.map { candidate ->
+                DiscoveredEntry(
+                    libraryId = libraryId,
+                    relativePath = candidate.relativePath,
+                    uri = candidate.uri,
+                    isDirectory = candidate.isDirectory,
+                    mimeType = candidate.mimeType,
+                    size = candidate.size,
+                    modifiedAt = candidate.modifiedAt,
+                    reason = candidate.reason,
+                )
+            }
+            val protectedDiscoveries = database.discoveries(libraryId)
+                .asSequence()
+                .filter { result.protectsPreviouslyIndexed(it.relativePath) }
+                .mapTo(mutableSetOf(), DiscoveredEntry::relativePath)
+            database.replaceDiscoveries(libraryId, discovered, protectedDiscoveries)
             state.progress.forEach { progress ->
                 if (database.mediaItem(progress.itemId) != null) {
                     database.upsertProgress(
@@ -639,6 +660,7 @@ class GalleryRepository(context: Context) {
     fun refreshFromDatabase() {
         _libraries.value = database.libraries()
         _media.value = database.media()
+        _discoveries.value = database.discoveries()
     }
 
     fun library(libraryId: String): LibraryRegistration? = database.library(libraryId)
