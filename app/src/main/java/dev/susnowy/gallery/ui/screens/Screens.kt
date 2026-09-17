@@ -93,11 +93,14 @@ import dev.susnowy.gallery.organizer.OrganizerTemplate
 import dev.susnowy.gallery.ui.AppScreen
 import dev.susnowy.gallery.ui.GalleryUiState
 import dev.susnowy.gallery.ui.GalleryViewModel
+import dev.susnowy.gallery.ui.SeriesPresentation
+import dev.susnowy.gallery.ui.SeriesShelf
 import dev.susnowy.gallery.ui.components.MediaCard
 import dev.susnowy.gallery.ui.components.MediaGrid
 import dev.susnowy.gallery.ui.components.MediaThumbnail
 import dev.susnowy.gallery.ui.components.RightSidePanel
 import dev.susnowy.gallery.ui.components.label
+import java.util.Locale
 
 @Composable
 fun EmptyLibraryScreen(onChooseFolder: () -> Unit) {
@@ -760,6 +763,7 @@ private fun ClassifiedLibraryScreen(items: List<MediaItem>, viewModel: GalleryVi
 private enum class WorkType(val label: String) { COMICS("漫画 / 写真"), ANIME("动漫 / 影视") }
 private enum class WorkFacet(val label: String) { ALL("全部"), AUTHOR("作者"), TAG("标签"), SERIES("系列") }
 private enum class WorkSort(val label: String) { RECENT("最近加入"), TITLE("标题"), CREATOR("作者"), SERIES("系列顺序") }
+private enum class WorkPresentation { SERIES, WORKS }
 
 @Composable
 private fun WorksLibraryScreen(items: List<MediaItem>, viewModel: GalleryViewModel) {
@@ -770,6 +774,8 @@ private fun WorksLibraryScreen(items: List<MediaItem>, viewModel: GalleryViewMod
     var sort by rememberSaveable { mutableStateOf(WorkSort.RECENT) }
     var query by rememberSaveable { mutableStateOf("") }
     var showTools by rememberSaveable { mutableStateOf(false) }
+    var presentation by rememberSaveable { mutableStateOf(WorkPresentation.SERIES) }
+    var selectedSeriesKey by rememberSaveable { mutableStateOf<String?>(null) }
     val typed = remember(works, type) {
         works.filter {
             when (type) {
@@ -786,7 +792,7 @@ private fun WorksLibraryScreen(items: List<MediaItem>, viewModel: GalleryViewMod
                 WorkFacet.TAG -> item.tags
                 WorkFacet.SERIES -> listOfNotNull(item.series?.title)
             }
-        }.distinct().sortedWith(String.CASE_INSENSITIVE_ORDER)
+        }.distinctBy { it.lowercase(Locale.ROOT) }.sortedWith(String.CASE_INSENSITIVE_ORDER)
     }
     LaunchedEffect(facet, facetValues) {
         if (selectedFacet !in facetValues) selectedFacet = null
@@ -798,7 +804,7 @@ private fun WorksLibraryScreen(items: List<MediaItem>, viewModel: GalleryViewMod
                     WorkFacet.ALL -> true
                     WorkFacet.AUTHOR -> selectedFacet in item.authors
                     WorkFacet.TAG -> selectedFacet in item.tags
-                    WorkFacet.SERIES -> item.series?.title == selectedFacet
+                    WorkFacet.SERIES -> item.series?.title?.equals(selectedFacet, ignoreCase = true) == true
                 }
             }
             .filter { item ->
@@ -815,19 +821,28 @@ private fun WorksLibraryScreen(items: List<MediaItem>, viewModel: GalleryViewMod
                     WorkSort.RECENT -> sequence.sortedByDescending(MediaItem::modifiedAt)
                     WorkSort.TITLE -> sequence.sortedBy(MediaItem::displayTitle)
                     WorkSort.CREATOR -> sequence.sortedBy { it.authors.firstOrNull().orEmpty() }
-                    WorkSort.SERIES -> sequence.sortedWith(
-                        compareBy<MediaItem> { it.series?.title.orEmpty() }
-                            .thenBy { it.series?.season ?: 0 }
-                            .thenBy { it.series?.sortIndex ?: 0.0 },
-                    )
+                    WorkSort.SERIES -> SeriesPresentation.shelves(sequence.toList())
+                        .flatMap(SeriesShelf::items)
+                        .asSequence()
                 }
             }.toList()
     }
+    val seriesShelves = remember(shown) { SeriesPresentation.shelves(shown) }
+    val selectedSeries = remember(seriesShelves, selectedSeriesKey) {
+        seriesShelves.firstOrNull { it.key == selectedSeriesKey }
+    }
+    LaunchedEffect(seriesShelves.map(SeriesShelf::key), presentation) {
+        if (presentation != WorkPresentation.SERIES || selectedSeriesKey !in seriesShelves.map(SeriesShelf::key)) {
+            selectedSeriesKey = null
+        }
+    }
+    BackHandler(enabled = selectedSeriesKey != null) { selectedSeriesKey = null }
     fun clearSearch() {
         query = ""
         facet = WorkFacet.ALL
         selectedFacet = null
         sort = WorkSort.RECENT
+        selectedSeriesKey = null
     }
     Column(Modifier.fillMaxSize()) {
         Row(
@@ -843,6 +858,7 @@ private fun WorksLibraryScreen(items: List<MediaItem>, viewModel: GalleryViewMod
                     onClick = {
                         type = value
                         selectedFacet = null
+                        selectedSeriesKey = null
                     },
                     label = { Text("${value.label} ${works.count { if (value == WorkType.COMICS) it.kind == MediaKind.IMAGE_SET else it.kind == MediaKind.VIDEO }}") },
                 )
@@ -850,6 +866,43 @@ private fun WorksLibraryScreen(items: List<MediaItem>, viewModel: GalleryViewMod
             Spacer(Modifier.weight(1f))
             IconButton(onClick = { showTools = true }) {
                 Icon(Icons.Rounded.Search, contentDescription = "搜索与筛选")
+            }
+        }
+        if (selectedSeries == null) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
+            ) {
+                FilterChip(
+                    selected = presentation == WorkPresentation.SERIES,
+                    onClick = { presentation = WorkPresentation.SERIES },
+                    label = { Text("系列 ${seriesShelves.count { !it.isUnassigned }}") },
+                )
+                FilterChip(
+                    selected = presentation == WorkPresentation.WORKS,
+                    onClick = {
+                        presentation = WorkPresentation.WORKS
+                        selectedSeriesKey = null
+                    },
+                    label = { Text("全部作品 ${shown.size}") },
+                )
+            }
+        } else {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+            ) {
+                IconButton(onClick = { selectedSeriesKey = null }) {
+                    Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回系列书架")
+                }
+                Column {
+                    Text(selectedSeries.title, style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "${selectedSeries.items.size} 部作品 · 按系列顺序",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         }
         if (query.isNotBlank() || selectedFacet != null || facet != WorkFacet.ALL || sort != WorkSort.RECENT) {
@@ -860,8 +913,28 @@ private fun WorksLibraryScreen(items: List<MediaItem>, viewModel: GalleryViewMod
                 modifier = Modifier.padding(horizontal = 18.dp),
             )
         }
-        Text("${shown.size} 部作品", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(horizontal = 18.dp))
-        MediaGrid(shown, viewModel, { viewModel.open(it, shown) }, Modifier.weight(1f))
+        when {
+            selectedSeries != null -> MediaGrid(
+                selectedSeries.items,
+                viewModel,
+                { viewModel.open(it, selectedSeries.items) },
+                Modifier.weight(1f),
+            )
+            presentation == WorkPresentation.SERIES -> SeriesShelfGrid(
+                shelves = seriesShelves,
+                viewModel = viewModel,
+                onOpen = { selectedSeriesKey = it.key },
+                modifier = Modifier.weight(1f),
+            )
+            else -> {
+                Text(
+                    "${shown.size} 部作品",
+                    style = MaterialTheme.typography.labelLarge,
+                    modifier = Modifier.padding(horizontal = 18.dp),
+                )
+                MediaGrid(shown, viewModel, { viewModel.open(it, shown) }, Modifier.weight(1f))
+            }
+        }
     }
     RightSidePanel(
         visible = showTools,
@@ -928,6 +1001,63 @@ private fun WorksLibraryScreen(items: List<MediaItem>, viewModel: GalleryViewMod
         }
         OutlinedButton(onClick = ::clearSearch, modifier = Modifier.fillMaxWidth()) {
             Text("清除搜索与筛选")
+        }
+    }
+}
+
+@Composable
+private fun SeriesShelfGrid(
+    shelves: List<SeriesShelf>,
+    viewModel: GalleryViewModel,
+    onOpen: (SeriesShelf) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    if (shelves.isEmpty()) {
+        Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Text("这里还没有系列或单篇作品", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        return
+    }
+    LazyVerticalGrid(
+        columns = GridCells.Adaptive(154.dp),
+        modifier = modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp, 10.dp, 16.dp, 112.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        gridItems(shelves, key = SeriesShelf::key) { shelf ->
+            Card(onClick = { onOpen(shelf) }) {
+                shelf.items.firstOrNull()?.let { cover ->
+                    MediaThumbnail(
+                        item = cover,
+                        viewModel = viewModel,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .aspectRatio(0.9f),
+                    )
+                }
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(3.dp),
+                    modifier = Modifier.padding(12.dp),
+                ) {
+                    Text(
+                        shelf.title,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        if (shelf.isUnassigned) {
+                            "${shelf.items.size} 部独立作品"
+                        } else {
+                            "${shelf.items.size} 部 · 可手动设置顺序"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
         }
     }
 }
@@ -1506,21 +1636,26 @@ private fun FacetScreen(items: List<MediaItem>, facet: Facet, viewModel: Gallery
                 Facet.AUTHOR -> item.authors
                 Facet.TAG -> item.tags
             }
-        }.distinct().sortedWith(String.CASE_INSENSITIVE_ORDER)
+        }.distinctBy { it.lowercase(Locale.ROOT) }.sortedWith(String.CASE_INSENSITIVE_ORDER)
     }
     var selected by remember(facet, values) { mutableStateOf(values.firstOrNull()) }
     if (values.isEmpty()) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text(facet.emptyText) }
         return
     }
-    val filtered = items.filter { item ->
+    val matching = items.filter { item ->
         when (facet) {
-            Facet.SERIES -> item.series?.title == selected
+            Facet.SERIES -> item.series?.title?.equals(selected, ignoreCase = true) == true
             Facet.COLLECTION -> selected in item.collections
             Facet.AUTHOR -> selected in item.authors
             Facet.TAG -> selected in item.tags
         }
-    }.sortedBy { it.series?.sortIndex ?: 0.0 }
+    }
+    val filtered = if (facet == Facet.SERIES) {
+        SeriesPresentation.orderEntries(matching)
+    } else {
+        matching.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER, MediaItem::displayTitle))
+    }
     Column(Modifier.fillMaxSize()) {
         LazyRow(
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),

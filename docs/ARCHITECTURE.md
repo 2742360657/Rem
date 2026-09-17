@@ -12,6 +12,8 @@ The public product name is Rem and its release application ID is `com.susnowy.re
 4. Every item has a portable `domain`: `album`, `classified`, or `works`. Compose exposes these as exactly three primary destinations; file type and product surface are not conflated.
 5. Compose screens consume repository state. Thumbnail and decoder data never enters the portable Library.
 
+The current series shelf is a presentation derived from each item's portable `SeriesRef`; it does not introduce a second source of truth. It groups legacy same-title references case-insensitively for display, orders explicit `sort_index` first and otherwise falls back to season/episode or volume/chapter, and keeps unassigned works visible. A future normalized series document must migrate these inline references explicitly rather than silently treating the derived shelf as portable truth.
+
 Android URIs and mount paths are local-only. Every portable media path uses `/`-separated paths relative to the Library root.
 
 ## Packages

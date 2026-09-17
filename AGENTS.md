@@ -79,7 +79,7 @@ The sample proves that the Library contains app-generated metadata, manually arr
 - Discovery rows are currently rebuildable device-local evidence only. There is not yet a portable user decision for “ignore”, “handled”, or a manually chosen classification, so such decisions would be lost after rebuilding the index.
 - Automatic hashes stop above 64 MiB, and directory fingerprints describe structure rather than byte-identical pages. Current duplicate detection cannot merge two image-set editions page by page.
 - Inbox acceptance is represented indirectly by the presence of portable item metadata. Any new review-state design must remain portable and survive index rebuilds.
-- The current Works screen is a flat item grid with facet filtering. Series is a sort/filter property, not a first-class series presentation.
+- The Works screen now has a derived series shelf, but Series is still stored inline on every item. There is no portable first-class series document, alias/rename transaction, or atomic multi-member reordering operation yet.
 
 ## Implemented foundation
 
@@ -88,6 +88,7 @@ The sample proves that the Library contains app-generated metadata, manually arr
 - ComicInfo and filename/path recognizers now retain field provenance through merge.
 - The sample's `eh/` alias, numeric archives below a JM-like root, and numbered CBZ files below a series folder are recognized as Inbox suggestions.
 - Unsupported user-visible files and ambiguous directory structures are indexed separately and shown under Inbox's “其他待判断”. Known Rem internals and sidecars are filtered explicitly. These discovery rows do not enter the portable catalog.
+- Works can be browsed as a series shelf or flat item grid. The shelf groups legacy same-title references for display, keeps unassigned works visible, and orders entries by manual sort index then season/episode or volume/chapter. The editor preserves and edits every existing series position field.
 
 ## Preferred implementation path
 
@@ -97,7 +98,7 @@ Do not start with a broad UI rewrite.
 2. **Finish separating discovery from classification**: discovered-entry records and explicit ignore/sidecar rules now exist; next add portable user decisions plus structured suggestion evidence/confidence. Preserve current scan performance characteristics.
 3. **Add portable logical relationships**: evolve the Schema additively to first-class works/groups/series/editions or an equivalent normalized design. Keep existing v3 item IDs and manual fields stable during migration.
 4. **Build 图片 / 视频 grouping**: show folders and logical groups; a mixed group opens once and exposes its images and videos together. Grouping must not require moving files.
-5. **Build comic series presentation**: series shelf -> ordered entries -> work detail -> reader. Allow optional volume/chapter/episode values plus drag/manual order.
+5. **Finish the comic series model**: the derived series shelf, ordered entries, work detail/reader context, and optional volume/chapter/episode/manual sort fields now exist. Next normalize portable series membership and add atomic batch/drag reordering.
 6. **Add merge and update flows**: compare two editions, calculate hashes only for the selected scope, classify exact duplicates versus unique additions, preview a virtual merge, and offer physical cleanup only as a separate recoverable transaction.
 7. **Polish interaction**: tighten density, selection, long-press menus, contextual tools, and back-stack behavior using real-device sessions. Do not let navigation work mask missing data semantics.
 

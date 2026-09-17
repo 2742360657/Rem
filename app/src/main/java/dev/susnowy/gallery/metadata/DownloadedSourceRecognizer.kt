@@ -177,6 +177,7 @@ fun mergeRecognizedMetadata(vararg values: RecognizedMetadata?): RecognizedMetad
     val series = firstValue(RecognizedMetadata::series)
     val sortIndex = firstValue(RecognizedMetadata::sortIndex)
     val volume = firstValue(RecognizedMetadata::volume)
+    val chapter = firstValue(RecognizedMetadata::chapter)
     val season = firstValue(RecognizedMetadata::season)
     val episode = firstValue(RecognizedMetadata::episode)
     val authors = firstList(RecognizedMetadata::authors)
@@ -187,6 +188,7 @@ fun mergeRecognizedMetadata(vararg values: RecognizedMetadata?): RecognizedMetad
         series = series,
         sortIndex = sortIndex,
         volume = volume,
+        chapter = chapter,
         season = season,
         episode = episode,
         authors = authors,
@@ -201,7 +203,7 @@ fun mergeRecognizedMetadata(vararg values: RecognizedMetadata?): RecognizedMetad
             sourceFor(MetadataField.TAGS) { it.tags.isNotEmpty() || it.language != null }
                 ?.let { put(MetadataField.TAGS, it) }
             sourceFor(MetadataField.SERIES) {
-                it.series != null || it.sortIndex != null || it.volume != null ||
+                it.series != null || it.sortIndex != null || it.volume != null || it.chapter != null ||
                     it.season != null || it.episode != null
             }?.let { put(MetadataField.SERIES, it) }
         },

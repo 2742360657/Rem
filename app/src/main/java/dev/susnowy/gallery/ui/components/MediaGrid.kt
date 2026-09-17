@@ -176,7 +176,7 @@ fun MediaGrid(
             }
             FilledTonalButton(
                 onClick = {
-                    viewModel.setBatchFavorite(setOf(item.id), !item.favorite)
+                    viewModel.setFavorite(item, !item.favorite)
                     actionItem = null
                 },
                 modifier = Modifier.fillMaxWidth(),
@@ -224,7 +224,7 @@ fun MediaGrid(
         MetadataEditor(
             item = item,
             onDismiss = { editItem = null },
-            onSave = { title, authors, tags, collections, series, sortIndex, favorite, domain ->
+            onSave = { title, authors, tags, collections, series, favorite, domain ->
                 viewModel.saveMetadata(
                     item,
                     title,
@@ -232,7 +232,6 @@ fun MediaGrid(
                     tags,
                     collections,
                     series,
-                    sortIndex,
                     favorite,
                     domain,
                 )

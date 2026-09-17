@@ -12,6 +12,7 @@ data class RecognizedMetadata(
     val series: String? = null,
     val sortIndex: Double? = null,
     val volume: Double? = null,
+    val chapter: Double? = null,
     val season: Int? = null,
     val episode: Double? = null,
     val authors: List<String> = emptyList(),
@@ -32,7 +33,9 @@ fun RecognizedMetadata.withFieldSource(source: String): RecognizedMetadata = cop
         if (title != null) put(MetadataField.DISPLAY_TITLE, source)
         if (authors.isNotEmpty()) put(MetadataField.AUTHORS, source)
         if (tags.isNotEmpty() || language != null) put(MetadataField.TAGS, source)
-        if (series != null || sortIndex != null || volume != null || season != null || episode != null) {
+        if (series != null || sortIndex != null || volume != null || chapter != null ||
+            season != null || episode != null
+        ) {
             put(MetadataField.SERIES, source)
         }
     },
@@ -66,6 +69,7 @@ object FilenameMetadataParser {
                 title = match.groupValues.getOrNull(2)?.trim().orEmpty().ifBlank { trimmedName },
                 series = parentAuthor,
                 sortIndex = number,
+                chapter = number,
             )
         }
         if (extension in setOf("zip", "cbz") && parentAuthor != null) {
@@ -74,6 +78,7 @@ object FilenameMetadataParser {
                     title = match.groupValues[2].trim(),
                     series = parentAuthor,
                     sortIndex = match.groupValues[1].toDoubleOrNull(),
+                    chapter = match.groupValues[1].toDoubleOrNull(),
                 )
             }
         }

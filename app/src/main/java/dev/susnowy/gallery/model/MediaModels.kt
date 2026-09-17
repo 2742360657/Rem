@@ -2,6 +2,8 @@ package dev.susnowy.gallery.model
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import java.util.Locale
+import java.util.UUID
 
 @Serializable
 enum class MediaKind {
@@ -33,12 +35,43 @@ enum class SourceKind {
 data class SeriesRef(
     val id: String,
     val title: String,
-    @SerialName("sort_index") val sortIndex: Double = 0.0,
+    @SerialName("sort_index") val sortIndex: Double? = null,
     val season: Int? = null,
     val episode: Double? = null,
     val volume: Double? = null,
     val chapter: Double? = null,
 )
+
+/** User-editable series assignment before a stable Library-local series id is resolved. */
+data class SeriesAssignment(
+    val title: String,
+    val sortIndex: Double? = null,
+    val season: Int? = null,
+    val episode: Double? = null,
+    val volume: Double? = null,
+    val chapter: Double? = null,
+)
+
+fun SeriesAssignment.toSeriesRef(
+    libraryId: String,
+    existing: Sequence<SeriesRef> = emptySequence(),
+): SeriesRef {
+    val normalizedTitle = title.trim().lowercase(Locale.ROOT)
+    require(normalizedTitle.isNotEmpty()) { "系列标题不能为空" }
+    val existingId = existing
+        .filter { it.title.trim().lowercase(Locale.ROOT) == normalizedTitle }
+        .map(SeriesRef::id)
+        .minOrNull()
+    return SeriesRef(
+        id = existingId ?: UUID.nameUUIDFromBytes("series:$libraryId:$normalizedTitle".encodeToByteArray()).toString(),
+        title = title.trim(),
+        sortIndex = sortIndex,
+        season = season,
+        episode = episode,
+        volume = volume,
+        chapter = chapter,
+    )
+}
 
 data class MediaItem(
     val id: String,

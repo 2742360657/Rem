@@ -65,6 +65,7 @@ class FilenameMetadataParserTest {
         val metadata = FilenameMetadataParser.parse("Chapter 12 - Finale", "Example Manga")
         assertEquals("Example Manga", metadata.series)
         assertEquals(12.0, metadata.sortIndex)
+        assertEquals(12.0, metadata.chapter)
         assertEquals("Finale", metadata.title)
     }
 
@@ -77,6 +78,7 @@ class FilenameMetadataParserTest {
 
         assertEquals("王牌御史", metadata.series)
         assertEquals(1.0, metadata.sortIndex)
+        assertEquals(1.0, metadata.chapter)
         assertEquals("缘起", metadata.title)
     }
 }

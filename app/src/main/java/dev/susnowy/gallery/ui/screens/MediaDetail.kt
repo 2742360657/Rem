@@ -109,6 +109,7 @@ import dev.susnowy.gallery.model.MediaItem
 import dev.susnowy.gallery.model.MediaDomain
 import dev.susnowy.gallery.model.MediaKind
 import dev.susnowy.gallery.model.PlaybackProgress
+import dev.susnowy.gallery.model.SeriesRef
 import dev.susnowy.gallery.model.SourceKind
 import dev.susnowy.gallery.ui.GalleryViewModel
 import dev.susnowy.gallery.ui.components.MetadataEditor
@@ -186,16 +187,7 @@ fun MediaDetail(
                         }
                     }
                     IconButton(onClick = {
-                        viewModel.saveMetadata(
-                            currentItem,
-                            currentItem.displayTitle,
-                            currentItem.authors.joinToString(),
-                            currentItem.tags.joinToString(),
-                            currentItem.collections.joinToString(),
-                            currentItem.series?.title.orEmpty(),
-                            currentItem.series?.sortIndex?.toString().orEmpty(),
-                            !currentItem.favorite,
-                        )
+                        viewModel.setFavorite(currentItem, !currentItem.favorite)
                     }) {
                         Icon(
                             if (currentItem.favorite) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
@@ -232,7 +224,7 @@ fun MediaDetail(
         MetadataEditor(
             item = currentItem,
             onDismiss = { showEditor = false },
-            onSave = { title, authors, tags, collections, series, sortIndex, favorite, domain ->
+            onSave = { title, authors, tags, collections, series, favorite, domain ->
                 viewModel.saveMetadata(
                     currentItem,
                     title,
@@ -240,7 +232,6 @@ fun MediaDetail(
                     tags,
                     collections,
                     series,
-                    sortIndex,
                     favorite,
                     domain,
                 )
@@ -428,16 +419,7 @@ private fun ImageSetOverview(
         }
         FilledTonalButton(
             onClick = {
-                viewModel.saveMetadata(
-                    item,
-                    item.displayTitle,
-                    item.authors.joinToString(),
-                    item.tags.joinToString(),
-                    item.collections.joinToString(),
-                    item.series?.title.orEmpty(),
-                    item.series?.sortIndex?.toString().orEmpty(),
-                    !item.favorite,
-                )
+                viewModel.setFavorite(item, !item.favorite)
                 showTools = false
             },
             modifier = Modifier.fillMaxWidth(),
@@ -468,8 +450,8 @@ private fun ImageSetOverview(
         MetadataEditor(
             item = item,
             onDismiss = { showEditor = false },
-            onSave = { title, authors, tags, collections, series, sortIndex, favorite, domain ->
-                viewModel.saveMetadata(item, title, authors, tags, collections, series, sortIndex, favorite, domain)
+            onSave = { title, authors, tags, collections, series, favorite, domain ->
+                viewModel.saveMetadata(item, title, authors, tags, collections, series, favorite, domain)
                 showEditor = false
             },
         )
@@ -804,8 +786,8 @@ private fun ImageSetReaderScreen(
         MetadataEditor(
             item = item,
             onDismiss = { showEditor = false },
-            onSave = { title, authors, tags, collections, series, sortIndex, favorite, domain ->
-                viewModel.saveMetadata(item, title, authors, tags, collections, series, sortIndex, favorite, domain)
+            onSave = { title, authors, tags, collections, series, favorite, domain ->
+                viewModel.saveMetadata(item, title, authors, tags, collections, series, favorite, domain)
                 showEditor = false
             },
         )
@@ -1358,11 +1340,23 @@ private fun MetadataSummary(item: MediaItem) {
                 if (item.authors.isNotEmpty()) add("作者：${item.authors.joinToString()}")
                 if (item.tags.isNotEmpty()) add("标签：${item.tags.joinToString()}")
                 if (item.collections.isNotEmpty()) add("Collection：${item.collections.joinToString()}")
-                item.series?.let { add("系列：${it.title} · ${it.sortIndex}") }
+                item.series?.let { add(it.displaySummary()) }
             }
             details.forEach { Text(it, style = MaterialTheme.typography.bodySmall) }
         }
     }
+}
+
+private fun SeriesRef.displaySummary(): String = buildString {
+    append("系列：$title")
+    val position = buildList {
+        sortIndex?.let { add("顺序 $it") }
+        volume?.let { add("卷 $it") }
+        chapter?.let { add("章 $it") }
+        season?.let { add("季 $it") }
+        episode?.let { add("集 $it") }
+    }
+    if (position.isNotEmpty()) append(" · ${position.joinToString(" · ")}")
 }
 
 private fun MediaDomain.displayLabel(): String = when (this) {

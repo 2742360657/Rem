@@ -254,10 +254,11 @@ class GalleryRepository(context: Context) {
                     dev.susnowy.gallery.model.SeriesRef(
                         id = UUID.nameUUIDFromBytes("$libraryId:$title".encodeToByteArray()).toString(),
                         title = title,
-                        sortIndex = recognized.sortIndex ?: 0.0,
+                        sortIndex = recognized.sortIndex,
                         season = recognized.season,
                         episode = recognized.episode,
                         volume = recognized.volume,
+                        chapter = recognized.chapter,
                     )
                 }
                 val item = MediaItem(

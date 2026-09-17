@@ -22,10 +22,10 @@ import dev.susnowy.gallery.model.MediaItem
 import dev.susnowy.gallery.model.MediaDomain
 import dev.susnowy.gallery.model.MediaKind
 import dev.susnowy.gallery.model.PlaybackProgress
-import dev.susnowy.gallery.model.SeriesRef
+import dev.susnowy.gallery.model.SeriesAssignment
+import dev.susnowy.gallery.model.toSeriesRef
 import dev.susnowy.gallery.organizer.OrganizationPlan
 import dev.susnowy.gallery.organizer.OrganizerTemplate
-import java.util.UUID
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.CancellationException
@@ -262,17 +262,17 @@ class GalleryViewModel(
         authors: String,
         tags: String,
         collections: String,
-        seriesTitle: String,
-        sortIndex: String,
+        seriesAssignment: SeriesAssignment?,
         favorite: Boolean,
         domain: MediaDomain = item.domain,
     ) {
         viewModelScope.launch {
-            val series = seriesTitle.trim().takeIf(String::isNotEmpty)?.let { value ->
-                SeriesRef(
-                    id = item.series?.takeIf { it.title == value }?.id ?: UUID.randomUUID().toString(),
-                    title = value,
-                    sortIndex = sortIndex.toDoubleOrNull() ?: 0.0,
+            val series = seriesAssignment?.let { assignment ->
+                assignment.toSeriesRef(
+                    libraryId = item.libraryId,
+                    existing = repository.media.value.asSequence()
+                        .filter { candidate -> candidate.libraryId == item.libraryId }
+                        .mapNotNull(MediaItem::series),
                 )
             }
             val updated = item.copy(
@@ -335,6 +335,14 @@ class GalleryViewModel(
             }.onSuccess { count ->
                 message.value = if (favorite) "已收藏 $count 项媒体" else "已取消收藏 $count 项媒体"
             }.onFailure(::showError)
+        }
+    }
+
+    fun setFavorite(item: MediaItem, favorite: Boolean) {
+        viewModelScope.launch {
+            runCatching { repository.updateMedia(item.copy(favorite = favorite)) }
+                .onSuccess { message.value = if (favorite) "已收藏" else "已取消收藏" }
+                .onFailure(::showError)
         }
     }
 
