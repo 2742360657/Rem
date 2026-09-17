@@ -576,7 +576,11 @@ private fun ClassifiedLibraryScreen(
     var type by rememberSaveable { mutableStateOf(ClassifiedType.GROUPS) }
     var imagePath by rememberSaveable { mutableStateOf<String?>(null) }
     var videoPath by rememberSaveable { mutableStateOf<String?>(null) }
-    val groupCount = manualGroups.size + derived.size
+    val libraryId = classified.firstOrNull()?.libraryId
+    val unsavedDerived = remember(derived, manualGroups, libraryId) {
+        MixedMediaPresentation.unsavedGroups(derived, manualGroups, libraryId)
+    }
+    val groupCount = manualGroups.size + unsavedDerived.size
     LaunchedEffect(groupCount == 0) {
         if (groupCount == 0 && type == ClassifiedType.GROUPS) type = ClassifiedType.IMAGES
     }

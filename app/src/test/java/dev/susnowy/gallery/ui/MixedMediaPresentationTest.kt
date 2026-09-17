@@ -1,9 +1,11 @@
 package dev.susnowy.gallery.ui
 
 import dev.susnowy.gallery.model.MediaDomain
+import dev.susnowy.gallery.model.MediaGroup
 import dev.susnowy.gallery.model.MediaItem
 import dev.susnowy.gallery.model.MediaKind
 import dev.susnowy.gallery.model.SourceKind
+import dev.susnowy.gallery.model.derivedGroupId
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -48,4 +50,34 @@ class MixedMediaPresentationTest {
         sourceKind = source,
         displayTitle = id,
     )
+}
+
+class UnsavedDerivedGroupTest {
+    private fun imageSet(id: String, path: String) = MediaItem(
+        id = id,
+        libraryId = "library-id",
+        relativePath = path,
+        uri = "content://$id",
+        kind = MediaKind.IMAGE_SET,
+        sourceKind = SourceKind.DIRECTORY,
+        displayTitle = id,
+    )
+
+    @Test
+    fun savedDerivedFoldersLeaveTheCandidateList() {
+        val primary = imageSet("work-1", "写真集A")
+        val derived = listOf(MixedMediaGroup(key = "library-id:写真集A", primary = primary, videos = emptyList()))
+        val saved = listOf(
+            MediaGroup(
+                id = derivedGroupId("library-id", "work-1"),
+                libraryId = "library-id",
+                title = "写真集A",
+            ),
+        )
+
+        assertTrue(MixedMediaPresentation.unsavedGroups(derived, saved, "library-id").isEmpty())
+        assertEquals(1, MixedMediaPresentation.unsavedGroups(derived, emptyList(), "library-id").size)
+        // A group saved for another Library must not hide this Library's candidate.
+        assertEquals(1, MixedMediaPresentation.unsavedGroups(derived, saved, "other-library").size)
+    }
 }

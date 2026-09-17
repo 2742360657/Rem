@@ -1,11 +1,14 @@
 package dev.susnowy.gallery.model
 
+import kotlinx.serialization.Serializable
+
 /**
  * Device-side projection of one portable Series.
  *
  * `catalog.json` stays the source of truth; this type lets the UI list, reorder and rename a
  * series without loading the whole catalog.
  */
+@Serializable
 data class MediaSeries(
     val id: String,
     val libraryId: String,
@@ -31,6 +34,7 @@ data class MediaSeries(
     }
 }
 
+@Serializable
 data class MediaSeriesMember(
     val workId: String,
     val sortIndex: Double? = null,

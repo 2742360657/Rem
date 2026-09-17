@@ -1,6 +1,7 @@
 package dev.susnowy.gallery.model
 
 import java.util.UUID
+import kotlinx.serialization.Serializable
 
 /**
  * Device-side projection of one portable Group.
@@ -8,6 +9,7 @@ import java.util.UUID
  * The portable document is `catalog.json`; this type only exists so the UI can render and
  * edit a group without loading the whole catalog.
  */
+@Serializable
 data class MediaGroup(
     val id: String,
     val libraryId: String,
@@ -29,6 +31,7 @@ data class MediaGroup(
         members.firstOrNull { it.workId == workId }?.role ?: GroupMemberRole.ITEM
 }
 
+@Serializable
 data class MediaGroupMember(
     val workId: String,
     val role: GroupMemberRole = GroupMemberRole.ITEM,

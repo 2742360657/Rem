@@ -81,11 +81,8 @@ fun GroupShelf(
     val derived = remember(items) { MixedMediaPresentation.groups(items) }
     val itemsById = remember(items) { items.associateBy(MediaItem::id) }
     val libraryId = items.firstOrNull()?.libraryId
-    val savedIds = remember(groups) { groups.mapTo(mutableSetOf(), MediaGroup::id) }
-    val unsavedDerived = remember(derived, savedIds, libraryId) {
-        derived.filter { group ->
-            libraryId == null || derivedGroupId(libraryId, group.primary.id) !in savedIds
-        }
+    val unsavedDerived = remember(derived, groups, libraryId) {
+        MixedMediaPresentation.unsavedGroups(derived, groups, libraryId)
     }
     if (groups.isEmpty() && unsavedDerived.isEmpty()) {
         Column(
