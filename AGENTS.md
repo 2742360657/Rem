@@ -103,7 +103,7 @@ A second, always-available test target is the phone's own storage (`/storage/emu
 
 ## Known gaps
 
-- Gesture-based drag reordering is not implemented; Group and Series editors use up/down and "move to index", which also stays usable for series with hundreds of members.
+- Drag reordering exists for Group and Series editors (long-press handle); up/down and "move to index" remain the precise paths. The gesture itself is not verified on a device yet.
 - Edition comparison and virtual merge are wired end to end (quick/deep comparison, report, page-plan Edition, `.gallery/imports/` evidence, reader follows the plan); pixel-level (re-encode) matching is deliberately not implemented, and none of it is verified on a real device yet.
 - Initial inventory is still one atomic traversal; only enrichment is resumable.
 - `refreshFromDatabase()` still materializes the full media table.

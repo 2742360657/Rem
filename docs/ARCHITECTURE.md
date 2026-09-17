@@ -120,7 +120,8 @@ Derived folder groups stay presentation-only inference until saved; after that t
 - Membership edits stamp `field_sources.series = manual` on every touched Work inside the same write. The scanner prefers a manual series decision, so a reorder or removal cannot be undone by folder-name recognition on the next scan — including for Works that just left the series, which keep a manual "no series" decision.
 - `GalleryRepository.saveSeries` maps list position to `sort_index`, preserves season/episode/volume/chapter unless the user clears them, then rewrites `series_json` on all touched media rows (`applySeriesAssignment`), clearing the assignment for Works that left.
 - Database v9 projects Series into a `series` table (`members_json`, disposable), rebuilt from the catalog after attach and scan; `MediaSeries` is what the editor edits.
-- UI: `漫画 / 阅读 → 系列书架 → 编辑系列` (`SeriesEditor`) does rename, batch add/remove, up/down and move-to-index reordering and numbering reset, committed by one explicit save. The picker is the shared `WorkPickerDialog`.
+- UI: `漫画 / 阅读 → 系列书架 → 编辑系列` (`SeriesEditor`) does rename, batch add/remove, reordering and numbering reset, committed by one explicit save. The picker is the shared `WorkPickerDialog`.
+- `ui.components.DragReorder` provides long-press drag reordering for fixed-height rows (`ReorderableRow`): the step arithmetic (`reorderStep`) is pure and unit-tested, the gesture only edits the editor's local list, and the up/down plus move-to-index paths stay available and produce the same order.
 
 ## Library initialization and writes
 
