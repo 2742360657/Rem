@@ -32,6 +32,7 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.PagerState
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
@@ -79,6 +80,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.geometry.isSpecified
+import dev.susnowy.gallery.ui.components.ZoomPlacement
 import dev.susnowy.gallery.ui.components.Zoomable
 import dev.susnowy.gallery.ui.components.rememberZoomState
 import androidx.compose.ui.Modifier
@@ -87,6 +89,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.platform.LocalContext
@@ -141,6 +144,8 @@ fun MediaDetail(
     item: MediaItem,
     browsingItems: List<MediaItem> = listOf(item),
     libraryWorks: List<MediaItem> = emptyList(),
+    readerQueue: List<MediaItem> = emptyList(),
+    autoAdvanceChapters: Boolean = true,
     viewModel: GalleryViewModel,
     onBack: () -> Unit,
 ) {
@@ -167,11 +172,19 @@ fun MediaDetail(
         return
     }
     if (item.kind == MediaKind.IMAGE_SET) {
+        // The next chapter is only meaningful inside a reading queue: opening a single Work from
+        // a search result must not silently turn into a series read.
+        val chapterIndex = readerQueue.indexOfFirst { it.id == item.id }
+        val nextChapter = readerQueue.getOrNull(chapterIndex + 1)
+            ?.takeIf { chapterIndex >= 0 && it.id != item.id }
         ImageSetWorkDetail(
             item = item,
             libraryWorks = libraryWorks,
+            nextChapter = nextChapter,
+            autoAdvanceChapters = autoAdvanceChapters,
             viewModel = viewModel,
             onBack = onBack,
+            onOpenNextChapter = { next -> viewModel.openChapter(next, readerQueue) },
         )
         return
     }
@@ -382,22 +395,39 @@ private fun MixedMediaGroupDetail(
 private fun ImageSetWorkDetail(
     item: MediaItem,
     libraryWorks: List<MediaItem>,
+    nextChapter: MediaItem?,
+    autoAdvanceChapters: Boolean,
     viewModel: GalleryViewModel,
     onBack: () -> Unit,
+    onOpenNextChapter: (MediaItem) -> Unit,
 ) {
     var reading by rememberSaveable(item.id) { mutableStateOf(false) }
     var comparing by rememberSaveable(item.id) { mutableStateOf(false) }
     if (reading) {
         BackHandler { reading = false }
-        ImageSetReaderScreen(item = item, viewModel = viewModel, onBack = { reading = false })
+        ImageSetReaderScreen(
+            item = item,
+            viewModel = viewModel,
+            onBack = { reading = false },
+            nextChapter = nextChapter,
+            autoAdvance = autoAdvanceChapters,
+            onOpenNextChapter = { next ->
+                // Hand over to the next chapter and go back to its detail screen, so leaving the
+                // reader lands on the chapter that is actually open.
+                reading = false
+                onOpenNextChapter(next)
+            },
+        )
     } else {
         BackHandler(onBack = onBack)
         ImageSetOverview(
             item = item,
+            nextChapter = nextChapter,
             viewModel = viewModel,
             onBack = onBack,
             onRead = { reading = true },
             onCompare = { comparing = true },
+            onOpenNextChapter = onOpenNextChapter,
         )
     }
     if (comparing) {
@@ -418,10 +448,12 @@ private fun ImageSetWorkDetail(
 @Composable
 private fun ImageSetOverview(
     item: MediaItem,
+    nextChapter: MediaItem?,
     viewModel: GalleryViewModel,
     onBack: () -> Unit,
     onRead: () -> Unit,
     onCompare: () -> Unit,
+    onOpenNextChapter: (MediaItem) -> Unit,
 ) {
     val progress by produceState<PlaybackProgress?>(initialValue = null, item.id, item.modifiedAt) {
         value = viewModel.progress(item)
@@ -495,7 +527,22 @@ private fun ImageSetOverview(
             )
             Button(onClick = onRead, modifier = Modifier.fillMaxWidth()) {
                 Icon(Icons.Rounded.PlayArrow, contentDescription = null)
-                Text(if (progress == null || readPage == 0) " 开始阅读" else " 继续阅读 · 第 ${readPage + 1} 页")
+                Text(
+                    when {
+                        progress?.finished == true -> " 重新阅读本话"
+                        progress == null || readPage == 0 -> " 开始阅读"
+                        else -> " 继续阅读 · 第 ${readPage + 1} 页"
+                    },
+                )
+            }
+            nextChapter?.let { next ->
+                FilledTonalButton(
+                    onClick = { onOpenNextChapter(next) },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Icon(Icons.Rounded.ArrowDownward, contentDescription = null)
+                    Text(" 下一话 · ${next.displayTitle}", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
             }
             Text(
                 "点按进入沉浸阅读；在阅读页长按任意页面可打开当前页操作。",
@@ -711,6 +758,9 @@ private fun ImageSetReaderScreen(
     item: MediaItem,
     viewModel: GalleryViewModel,
     onBack: () -> Unit,
+    nextChapter: MediaItem? = null,
+    autoAdvance: Boolean = false,
+    onOpenNextChapter: (MediaItem) -> Unit = {},
 ) {
     val pages by produceState<Result<List<ImagePage>>?>(null, item.id, item.modifiedAt, item.coverPath) {
         value = runCatching { viewModel.pages(item) }
@@ -722,6 +772,7 @@ private fun ImageSetReaderScreen(
     var showDerivePage by remember { mutableStateOf(false) }
     var showOrderEditor by remember { mutableStateOf(false) }
     var showPageTools by remember { mutableStateOf(false) }
+    var chapterFinished by remember(item.id) { mutableStateOf(false) }
     val loadedPages = pages?.getOrNull().orEmpty()
 
     ImmersiveSystemBars(controlsVisible)
@@ -729,6 +780,16 @@ private fun ImageSetReaderScreen(
         if (controlsVisible && !showEditor && !confirmTrash && !showDerivePage && !showOrderEditor && !showPageTools) {
             delay(3_000)
             controlsVisible = false
+        }
+    }
+    // Auto-advance waits for the end of the chapter and then hands over to the next one, so a
+    // reader who wants to stop still has the whole chapter in front of them. Only an end that
+    // follows the restored position counts: reopening a chapter that was already read to its
+    // last page must not immediately push the reader into the next one.
+    LaunchedEffect(item.id, chapterFinished, autoAdvance, nextChapter?.id) {
+        if (chapterFinished && autoAdvance) {
+            chapterFinished = false
+            nextChapter?.let(onOpenNextChapter)
         }
     }
 
@@ -758,6 +819,9 @@ private fun ImageSetReaderScreen(
                                 controlsVisible = true
                                 showPageTools = true
                             },
+                            onChapterFinished = { chapterFinished = true },
+                            nextChapter = nextChapter,
+                            onOpenNextChapter = onOpenNextChapter,
                         )
                     }
                 },
@@ -953,6 +1017,9 @@ private fun ImageSetReader(
     onToggleControls: () -> Unit,
     onPageChanged: (Int) -> Unit,
     onLongPressPage: (Int) -> Unit,
+    onChapterFinished: () -> Unit,
+    nextChapter: MediaItem? = null,
+    onOpenNextChapter: (MediaItem) -> Unit = {},
 ) {
     val savedProgress by produceState(initialValue = 0, item.id) {
         value = viewModel.progress(item)?.page ?: 0
@@ -960,9 +1027,12 @@ private fun ImageSetReader(
     val listState = rememberLazyListState()
     val context = LocalContext.current
     val imageLoader = remember(context) { SingletonImageLoader.get(context) }
-    var zoomedPage by remember(item.id) { mutableStateOf<Int?>(null) }
+    var zoomedPageKey by remember(item.id) { mutableStateOf<String?>(null) }
+    // The restored page is where the reader left off, so reaching it is not "reading to the end".
+    var restored by remember(item.id) { mutableStateOf(false) }
     LaunchedEffect(pages.size, savedProgress) {
         if (savedProgress in pages.indices) listState.scrollToItem(savedProgress)
+        restored = true
     }
     LaunchedEffect(listState, item.id, pages.size) {
         snapshotFlow { listState.firstVisibleItemIndex }
@@ -971,6 +1041,14 @@ private fun ImageSetReader(
                 onPageChanged(page)
                 viewModel.saveProgress(item, page = page, finished = page >= pages.lastIndex)
             }
+    }
+    // Fires once each time the reader actually reaches the end of the chapter, which is what
+    // "read to the end" means for the next-chapter entry and for automatic advance.
+    LaunchedEffect(listState, pages.size, restored) {
+        if (!restored) return@LaunchedEffect
+        snapshotFlow { listState.firstVisibleItemIndex >= pages.lastIndex && pages.isNotEmpty() }
+            .distinctUntilChanged()
+            .collect { finished -> if (finished) onChapterFinished() }
     }
     LaunchedEffect(listState, item.id, item.modifiedAt, pages) {
         var previousFirst = listState.firstVisibleItemIndex
@@ -1011,13 +1089,15 @@ private fun ImageSetReader(
     }
     LazyColumn(
         state = listState,
-        userScrollEnabled = zoomedPage == null,
+        // Zooming locks the current page: the finger pans the page instead of scrolling the list.
+        userScrollEnabled = zoomedPageKey == null,
         modifier = Modifier.fillMaxSize(),
     ) {
         items(pages.size, key = { index ->
             pages[index].relativePath ?: pages[index].archiveEntry ?: pages[index].name
         }) { index ->
             val page = pages[index]
+            val pageKey = page.relativePath ?: page.archiveEntry ?: page.name
             val imageRequest = remember(
                 context,
                 item.id,
@@ -1028,11 +1108,13 @@ private fun ImageSetReader(
                 page.uri?.let { comicPageImageRequest(context, item, page) }
             }
             ZoomableComicPage(
-                pageKey = page.relativePath ?: page.archiveEntry ?: page.name,
+                pageKey = pageKey,
+                visibleHeight = visibleSliceOf(listState, index),
                 onTap = onToggleControls,
                 onLongPress = { onLongPressPage(index) },
                 onZoomingChanged = { zooming ->
-                    if (zooming) zoomedPage = index else if (zoomedPage == index) zoomedPage = null
+                    if (zooming) zoomedPageKey = pageKey
+                    else if (zoomedPageKey == pageKey) zoomedPageKey = null
                 },
             ) {
                 when {
@@ -1063,7 +1145,65 @@ private fun ImageSetReader(
                 }
             }
         }
+        if (nextChapter != null) {
+            item(key = "chapter-end") {
+                ChapterEndFooter(
+                    nextChapter = nextChapter,
+                    onOpenNextChapter = { onOpenNextChapter(nextChapter) },
+                )
+            }
+        }
     }
+}
+
+/**
+ * End-of-chapter entry into the next chapter.
+ *
+ * A Series reads as one flow, so the end of a chapter must offer the next one without sending
+ * the reader back to the shelf; the shelf remains the place to pick a different chapter.
+ */
+@Composable
+private fun ChapterEndFooter(
+    nextChapter: MediaItem,
+    onOpenNextChapter: () -> Unit,
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(Color.Black)
+            .navigationBarsPadding()
+            .padding(horizontal = 24.dp, vertical = 24.dp),
+    ) {
+        Text("本话已读完", color = Color.White, style = MaterialTheme.typography.titleMedium)
+        Text(
+            "下一话 · ${nextChapter.displayTitle}",
+            color = Color.White.copy(alpha = 0.75f),
+            style = MaterialTheme.typography.bodySmall,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Button(onClick = onOpenNextChapter) {
+            Text("阅读下一话")
+        }
+    }
+}
+
+/**
+ * How much of the page at [index] is inside the reading window.
+ *
+ * The zoom container needs it so a pan inside a long page stops at the edge of what the reader
+ * is actually looking at instead of scrolling the page into empty space.
+ */
+private fun visibleSliceOf(state: LazyListState, index: Int): Float {
+    val info = state.layoutInfo.visibleItemsInfo.firstOrNull { it.index == index }
+        ?: return 0f
+    val viewportStart = state.layoutInfo.viewportStartOffset
+    val viewportEnd = state.layoutInfo.viewportEndOffset
+    val start = maxOf(info.offset, viewportStart)
+    val end = minOf(info.offset + info.size, viewportEnd)
+    return (end - start).coerceAtLeast(0).toFloat()
 }
 
 private fun comicPageImageRequest(
@@ -1088,56 +1228,39 @@ private fun comicPageImageRequest(
 @Composable
 private fun ZoomableComicPage(
     pageKey: String,
+    visibleHeight: Float,
     onTap: () -> Unit,
     onLongPress: () -> Unit,
     onZoomingChanged: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
     content: @Composable () -> Unit,
 ) {
-    var scale by remember(pageKey) { mutableFloatStateOf(1f) }
-    var offset by remember(pageKey) { mutableStateOf(Offset.Zero) }
-    LaunchedEffect(scale) { onZoomingChanged(scale > 1.01f) }
+    // The comic page uses the same tested container as the single-image viewer; only the resting
+    // placement differs. A page must fill the width, so it rests at "width filled" instead of
+    // "whole frame visible", and a pinch or double tap zooms from there.
+    val zoom = rememberZoomState(ZoomPlacement.WIDTH)
+    zoom.visibleHeight = visibleHeight
+    LaunchedEffect(zoom.isZoomed) { onZoomingChanged(zoom.isZoomed) }
     DisposableEffect(pageKey) { onDispose { onZoomingChanged(false) } }
     Box(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
-            .background(Color.Black)
-            .combinedClickable(onClick = onTap, onLongClick = onLongPress)
-            .pointerInput(pageKey) {
-                awaitEachGesture {
-                    awaitFirstDown(requireUnconsumed = false)
-                    do {
-                        val event = awaitPointerEvent()
-                        val pointerCount = event.changes.count { it.pressed }
-                        if (pointerCount >= 2 || scale > 1.01f) {
-                            val nextScale = (scale * event.calculateZoom()).coerceIn(1f, 6f)
-                            val nextOffset = if (nextScale <= 1.01f) Offset.Zero else offset + event.calculatePan()
-                            scale = nextScale
-                            offset = Offset(
-                                nextOffset.x.coerceIn(-size.width * (scale - 1f), size.width * (scale - 1f)),
-                                nextOffset.y.coerceIn(-size.height * (scale - 1f), size.height * (scale - 1f)),
-                            )
-                            event.changes.forEach { change ->
-                                if (change.positionChanged()) change.consume()
-                            }
-                        }
-                    } while (event.changes.any { it.pressed })
-                    if (scale <= 1.01f) {
-                        scale = 1f
-                        offset = Offset.Zero
-                    }
-                }
-            },
+            .combinedClickable(onClick = onTap, onLongClick = onLongPress),
     ) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .graphicsLayer {
-                    scaleX = scale
-                    scaleY = scale
-                    translationX = offset.x
-                    translationY = offset.y
+        Zoomable(
+            state = zoom,
+            placement = ZoomPlacement.WIDTH,
+            modifier = Modifier.fillMaxWidth(),
+            onTap = onTap,
+        ) { contentModifier ->
+            // Let the image report its own aspect ratio: the resting transform then fits the
+            // measured width exactly, so continuous reading has no side gaps.
+            Box(
+                modifier = contentModifier.onSizeChanged { size ->
+                    zoom.intrinsic = Size(size.width.toFloat(), size.height.toFloat())
                 },
-        ) { content() }
+            ) { content() }
+        }
     }
 }
 

@@ -2,11 +2,14 @@ package dev.susnowy.gallery.ui.components
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -122,6 +125,93 @@ class ZoomableInteractionInstrumentedTest {
                 kotlin.math.abs(state.transform.offsetX) <= limitX + 0.5f,
             )
             assertTrue(kotlin.math.abs(state.transform.offsetY) <= limitY + 0.5f)
+        }
+    }
+
+    /**
+     * The comic reader rests at "width filled" instead of "whole frame visible". These are the
+     * gestures that decide whether continuous reading still scrolls and whether a zoomed page
+     * can be dragged out of its slice.
+     */
+    private fun widthFilledContent(state: ZoomState, visibleHeight: Float) {
+        rule.setContent {
+            state.placement = ZoomPlacement.WIDTH
+            state.visibleHeight = visibleHeight
+            Zoomable(
+                state = state,
+                placement = ZoomPlacement.WIDTH,
+                modifier = Modifier
+                    .size(500.dp)
+                    .testTag("page"),
+            ) { modifier ->
+                Box(
+                    modifier = modifier
+                        .fillMaxWidth()
+                        .height(4000.dp)
+                        .background(Color.Red)
+                        .onSizeChanged { size ->
+                            state.intrinsic = Size(size.width.toFloat(), size.height.toFloat())
+                        },
+                )
+            }
+        }
+    }
+
+    @Test
+    fun widthFilledPageDoesNotPanBeforeZooming() {
+        val state = ZoomState()
+        widthFilledContent(state, visibleHeight = 0f)
+
+        rule.onNodeWithTag("page").performTouchInput {
+            swipe(start = Offset(250f, 900f), end = Offset(250f, 100f), durationMillis = 250)
+        }
+
+        rule.runOnIdle {
+            // While at rest the vertical drag belongs to the surrounding list.
+            assertEquals(0f, state.transform.offsetX, 0.01f)
+            assertEquals(1f, state.transform.scale, 0.01f)
+            assertTrue("静止状态不应产生垂直位移", !state.transform.isZoomed)
+        }
+    }
+
+    @Test
+    fun doubleTapZoomsAWidthFilledPageAndBack() {
+        val state = ZoomState()
+        widthFilledContent(state, visibleHeight = 0f)
+
+        rule.onNodeWithTag("page").performTouchInput { doubleClick(Offset(250f, 400f)) }
+        rule.runOnIdle {
+            assertTrue("双击应放大漫画页", state.isZoomed)
+            assertEquals(ZoomMath.DOUBLE_TAP_SCALE, state.transform.scale, 0.01f)
+        }
+
+        rule.onNodeWithTag("page").performTouchInput { doubleClick(Offset(250f, 400f)) }
+        rule.runOnIdle {
+            assertTrue("再次双击应还原", !state.isZoomed)
+            assertEquals(0f, state.transform.offsetX, 0.01f)
+        }
+    }
+
+    @Test
+    fun aZoomedPageCannotBeDraggedPastTheVisibleSlice() {
+        val state = ZoomState()
+        // Only a slice of the page is on screen, which is what bounds the pan.
+        widthFilledContent(state, visibleHeight = 800f)
+
+        rule.onNodeWithTag("page").performTouchInput { doubleClick(Offset(250f, 400f)) }
+        rule.runOnIdle { assertTrue(state.isZoomed) }
+
+        rule.onNodeWithTag("page").performTouchInput {
+            swipe(start = Offset(250f, 200f), end = Offset(250f, 1600f), durationMillis = 250)
+        }
+
+        rule.runOnIdle {
+            val scaledHeight = 4000f * state.transform.scale
+            val limit = (scaledHeight - 800f) / 2f
+            assertTrue(
+                "垂直位移必须在可见切片范围内，实际 ${state.transform.offsetY}，上限 $limit",
+                state.transform.offsetY in -limit - 0.5f..limit + 0.5f,
+            )
         }
     }
 }
