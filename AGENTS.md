@@ -167,3 +167,4 @@ Before handoff:
 - Every intermediate state of a migration or physical transaction must be attachable or safely resumable.
 - Tests have repeatedly found storage bugs faster than inspection alone.
 - Removable-media throughput on a phone is roughly 20 MB/s and fluctuates, so any feature that reads whole page payloads (deep duplicate hashing) must be opt-in, scoped and cached, or deferred to a PC-side Agent reading the same portable format.
+- The archive reader streams with `ZipInputStream`, so it cannot random-access an entry: enumerating or hashing pages of a CBZ costs one full pass over the file, and re-opening the archive per page would read the whole file N times. Any per-page work must be batched into a single sequential pass and cached by (path, size, modified time).
