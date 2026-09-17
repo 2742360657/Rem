@@ -10,6 +10,45 @@
 
 ---
 
+## 2026-09-17 · 便携 Inbox 决策：接受、人工归类、忽略与已处理
+
+**范围**：`model`、`metadata`、`data`（本机数据库 v7）、`ui`、`organizer`、库内生成说明；媒体原文件不变
+
+### 问题与决策
+
+- Inbox 此前只有“接受”一种出口，而且只把本机 `media.in_inbox` 置 0；忽略、已处理和人工归类没有记录位置，“其他待判断”的路径更是只能看、不能处理。删除本机索引、清数据或换手机后，被忽略和已确认的内容会重新回到 Inbox。
+- 决定属于用户真相，必须跟盘走。但把决定写进 `catalog.json` 会让每次翻页保存进度都重写整个目录文档（真实库已有 4.79 MB），也会把 Work 元数据和“我处理过这个路径”两种语义混在一起。
+- 因此新增独立的 `.gallery/state/inbox.json`，仍属 Schema v4：文档不存在时读取方按“没有任何决定”处理，旧客户端忽略它也不会影响 `catalog.json` / `state.json`。
+- 四种决定：`accepted`（接受建议）、`classified`（在 Inbox 人工改归属，权威值仍是 Work 的 `domain`）、`ignored`（不进入普通视图，也不回 Inbox）、`handled`（只用于没有 Work 的待判断路径）。
+
+### 措施
+
+- `PortableInboxStore` 复用 `PortableDocumentWriter` 原子写入，带 `revision` 冲突检查、相对路径校验、同一文档内目标唯一性校验；`handled` 只允许 discovery 目标；更高 Schema 拒绝写入。路径必须是以 `/` 分隔的 Library 相对路径，禁止盘符、URI、`.` 和 `..`。
+- 决定以相对路径为键，目标是 Work 时同时记录 `work_id`：扫描先按 `work_id` 匹配，Organizer 提交移动或重命名后改写决定的路径，所以被忽略的 Work 不会因路径变化复活；永久删除 Work 时一并清理它的决定。
+- 接受建议、保存编辑、批量修改会在同一次操作里写 `accepted`（改动过归属则写 `classified`），因此“处理过”不再只存在于本机。忽略只写决定，不写 Work 元数据——用户要求的是“别再显示”，不是“改它”。
+- 本机数据库升级到 v7：`media` 增加 `inbox_disposition`，`discoveries` 增加 `disposition`；`in_inbox` 保持原义（是否待处理）。重扫时 `replaceDiscoveries` 保留既有决定，`applyInboxDecisions` 用便携文档整体覆盖镜像列，重新接入 Library 时先回填再刷新界面。便携文档始终是唯一真相，镜像列可以随时重建。
+- Inbox 界面拆成「媒体建议 / 其他待判断 / 已忽略 / 已处理」四个分区；待判断路径可逐条标记已处理或忽略，媒体可多选忽略；已忽略与已处理都提供撤销，撤销只删除决定，不修改元数据、不移动、不删除任何媒体。
+- 普通视图、搜索与 Organizer 预览统一排除被忽略的 Work（`visibleInLibrary`），避免“忽略后仍被批量整理计划搬走”。
+- `PortableMetadataStore.createBackup` 现在连同 `inbox.json` 一起快照，Organizer 等高风险批量操作仍可整体回滚。
+- 库内生成说明同步：`GALLERY_LIBRARY.md` 增加该文档的读取顺序、语义与 Agent 写入规则（必须保留已有决定，自己写入时 `by` 标为 `agent:<标识>`，`handled` 只能用于待判断路径）；`.gallery/schema/v4.json` 增加该文档的必需字段、取值与目标类型。
+
+### 验证
+
+- `testDebugUnitTest`：**123 项通过，0 失败，0 跳过**（新增 15 项）。新增用例锁定：决定写入与重载、同一目标重复决定只保留一条、revision 冲突、撤销与永久删除清理、跟随 `work_id` 的路径改写、非便携路径拒绝、跨 Library 拒绝、`handled` 只能用于待判断路径、更高 Schema 拒绝，以及“提供方把提交结果发布成 ` (1)` 副本”时必须放弃写入并恢复上一版；另有忽略项不进入普通视图的可见性断言。
+- `lintDebug`：**0 errors、31 warnings**，与改动前完全一致（未新增警告类别）。
+- `assembleDebug` 与 `assembleDebugAndroidTest` 成功；debug APK 中已包含新文档路径与界面字符串。
+- 真机：本轮**未完成**。手机上原有的 `com.susnowy.rem.debug` 是 Windows 调试密钥签名的版本，本机（Linux）密钥不同，无法覆盖安装；卸载重装后 MIUI 先拦截了一次 `INSTALL_FAILED_USER_RESTRICTED`，改用 `pm install` 成功，但随后手机从 USB 掉线，v6→v7 迁移的真机验证与 `connectedDebugAndroidTest` 都还没跑。旧库文件已备份在开发机 `/tmp/phone-v6.db`（`user_version = 6`，仅一条 `Rem-lib` 记录、0 条媒体），手机重新连上后可以先把这份库放回应用私有目录再启动，验证迁移而不是只验证全新数据库。
+- 真实 E 盘本轮只做只读盘点：没有写入盘上 `.gallery`，也没有改动任何媒体。
+
+### 剩余风险
+
+- 本机索引的 `inbox_disposition` 是镜像：如果外部 Agent 在 Rem 运行时修改 `inbox.json`，需要一次重新接入或扫描才会反映到界面。
+- 决定只按路径/`work_id` 记录，不做失效清理；长期使用后可能留下指向已删除路径的记录（无害，但会缓慢增长）。
+- v7 迁移尚未在真机上验证；全新安装路径可以工作，但老库升级路径仍需一次真实检查。
+- Group、Edition 和 Inbox 决定的跨设备并发仍以整文档 `revision` 为准，没有字段级合并。
+
+---
+
 ## 2026-09-17 · 文档收敛与便携 Schema v4
 
 **范围**：项目说明、`model`、`metadata`、`library`；媒体原文件不变

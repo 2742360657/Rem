@@ -323,7 +323,8 @@ class PortableLibraryManager(
             1. 本文件；
             2. `.gallery/library.json` 和 `.gallery/schema/v4.json`；
             3. `.gallery/items/catalog.json` 中即将修改的实体及其 `field_sources`；
-            4. `.gallery/transactions/` 中是否存在未完成事务；`.gallery/imports/` 是程序维护的导入/派生来源清单。
+            4. `.gallery/state/inbox.json` 中已经存在的 Inbox 决定，避免重复处理或复活被忽略内容；
+            5. `.gallery/transactions/` 中是否存在未完成事务；`.gallery/imports/` 是程序维护的导入/派生来源清单。
 
             不要直接修改 Android 本机数据库。它只是可重建索引，不是便携真相。
 
@@ -335,6 +336,7 @@ class PortableLibraryManager(
             - `groups`：为了“一起浏览”建立的 Work 集合，可用于写真集、图片/视频混合组或人工集合；它不是 Series。
             - `series`：有先后关系的 Work 序列，可使用手动顺序、季/集或卷/章；成员允许不编号。
             - `.gallery/state/state.json`：以 `work_id` 保存进度和逻辑回收站状态。
+            - `.gallery/state/inbox.json`：以 Library 相对路径（有 Work 时同时记录 `work_id`）保存 Inbox 决定：`accepted`（接受建议）、`classified`（人工归类）、`ignored`（不再出现在普通视图）、`handled`（待判断路径已由用户处理）。`target` 说明决定针对媒体还是待判断路径。
 
             每个关系只在一个方向保存：Edition 指向 Work/Asset，Group 和 Series 指向 Work。不要再在 Work 内复制成员列表。
 
@@ -360,6 +362,7 @@ class PortableLibraryManager(
             - 可靠的外部结果标记为 `provider:<来源>`；只有用户明确指定的值才标为 `manual`。多个候选或低置信度时保持原值并请求确认。
             - 路径必须使用 `/` 分隔的 Library 相对路径，禁止 Android URI、盘符、绝对路径和 `..`。
             - 不得擅自修改 ID、`revision`、时间戳、哈希、事务或活动回收站记录。
+            - `.gallery/state/inbox.json` 是用户的决定：不要删除已有决定，不要让被 `ignored` 的路径重新出现在建议里。Agent 自己写入时必须把 `by` 标为 `agent:<标识>`，且 `handled` 只能用于 `target` 为 `discovery` 的路径；`classified` 的权威归属仍在 Work 的 `domain`。
             - Group 只表达一起浏览；Series 只表达顺序；Edition 表达同一 Work 的不同来源版本。不要用同作者或相似标题自动建立永久关系。
             - 自动整理不得移动、改名、合并或删除媒体。物理操作必须由用户确认计划，并写入可恢复事务。
             - 完成后让 Rem 重扫，并报告实际修改、未匹配项目和冲突。
@@ -394,6 +397,15 @@ class PortableLibraryManager(
                   "required": ["schema_version", "library_id", "revision", "updated_at", "progress", "trash"],
                   "reference": "work_id",
                   "program_managed": ["revision", "updated_at"]
+                },
+                ".gallery/state/inbox.json": {
+                  "required": ["schema_version", "library_id", "revision", "updated_at", "decisions"],
+                  "decision_required": ["relative_path", "target", "disposition", "by", "decided_at"],
+                  "reference": "relative_path, work_id when the target is a Work",
+                  "dispositions": ["accepted", "classified", "ignored", "handled"],
+                  "targets": ["media", "discovery"],
+                  "program_managed": ["revision", "updated_at"],
+                  "note": "handled is only valid for discovery targets; ignored paths must stay hidden from normal views."
                 },
                 ".gallery/transactions/*.json": {
                   "description": "Recoverable physical file operation journals. Do not edit active transactions."

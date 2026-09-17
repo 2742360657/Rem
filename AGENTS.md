@@ -17,12 +17,11 @@ Rem is an Android, local-first library for large image, comic, photo-set, and vi
 Current priorities:
 
 1. a clean portable logical model;
-2. portable Inbox decisions;
-3. editable image/video Groups;
-4. first-class Series editing;
-5. non-destructive Edition comparison and merge;
-6. real-device testing with the large E-drive Library;
-7. interaction polish inspired by EhViewer and MT Manager.
+2. editable image/video Groups;
+3. first-class Series editing;
+4. non-destructive Edition comparison and merge;
+5. real-device testing with the large E-drive Library;
+6. interaction polish inspired by EhViewer and MT Manager.
 
 The project is pre-release. Prefer the cleanest current design over compatibility layers for formats that were never stable. Schema v4 is current; v3 has one explicit backup-first conversion path only. Do not add support for older experiments unless the user explicitly asks.
 
@@ -65,7 +64,9 @@ State   -> Work
 
 Do not use Series for “same author”, Group for edition identity, or path layout as permanent classification. A creator shelf can be a query without creating a relationship.
 
-The current Android runtime still consumes a `MediaItem` projection. `PortableMetadataStore` joins v4 entities into that projection; new portable behavior must update normalized entities first rather than reintroducing a serialized `items` array.
+`.gallery/state/inbox.json` holds the user's Inbox decisions (`accepted`, `classified`, `ignored`, `handled`) keyed by Library-relative path plus `work_id` when the target is a Work. It is portable truth: deleting the device database must not bring ignored content back, and an old client that ignores the document still reads `catalog.json` and `state.json` safely.
+
+The current Android runtime still consumes a `MediaItem` projection. `PortableMetadataStore` joins v4 entities into that projection and `PortableInboxStore` joins Inbox decisions; new portable behavior must update normalized entities first rather than reintroducing a serialized `items` array.
 
 ## Recognition and real Library facts
 
@@ -74,6 +75,18 @@ Discovery and classification stay separate. Unsupported user-visible entries rem
 Useful signals include ComicInfo, stable downloader IDs, EhViewer markers, Pixiv IDs, episode/chapter naming, and parent folders. A folder named `JM` is not authoritative.
 
 The read-only sample observed on 2026-09-17 was approximately 464.92 GiB and 76,517 files, including about 69,494 JPG, 2,984 WebP, 1,610 CBZ, 1,011 GIF, 796 PNG, 466 MP4, and 272 image-set directories with direct child videos. These values are evidence, never constants.
+
+### Locating the real test Library
+
+The removable SSD is mounted on Linux under `/run/media/<user>/<volume-label>/`; the label and user name are **not** stable, so never treat a path as fixed:
+
+- current mount point: `/run/media/susnowy/闪迪-2T/` (volume label `闪迪-2T`);
+- current Library root inside it: `/run/media/susnowy/闪迪-2T/Rem-lib` (`.gallery/`, `Comics/`, `Works/`);
+- find it after a re-plug: `lsblk -f` or `ls /run/media/$USER/`, then look for `<mount>/Rem-lib/.gallery/library.json`.
+
+On Android there is no path at all: the Library is always whatever directory the user grants through SAF, so scripts and docs must talk about the Library root, never a host path. Before any batch operation against the real Library, copy `.gallery/` off the drive (the drive is the only copy).
+
+A second, always-available test target is the phone's own storage (`/storage/emulated/0/<user folder>/`), which can hold a small curated Library for repeatable checks while ADB stays connected.
 
 ## Implemented foundation
 
@@ -85,11 +98,11 @@ The read-only sample observed on 2026-09-17 was approximately 464.92 GiB and 76,
 - logical trash, protected permanent deletion, and recoverable Organizer/page-order transactions;
 - derived Series shelf and mixed image/video presentation;
 - bounded device-private offline previews;
-- normalized Schema v4 plus idempotent v3-to-v4 conversion after snapshots.
+- normalized Schema v4 plus idempotent v3-to-v4 conversion after snapshots;
+- portable Inbox decisions in `.gallery/state/inbox.json` (accept, classify, ignore, handle, undo), mirrored into a disposable device index.
 
 ## Known gaps
 
-- Inbox ignore/handled/manual-classification decisions are not yet portable.
 - Derived mixed groups cannot yet be saved or manually edited as Group entities.
 - Group membership, cover, role, and order have no UI.
 - Series entities exist portably, but batch member editing and drag reordering are unfinished.
@@ -101,13 +114,12 @@ The read-only sample observed on 2026-09-17 was approximately 464.92 GiB and 76,
 
 ## Next implementation order
 
-1. Add portable Inbox decisions with explicit evidence and confidence.
-2. Add repository operations and UI for Group create/edit/member order/cover.
-3. Offer saving a derived mixed folder as an explicit Group.
-4. Add atomic Series member editing and reordering.
-5. Add scoped Edition comparison and virtual merge preview.
-6. Test the current build against the actual removable Library, then decide whether inventory checkpoints and database paging are required.
-7. Polish density, selection, long-press actions, contextual tools, and back behavior.
+1. Add repository operations and UI for Group create/edit/member order/cover.
+2. Offer saving a derived mixed folder as an explicit Group.
+3. Add atomic Series member editing and reordering.
+4. Add cheap-first Edition comparison (page counts and entry sizes before any byte hashing) and virtual merge as a new Edition on the confirmed Work.
+5. Test the current build against the actual removable Library, then decide whether inventory checkpoints and database paging are required.
+6. Polish density, selection, long-press actions, contextual tools, and back behavior.
 
 Do not start a broad UI rewrite before portable semantics are usable.
 
@@ -159,3 +171,4 @@ Before handoff:
 - Logs need URI/path scrubbing and remain device-private.
 - Every intermediate state of a migration or physical transaction must be attachable or safely resumable.
 - Tests have repeatedly found storage bugs faster than inspection alone.
+- Removable-media throughput on a phone is roughly 20 MB/s and fluctuates, so any feature that reads whole page payloads (deep duplicate hashing) must be opt-in, scoped and cached, or deferred to a PC-side Agent reading the same portable format.

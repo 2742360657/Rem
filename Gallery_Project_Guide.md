@@ -51,6 +51,7 @@ GALLERY_LIBRARY.md
   schema/v4.json
   items/catalog.json
   state/state.json
+  state/inbox.json
   imports/
   transactions/
   backups/
@@ -60,6 +61,7 @@ GALLERY_LIBRARY.md
 - `schema/v4.json`：当前格式与可编辑边界；
 - `catalog.json`：Asset、Work、Edition、Group、Series；
 - `state.json`：阅读/观看进度和逻辑回收站；
+- `inbox.json`：用户在 Inbox 做过的决定（接受、人工归类、忽略、已处理）及其证据和时间；
 - `imports/`：程序维护的导入和派生来源清单；
 - `transactions/`：可恢复的物理文件事务；
 - `backups/`：格式转换和高风险操作前的元数据快照；
@@ -163,6 +165,17 @@ Work 可以指定首选 Edition，但不能复制 Edition 的 Asset 列表。删
 - 识别困难或成本过高时保持未处理，交由用户或本地 Agent；
 - 自动结果必须保留来源和置信依据，不能覆盖 `manual` 字段。
 
+### 6.1 Inbox 决定
+
+用户在 Inbox 做出的决定写入 `.gallery/state/inbox.json`，不依赖本机数据库：
+
+- `accepted`：接受扫描建议，Work 进入普通视图，自动字段仍可由 Agent 更新；
+- `classified`：在 Inbox 里人工改了归属；权威值仍是 Work 的 `domain`，决定记录只说明当时的选择；
+- `ignored`：不再出现在普通视图，也不回到 Inbox；媒体保持原样；
+- `handled`：只用于没有 Work 的待判断路径（不支持的格式、结构模糊目录），表示用户已确认无需 Rem 处理。
+
+决定以 Library 相对路径为键，目标存在 Work 时同时记录 `work_id`；路径变化时按 `work_id` 继续匹配，重命名或 Organizer 移动不能让被忽略内容复活。撤销决定只删除记录，不修改 Work 元数据。证据（扫描原因）只作为当时依据保存，不是分类结论。
+
 ## 7. 元数据来源与合并
 
 推荐来源优先级：
@@ -222,6 +235,7 @@ manual > 用户确认的 Library 规则 > provider > ComicInfo > 文件名/目�
 - 一个目录尽量只做一次带完整 projection 的查询；
 - 复用路径定位、目录列表和未变化文件的补全结果；
 - 大文件哈希只在用户选择比较、查重或合并时计算；
+- 移动介质在手机上的实际吞吐可能只有约 20 MB/s，因此按页哈希这类要读完整内容的操作必须由用户显式发起、限定范围、可取消，并复用已完成结果；能用页数、条目大小和压缩包目录得到的结论不得读取字节；
 - 阅读器按视口解码，不一次解码整部作品；
 - 离线预览最长边 512 px，位于 `noBackupFilesDir`，限制为 256 MiB / 20,000 张并可清除；
 - 约 7.6 万条本机索引最终应分页或按需查询，不能长期依赖整表载入。
@@ -232,6 +246,7 @@ manual > 用户确认的 Library 规则 > provider > ComicInfo > 文件名/目�
 
 - Library 初始化、身份恢复、SAF 接入与多 Library；
 - 快速清点、可恢复信息补全和 Inbox；
+- Inbox 决定进入便携层：接受、人工归类、忽略、已处理与撤销；
 - 图片、目录 ImageSet、ZIP/CBZ、视频和系统相册导入；
 - 阅读/播放进度、搜索、元数据编辑、批量操作；
 - 逻辑回收站、永久删除保护、Organizer 可恢复事务；
@@ -242,13 +257,12 @@ manual > 用户确认的 Library 规则 > provider > ComicInfo > 文件名/目�
 
 下一步按顺序：
 
-1. 让 Inbox 的忽略、已处理和人工分类决定进入便携层；
-2. 为 Group 增加手动创建、增删成员、排序和封面编辑；
-3. 让当前派生混合组可以显式保存为 Group；
-4. 完成独立 Series 的批量成员编辑和拖拽排序；
-5. 增加 Edition 比较、虚拟合并和重复页报告；
-6. 用手机直连真实 E 盘验证全量清点、断点补全和大量视频封面；
-7. 根据真实数据做分页与交互打磨。
+1. 为 Group 增加手动创建、增删成员、排序和封面编辑；
+2. 让当前派生混合组可以显式保存为 Group；
+3. 完成独立 Series 的批量成员编辑和拖拽排序；
+4. 增加 Edition 比较（先页数与条目大小，再按范围做按页哈希）、虚拟合并和重复页报告；合并结果写成同一 Work 的新 Edition，物理清理仍然只走 Organizer 预览；
+5. 用手机直连真实 E 盘验证全量清点、断点补全和大量视频封面；
+6. 根据真实数据做分页与交互打磨。
 
 ## 12. 测试期格式策略
 

@@ -98,7 +98,13 @@ data class MediaItem(
     val coverPath: String? = null,
     val secondaryPath: String? = null,
     val favorite: Boolean = false,
+    /** True while the item is still waiting for a user decision in Inbox. */
     val inInbox: Boolean = true,
+    /**
+     * Portable Inbox decision for this Work, if the user already made one. The device
+     * index mirrors `.gallery/state/inbox.json`; it is never the only place a decision lives.
+     */
+    val inboxDisposition: InboxDisposition? = null,
     val trashed: Boolean = false,
     val deletedAt: Long? = null,
     val needsRepair: Boolean = false,

@@ -20,18 +20,25 @@ import dev.susnowy.gallery.media.ImageSetOrderResult
 import dev.susnowy.gallery.media.ImageSetOrderService
 import dev.susnowy.gallery.media.OfflinePreviewStats
 import dev.susnowy.gallery.media.OfflinePreviewStore
+import dev.susnowy.gallery.metadata.PortableInboxStore
 import dev.susnowy.gallery.metadata.PortableMetadataStore
 import dev.susnowy.gallery.metadata.FieldSource
 import dev.susnowy.gallery.metadata.MetadataField
 import dev.susnowy.gallery.metadata.withManualEdits
+import dev.susnowy.gallery.model.InboxDisposition
+import dev.susnowy.gallery.model.InboxTarget
 import dev.susnowy.gallery.model.LibraryInspection
 import dev.susnowy.gallery.model.LibraryRegistration
 import dev.susnowy.gallery.model.DiscoveredEntry
+import dev.susnowy.gallery.model.MediaDomain
 import dev.susnowy.gallery.model.MediaItem
 import dev.susnowy.gallery.model.PermissionState
 import dev.susnowy.gallery.model.PlaybackProgress
+import dev.susnowy.gallery.model.PortableInboxDecision
 import dev.susnowy.gallery.model.PortableItemMetadata
 import dev.susnowy.gallery.model.PortableLibrary
+import dev.susnowy.gallery.model.PortableWork
+import dev.susnowy.gallery.model.mutedByInboxDecision
 import dev.susnowy.gallery.organizer.OrganizationPlan
 import dev.susnowy.gallery.organizer.OrganizerService
 import dev.susnowy.gallery.organizer.OrganizerTemplate
@@ -115,6 +122,14 @@ class GalleryRepository(context: Context) {
                     lastScanAt = database.library(migrated.libraryId)?.lastScanAt,
                 )
                 database.claimLibraryTree(registration)
+                // Portable Inbox decisions are the truth; mirror them into the fresh index
+                // immediately so a re-attached Library does not look undecided.
+                runCatching {
+                    val inbox = PortableInboxStore(storage).load(migrated.libraryId)
+                    database.applyInboxDecisions(migrated.libraryId, inbox.decisions)
+                }.onFailure { error ->
+                    RemLog.failure("GalleryRepository", "Inbox 决策回填失败", error)
+                }
                 refreshFromDatabase()
                 registration
             }
@@ -210,6 +225,7 @@ class GalleryRepository(context: Context) {
             val portableStore = PortableMetadataStore(storage)
             val catalog = portableStore.loadCatalog(libraryId)
             val state = portableStore.loadState(libraryId)
+            val inbox = PortableInboxStore(storage).load(libraryId)
             val result = scanner.scan(
                 storage,
                 database.scanSnapshot(libraryId),
@@ -254,6 +270,7 @@ class GalleryRepository(context: Context) {
                     ?: metadataByPath[candidate.relativePath]
                     ?: candidate.contentHash?.let(metadataByHash::get)
                 val id = metadata?.id ?: local?.id ?: UUID.randomUUID().toString()
+                val decision = inbox.forWork(id, candidate.relativePath)
                 val trashEntry = state.trash.firstOrNull { it.itemId == id }
                 val recognized = candidate.recognizedMetadata
                 val storedFieldSources = metadata?.fieldSources ?: local?.fieldSources.orEmpty()
@@ -336,7 +353,11 @@ class GalleryRepository(context: Context) {
                     coverPath = metadata?.coverPath ?: candidate.coverPath ?: local?.coverPath,
                     secondaryPath = metadata?.secondaryPath ?: candidate.secondaryPath ?: local?.secondaryPath,
                     favorite = metadata?.favorite ?: local?.favorite ?: false,
-                    inInbox = metadata == null && (local?.inInbox ?: true),
+                    // A portable decision is the only thing that keeps an item out of the
+                    // pending list without also writing Work metadata: ignored paths must
+                    // stay ignored after this device index is rebuilt.
+                    inInbox = decision == null && metadata == null && (local?.inInbox ?: true),
+                    inboxDisposition = decision?.disposition,
                     trashed = trashEntry != null,
                     deletedAt = trashEntry?.deletedAt?.let(java.time.Instant::parse)?.toEpochMilli(),
                     needsRepair = false,
@@ -365,6 +386,7 @@ class GalleryRepository(context: Context) {
                     size = candidate.size,
                     modifiedAt = candidate.modifiedAt,
                     reason = candidate.reason,
+                    disposition = inbox.forDiscovery(candidate.relativePath)?.disposition,
                 )
             }
             val protectedDiscoveries = database.discoveries(libraryId)
@@ -509,9 +531,31 @@ class GalleryRepository(context: Context) {
     suspend fun updateMedia(updated: MediaItem): MediaItem = runOperation("正在保存元数据…") {
         onIo {
             val storage = storageFor(requireLibrary(updated.libraryId))
-            val locked = updated.copy(fieldSources = updated.withManualEdits(database.mediaItem(updated.id)))
+            val stored = database.mediaItem(updated.id)
+            val locked = updated.copy(fieldSources = updated.withManualEdits(stored))
             val portable = PortableMetadataStore(storage).saveItem(locked, locked.revision)
-            val saved = locked.withPortableMetadata(portable).copy(inInbox = false)
+            // Editing a Work is also an Inbox decision: the suggestion is no longer pending,
+            // and the decision has to survive this device's index.
+            val disposition = if (stored != null && stored.domain != locked.domain) {
+                InboxDisposition.CLASSIFIED
+            } else {
+                InboxDisposition.ACCEPTED
+            }
+            PortableInboxStore(storage).upsert(
+                updated.libraryId,
+                listOf(
+                    mediaDecision(
+                        item = locked,
+                        disposition = disposition,
+                        domain = locked.domain.takeIf { disposition == InboxDisposition.CLASSIFIED },
+                        reason = "manual_edit",
+                    ),
+                ),
+            )
+            val saved = locked.withPortableMetadata(portable).copy(
+                inInbox = false,
+                inboxDisposition = disposition,
+            )
             database.upsertMedia(saved)
             synchronizeSeriesProjection(saved.libraryId, listOf(portable))
             refreshFromDatabase()
@@ -532,9 +576,22 @@ class GalleryRepository(context: Context) {
                 if (items.isEmpty()) return@onIo 0
                 val storage = storageFor(requireLibrary(libraryId))
                 val portable = PortableMetadataStore(storage).saveItems(items).associateBy { it.id }
+                PortableInboxStore(storage).upsert(
+                    libraryId,
+                    items.map { item ->
+                        mediaDecision(
+                            item = item,
+                            disposition = InboxDisposition.ACCEPTED,
+                            reason = "suggestion_accepted",
+                        )
+                    },
+                )
                 items.forEach { item ->
                     database.upsertMedia(
-                        item.withPortableMetadata(portable.getValue(item.id)).copy(inInbox = false),
+                        item.withPortableMetadata(portable.getValue(item.id)).copy(
+                            inInbox = false,
+                            inboxDisposition = InboxDisposition.ACCEPTED,
+                        ),
                     )
                 }
                 synchronizeSeriesProjection(libraryId, portable.values)
@@ -542,6 +599,133 @@ class GalleryRepository(context: Context) {
                 items.size
             }
         }
+
+    /**
+     * Records a portable Inbox decision for media and/or discovered paths.
+     *
+     * `accepted` and `classified` also write Work metadata so the Work keeps existing on a
+     * device that has never seen this index; `ignored` deliberately writes only the
+     * decision, because the user asked Rem to stop surfacing the path, not to edit it.
+     * Media is never moved, renamed or deleted by any of these dispositions.
+     */
+    suspend fun decideInbox(
+        libraryId: String,
+        items: List<MediaItem> = emptyList(),
+        discoveries: List<DiscoveredEntry> = emptyList(),
+        disposition: InboxDisposition,
+        domain: MediaDomain? = null,
+    ): Int = runOperation("正在保存 Inbox 决策…") {
+        onIo {
+            val media = items.distinctBy(MediaItem::id)
+            val discovered = discoveries.distinctBy(DiscoveredEntry::relativePath)
+            require(media.all { it.libraryId == libraryId } && discovered.all { it.libraryId == libraryId }) {
+                "不能跨 Library 保存 Inbox 决策"
+            }
+            if (media.isEmpty() && discovered.isEmpty()) return@onIo 0
+            val now = java.time.Instant.now().toString()
+            val storage = storageFor(requireLibrary(libraryId))
+            val updated = PortableInboxStore(storage).upsert(
+                libraryId,
+                media.map { item ->
+                    mediaDecision(
+                        item = item,
+                        disposition = disposition,
+                        domain = domain.takeIf { disposition == InboxDisposition.CLASSIFIED },
+                        reason = if (item.inInbox) "media_suggestion" else null,
+                    )
+                } + discovered.map { entry ->
+                    PortableInboxDecision(
+                        relativePath = entry.relativePath,
+                        target = InboxTarget.DISCOVERY,
+                        disposition = disposition,
+                        reason = entry.reason.name,
+                        decidedAt = now,
+                    )
+                },
+            )
+            if (media.isNotEmpty() && disposition != InboxDisposition.IGNORED) {
+                val prepared = media.map { item ->
+                    if (disposition == InboxDisposition.CLASSIFIED && domain != null && item.domain != domain) {
+                        item.copy(domain = domain)
+                            .let { changed -> changed.copy(fieldSources = changed.withManualEdits(item)) }
+                    } else {
+                        item
+                    }
+                }
+                val portable = PortableMetadataStore(storage).saveItems(prepared).associateBy { it.id }
+                prepared.forEach { item ->
+                    database.upsertMedia(
+                        item.withPortableMetadata(portable.getValue(item.id)).copy(
+                            inInbox = false,
+                            inboxDisposition = disposition,
+                        ),
+                    )
+                }
+                synchronizeSeriesProjection(libraryId, portable.values)
+            }
+            // The portable document is the truth: mirror it, including clearing the
+            // decisions that were removed and leaving pending rows untouched.
+            database.applyInboxDecisions(libraryId, updated.decisions)
+            refreshFromDatabase()
+            media.size + discovered.size
+        }
+    }
+
+    /**
+     * Removes Inbox decisions, returning the targets to the pending list.
+     *
+     * A Work that already has portable catalog metadata stays out of Inbox; only a Work
+     * whose sole record was the decision becomes pending again.
+     */
+    suspend fun undoInboxDecision(
+        libraryId: String,
+        items: List<MediaItem> = emptyList(),
+        discoveries: List<DiscoveredEntry> = emptyList(),
+    ): Int = runOperation("正在撤销 Inbox 决策…") {
+        onIo {
+            val media = items.distinctBy(MediaItem::id)
+            val discovered = discoveries.distinctBy(DiscoveredEntry::relativePath)
+            require(media.all { it.libraryId == libraryId } && discovered.all { it.libraryId == libraryId }) {
+                "不能跨 Library 撤销 Inbox 决策"
+            }
+            if (media.isEmpty() && discovered.isEmpty()) return@onIo 0
+            val storage = storageFor(requireLibrary(libraryId))
+            val keys = media.flatMap { listOf(it.id, it.relativePath) }.toSet() +
+                discovered.map(DiscoveredEntry::relativePath)
+            val updated = PortableInboxStore(storage).remove(libraryId, keys)
+            database.applyInboxDecisions(libraryId, updated.decisions)
+            if (media.isNotEmpty()) {
+                val catalogWorks = PortableMetadataStore(storage).loadCatalog(libraryId)
+                    .works.mapTo(mutableSetOf(), PortableWork::id)
+                media.forEach { item ->
+                    database.setMediaInboxDecision(
+                        libraryId = libraryId,
+                        workId = item.id,
+                        relativePath = item.relativePath,
+                        disposition = null,
+                        inInbox = item.id !in catalogWorks,
+                    )
+                }
+            }
+            refreshFromDatabase()
+            media.size + discovered.size
+        }
+    }
+
+    private fun mediaDecision(
+        item: MediaItem,
+        disposition: InboxDisposition,
+        domain: MediaDomain? = null,
+        reason: String? = null,
+    ) = PortableInboxDecision(
+        relativePath = item.relativePath,
+        target = InboxTarget.MEDIA,
+        workId = item.id,
+        disposition = disposition,
+        domain = domain,
+        reason = reason,
+        decidedAt = java.time.Instant.now().toString(),
+    )
 
     suspend fun updateMediaBatch(
         libraryId: String,
@@ -566,9 +750,25 @@ class GalleryRepository(context: Context) {
             }
             val storage = storageFor(requireLibrary(libraryId))
             val portable = PortableMetadataStore(storage).saveItems(updated).associateBy { it.id }
+            val pending = items.filter(MediaItem::inInbox)
+            if (pending.isNotEmpty()) {
+                PortableInboxStore(storage).upsert(
+                    libraryId,
+                    pending.map { item ->
+                        mediaDecision(
+                            item = item,
+                            disposition = InboxDisposition.ACCEPTED,
+                            reason = "batch_edit",
+                        )
+                    },
+                )
+            }
             updated.forEach { item ->
                 database.upsertMedia(
-                    item.withPortableMetadata(portable.getValue(item.id)).copy(inInbox = false),
+                    item.withPortableMetadata(portable.getValue(item.id)).copy(
+                        inInbox = false,
+                        inboxDisposition = item.inboxDisposition ?: InboxDisposition.ACCEPTED,
+                    ),
                 )
             }
             synchronizeSeriesProjection(libraryId, portable.values)
@@ -636,7 +836,9 @@ class GalleryRepository(context: Context) {
         template: OrganizerTemplate,
     ): OrganizationPlan = runOperation("正在生成整理计划…") {
         onIo {
-            val items = database.media(libraryId).filterNot { it.trashed || it.inInbox }
+            val items = database.media(libraryId).filterNot {
+                it.trashed || it.inInbox || it.mutedByInboxDecision
+            }
             organizer.preview(items, storageFor(requireLibrary(libraryId)), template)
         }
     }
@@ -870,6 +1072,7 @@ class GalleryRepository(context: Context) {
         }
         check(storage.delete(document)) { "Provider 拒绝删除 ${item.relativePath}" }
         PortableMetadataStore(storage).removeItem(item)
+        PortableInboxStore(storage).removeWorks(item.libraryId, setOf(item.id))
         database.removeMedia(item.id)
         refreshFromDatabase()
     }

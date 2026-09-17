@@ -350,6 +350,13 @@ class PortableMetadataStore(
                 writeSafely(path, state, "application/json")
                 add(path)
             }
+            // Inbox decisions are user truth too; a high-risk batch must be able to put
+            // them back exactly as they were.
+            read(PortableInboxStore.PATH)?.let { inbox ->
+                val path = ".gallery/backups/$safeLabel-inbox.json"
+                writeSafely(path, inbox, "application/json")
+                add(path)
+            }
         }
     }
 

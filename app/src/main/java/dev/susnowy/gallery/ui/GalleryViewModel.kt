@@ -19,6 +19,7 @@ import dev.susnowy.gallery.media.OfflinePreviewStats
 import dev.susnowy.gallery.logging.RemLog
 import dev.susnowy.gallery.model.LibraryRegistration
 import dev.susnowy.gallery.model.DiscoveredEntry
+import dev.susnowy.gallery.model.InboxDisposition
 import dev.susnowy.gallery.model.MediaItem
 import dev.susnowy.gallery.model.MediaDomain
 import dev.susnowy.gallery.model.MediaKind
@@ -320,6 +321,43 @@ class GalleryViewModel(
             }.onSuccess { count ->
                 message.value = "已接受 $count 项识别建议；自动字段仍可由 Agent 更新"
             }.onFailure(::showError)
+        }
+    }
+
+    /** Records a portable Inbox decision for the selected media and/or discovered paths. */
+    fun decideInbox(
+        items: List<MediaItem> = emptyList(),
+        discoveries: List<DiscoveredEntry> = emptyList(),
+        disposition: InboxDisposition,
+        domain: MediaDomain? = null,
+    ) {
+        val libraryId = activeLibraryId.value ?: return
+        if (items.isEmpty() && discoveries.isEmpty()) return
+        viewModelScope.launch {
+            runCatching { repository.decideInbox(libraryId, items, discoveries, disposition, domain) }
+                .onSuccess { count ->
+                    message.value = when (disposition) {
+                        InboxDisposition.ACCEPTED -> "已接受 $count 项，决定已写入 Library"
+                        InboxDisposition.CLASSIFIED -> "已归类 $count 项，人工归属已写入 Library"
+                        InboxDisposition.IGNORED -> "已忽略 $count 项，媒体保持原样；可在“已忽略”中撤销"
+                        InboxDisposition.HANDLED -> "已标记 $count 项为已处理；可在“已处理”中撤销"
+                    }
+                }
+                .onFailure(::showError)
+        }
+    }
+
+    /** Removes a portable Inbox decision so the target returns to the pending list. */
+    fun undoInboxDecision(
+        items: List<MediaItem> = emptyList(),
+        discoveries: List<DiscoveredEntry> = emptyList(),
+    ) {
+        val libraryId = activeLibraryId.value ?: return
+        if (items.isEmpty() && discoveries.isEmpty()) return
+        viewModelScope.launch {
+            runCatching { repository.undoInboxDecision(libraryId, items, discoveries) }
+                .onSuccess { count -> message.value = "已撤销 $count 项 Inbox 决策" }
+                .onFailure(::showError)
         }
     }
 

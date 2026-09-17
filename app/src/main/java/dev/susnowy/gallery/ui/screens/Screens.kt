@@ -34,8 +34,6 @@ import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.Home
-import androidx.compose.material.icons.rounded.Inbox
-import androidx.compose.material.icons.automirrored.rounded.InsertDriveFile
 import androidx.compose.material.icons.rounded.PhotoLibrary
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Restore
@@ -83,11 +81,11 @@ import dev.susnowy.gallery.importer.SystemMediaType
 import dev.susnowy.gallery.importer.WorkImportKind
 import dev.susnowy.gallery.logging.RemLog
 import dev.susnowy.gallery.model.MediaItem
-import dev.susnowy.gallery.model.DiscoveredEntry
-import dev.susnowy.gallery.model.DiscoveryReason
+import dev.susnowy.gallery.model.InboxDisposition
 import dev.susnowy.gallery.model.MediaDomain
 import dev.susnowy.gallery.model.MediaKind
 import dev.susnowy.gallery.model.PermissionState
+import dev.susnowy.gallery.model.mutedByInboxDecision
 import dev.susnowy.gallery.organizer.OrganizationPlan
 import dev.susnowy.gallery.organizer.OrganizerTemplate
 import dev.susnowy.gallery.ui.AppScreen
@@ -136,15 +134,24 @@ fun GalleryScreenContent(
     onFallbackMediaPicker: () -> Unit,
     onOpenAppSettings: () -> Unit,
 ) {
-    val visible = state.media.filterNot(MediaItem::trashed)
+    val visible = state.media.filterNot { it.trashed || it.mutedByInboxDecision }
     val accepted = visible.filterNot(MediaItem::inInbox)
     when (state.screen) {
         AppScreen.MEDIA -> ClassifiedLibraryScreen(accepted, viewModel)
         AppScreen.WORKS -> WorksLibraryScreen(accepted, viewModel)
         AppScreen.LIBRARIES -> LibrariesScreen(state, viewModel, onChooseFolder)
         AppScreen.INBOX -> InboxScreen(
-            items = visible.filter(MediaItem::inInbox),
-            discoveries = state.discoveries,
+            content = InboxContent(
+                pendingMedia = visible.filter(MediaItem::inInbox),
+                pendingDiscoveries = state.discoveries.filter { it.disposition == null },
+                ignoredMedia = state.media.filter { it.inboxDisposition == InboxDisposition.IGNORED },
+                ignoredDiscoveries = state.discoveries.filter {
+                    it.disposition == InboxDisposition.IGNORED
+                },
+                handledDiscoveries = state.discoveries.filter {
+                    it.disposition == InboxDisposition.HANDLED
+                },
+            ),
             viewModel = viewModel,
         )
         AppScreen.PHOTOS -> PhotosScreen(
@@ -177,7 +184,7 @@ fun GalleryScreenContent(
         AppScreen.TAGS -> FacetScreen(accepted, Facet.TAG, viewModel)
         AppScreen.SEARCH -> SearchScreen(
             items = state.allMedia.filter { item ->
-                !item.trashed && !item.inInbox && state.libraries.any {
+                !item.trashed && !item.inInbox && !item.mutedByInboxDecision && state.libraries.any {
                     it.libraryId == item.libraryId && it.permissionState == PermissionState.AVAILABLE
                 }
             },
@@ -546,168 +553,6 @@ private fun LibrariesScreen(
     }
 }
 
-@Composable
-private fun MediaCollectionScreen(
-    items: List<MediaItem>,
-    viewModel: GalleryViewModel,
-    emptyText: String,
-) {
-    if (items.isEmpty()) {
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Icon(Icons.Rounded.Inbox, contentDescription = null)
-                Text(emptyText, modifier = Modifier.padding(20.dp))
-            }
-        }
-    } else {
-        MediaGrid(items = items, viewModel = viewModel, onOpen = { viewModel.open(it, items) })
-    }
-}
-
-private enum class InboxSection(val label: String) { MEDIA("媒体建议"), OTHER("其他待判断") }
-
-@Composable
-private fun InboxScreen(
-    items: List<MediaItem>,
-    discoveries: List<DiscoveredEntry>,
-    viewModel: GalleryViewModel,
-) {
-    var selectionMode by rememberSaveable { mutableStateOf(false) }
-    var selected by remember { mutableStateOf(emptySet<String>()) }
-    var section by rememberSaveable {
-        mutableStateOf(if (items.isNotEmpty()) InboxSection.MEDIA else InboxSection.OTHER)
-    }
-    LaunchedEffect(items.map(MediaItem::id)) {
-        selected = selected.intersect(items.mapTo(mutableSetOf(), MediaItem::id))
-        if (items.isEmpty()) selectionMode = false
-        if (items.isEmpty() && discoveries.isNotEmpty()) section = InboxSection.OTHER
-    }
-    LaunchedEffect(discoveries.map(DiscoveredEntry::id)) {
-        if (discoveries.isEmpty() && items.isNotEmpty()) section = InboxSection.MEDIA
-    }
-    if (items.isEmpty() && discoveries.isEmpty()) {
-        MediaCollectionScreen(
-            items = emptyList(),
-            viewModel = viewModel,
-            emptyText = "没有待处理内容",
-        )
-        return
-    }
-    Column(Modifier.fillMaxSize()) {
-        Row(
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            FilterChip(
-                selected = section == InboxSection.MEDIA,
-                onClick = { section = InboxSection.MEDIA },
-                label = { Text("媒体建议 ${items.size}") },
-                enabled = items.isNotEmpty(),
-            )
-            FilterChip(
-                selected = section == InboxSection.OTHER,
-                onClick = { section = InboxSection.OTHER },
-                label = { Text("其他待判断 ${discoveries.size}") },
-                enabled = discoveries.isNotEmpty(),
-            )
-        }
-        if (section == InboxSection.OTHER) {
-            Text(
-                "这些路径已被发现，但当前不能安全分类或打开。Rem 不会移动或伪装它们，可交由 Agent 或后续版本处理。",
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            LazyColumn(
-                modifier = Modifier.weight(1f),
-                contentPadding = PaddingValues(bottom = 96.dp),
-            ) {
-                items(discoveries, key = DiscoveredEntry::id) { entry ->
-                    ListItem(
-                        headlineContent = {
-                            Text(
-                                entry.relativePath.substringAfterLast('/'),
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        },
-                        supportingContent = {
-                            Column {
-                                Text(
-                                    when (entry.reason) {
-                                        DiscoveryReason.UNSUPPORTED_FILE -> "当前版本不支持此文件格式"
-                                        DiscoveryReason.AMBIGUOUS_DIRECTORY -> "目录结构不明确，需要确认作品边界"
-                                    },
-                                )
-                                Text(
-                                    entry.relativePath,
-                                    maxLines = 2,
-                                    overflow = TextOverflow.Ellipsis,
-                                    style = MaterialTheme.typography.bodySmall,
-                                )
-                            }
-                        },
-                        leadingContent = {
-                            Icon(
-                                if (entry.isDirectory) Icons.Rounded.Folder else Icons.AutoMirrored.Rounded.InsertDriveFile,
-                                contentDescription = null,
-                            )
-                        },
-                        trailingContent = {
-                            if (!entry.isDirectory && entry.size > 0) Text(entry.size.formatBytes())
-                        },
-                    )
-                }
-            }
-            return@Column
-        }
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text("${items.size} 项待处理", style = MaterialTheme.typography.titleMedium)
-                Text(
-                    "扫描结果只是建议；编辑会保存人工值，直接接受仍保留自动来源。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            if (selectionMode) {
-                TextButton(onClick = {
-                    selected = if (selected.size == items.size) emptySet() else items.mapTo(mutableSetOf(), MediaItem::id)
-                }) {
-                    Text(if (selected.size == items.size) "取消全选" else "全选")
-                }
-                Button(
-                    enabled = selected.isNotEmpty(),
-                    onClick = {
-                        viewModel.acceptSuggestions(items.filter { it.id in selected })
-                        selected = emptySet()
-                        selectionMode = false
-                    },
-                ) { Text("接受 ${selected.size}") }
-            } else {
-                TextButton(onClick = { selectionMode = true }) { Text("选择") }
-            }
-        }
-        MediaGrid(
-            items = items,
-            viewModel = viewModel,
-            onOpen = { viewModel.open(it, items) },
-            modifier = Modifier.weight(1f),
-            selectionEnabled = true,
-            selectionMode = selectionMode,
-            selectedIds = selected,
-            onSelectionToggle = { item ->
-                selected = if (item.id in selected) selected - item.id else selected + item.id
-            },
-        )
-    }
-}
 
 private enum class ClassifiedType(val label: String) { GROUPS("分组"), IMAGES("图片"), VIDEOS("视频") }
 

@@ -1,5 +1,6 @@
 package dev.susnowy.gallery.organizer
 
+import dev.susnowy.gallery.metadata.PortableInboxStore
 import dev.susnowy.gallery.metadata.PortableMetadataStore
 import dev.susnowy.gallery.model.MediaItem
 import dev.susnowy.gallery.model.MediaKind
@@ -114,6 +115,7 @@ class OrganizerService {
         require(plan.steps.isNotEmpty()) { "没有需要整理的文件" }
         require(!plan.hasConflicts) { "计划仍有冲突，不能执行" }
         val metadata = PortableMetadataStore(storage)
+        val inbox = PortableInboxStore(storage)
         metadata.createBackup("organizer-${plan.id}")
         var transaction = TransactionDocument(
             operationId = plan.id,
@@ -181,6 +183,7 @@ class OrganizerService {
                         (step.secondaryTarget?.let { storage.entry(it)?.size } ?: 0),
                 )
                 val saved = metadata.saveItem(moved, step.item.revision)
+                inbox.relocate(step.item.libraryId, step.item.id, step.source, step.target)
                 onItemMoved(moved.copy(revision = saved.revision))
                 transaction = transaction.updateStep(index, "completed")
                 writeTransaction(storage, transaction)
@@ -200,6 +203,7 @@ class OrganizerService {
         storage: DocumentTreeStorage,
     ): Int = withContext(Dispatchers.IO) {
         val metadata = PortableMetadataStore(storage)
+        val inbox = PortableInboxStore(storage)
         val transactions = storage.list(".gallery/transactions")
             .filter {
                 !it.isDirectory && (it.name.endsWith(".json", ignoreCase = true) ||
@@ -281,6 +285,7 @@ class OrganizerService {
                             step.secondaryTarget,
                         ),
                     ) { "事务项目 ${step.itemId} 缺少便携元数据" }
+                    inbox.relocate(libraryId, step.itemId, step.source, step.target)
                     transaction = transaction.updateStep(index, "completed")
                     writeTransaction(storage, transaction)
                 }

@@ -7,7 +7,8 @@ enum class DiscoveryReason {
 
 /**
  * A path the scanner found but cannot safely turn into a media item yet.
- * This is a rebuildable device-side index, not a user classification decision.
+ * This is a rebuildable device-side index; a user decision about it is stored in the
+ * portable `.gallery/state/inbox.json` and only mirrored into [disposition].
  */
 data class DiscoveredEntry(
     val libraryId: String,
@@ -18,6 +19,11 @@ data class DiscoveredEntry(
     val size: Long = 0,
     val modifiedAt: Long = 0,
     val reason: DiscoveryReason,
+    /** Mirror of the portable Inbox decision; null means it is still waiting. */
+    val disposition: InboxDisposition? = null,
 ) {
     val id: String get() = "$libraryId:$relativePath"
+
+    /** True while this path still awaits a decision in Inbox. */
+    val pending: Boolean get() = disposition == null
 }

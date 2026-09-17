@@ -8,12 +8,15 @@ import android.database.sqlite.SQLiteOpenHelper
 import androidx.core.database.sqlite.transaction
 import dev.susnowy.gallery.model.DiscoveredEntry
 import dev.susnowy.gallery.model.DiscoveryReason
+import dev.susnowy.gallery.model.InboxDisposition
+import dev.susnowy.gallery.model.InboxTarget
 import dev.susnowy.gallery.model.LibraryRegistration
 import dev.susnowy.gallery.model.MediaItem
 import dev.susnowy.gallery.model.MediaDomain
 import dev.susnowy.gallery.model.MediaKind
 import dev.susnowy.gallery.model.PermissionState
 import dev.susnowy.gallery.model.PlaybackProgress
+import dev.susnowy.gallery.model.PortableInboxDecision
 import dev.susnowy.gallery.model.SeriesRef
 import dev.susnowy.gallery.model.SourceKind
 import dev.susnowy.gallery.scanner.ScannedFile
@@ -74,6 +77,7 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
                 secondary_path TEXT,
                 favorite INTEGER NOT NULL,
                 in_inbox INTEGER NOT NULL,
+                inbox_disposition TEXT,
                 trashed INTEGER NOT NULL,
                 deleted_at INTEGER,
                 needs_repair INTEGER NOT NULL,
@@ -115,6 +119,7 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
                 size INTEGER NOT NULL,
                 modified_at INTEGER NOT NULL,
                 reason TEXT NOT NULL,
+                disposition TEXT,
                 PRIMARY KEY(library_id, relative_path),
                 FOREIGN KEY(library_id) REFERENCES libraries(library_id) ON DELETE CASCADE
             )
@@ -174,6 +179,12 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
                 FROM media
                 """.trimIndent(),
             )
+        }
+        if (oldVersion < 7) {
+            // Portable Inbox decisions mirror into disposable columns. Existing rows keep
+            // their pending flag; no explicit decision existed before this version.
+            db.execSQL("ALTER TABLE media ADD COLUMN inbox_disposition TEXT")
+            db.execSQL("ALTER TABLE discoveries ADD COLUMN disposition TEXT")
         }
         if (oldVersion > newVersion) {
             db.execSQL("DROP TABLE IF EXISTS progress")
@@ -435,11 +446,32 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
     ) {
         require(entries.all { it.libraryId == libraryId }) { "不能跨 Library 写入待判断索引" }
         writableDatabase.transaction {
+            // A rescan replaces the discovered entries but must not erase the user's
+            // portable decision about a path that is still there.
+            val preserved = query(
+                "discoveries",
+                arrayOf("relative_path", "disposition"),
+                "library_id = ?",
+                arrayOf(libraryId),
+                null,
+                null,
+                null,
+            ).use { cursor ->
+                buildMap(cursor.count) {
+                    while (cursor.moveToNext()) {
+                        cursor.nullableString("disposition")
+                            ?.let { put(cursor.string("relative_path"), it) }
+                    }
+                }
+            }
             entries.forEach { entry ->
+                val carried = entry.disposition?.name ?: preserved[entry.relativePath]
                 insertWithOnConflict(
                     "discoveries",
                     null,
-                    entry.toValues(),
+                    entry.copy(
+                        disposition = carried?.toDisposition(),
+                    ).toValues(),
                     SQLiteDatabase.CONFLICT_REPLACE,
                 )
             }
@@ -467,6 +499,100 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
                 )
             }
         }
+    }
+
+    /**
+     * Mirrors portable Inbox decisions into the disposable index.
+     *
+     * `.gallery/state/inbox.json` is the truth, so every decided row is rewritten from it
+     * and rows whose decision disappeared go back to pending. Nothing here is allowed to
+     * become the only copy of a user decision.
+     */
+    @Synchronized
+    fun applyInboxDecisions(libraryId: String, decisions: List<PortableInboxDecision>) {
+        val database = writableDatabase
+        database.transaction {
+            execSQL(
+                "UPDATE media SET inbox_disposition = NULL WHERE library_id = ?",
+                arrayOf<Any>(libraryId),
+            )
+            execSQL(
+                "UPDATE discoveries SET disposition = NULL WHERE library_id = ?",
+                arrayOf<Any>(libraryId),
+            )
+            decisions.filter { it.target == InboxTarget.MEDIA }.forEach { decision ->
+                val values = ContentValues().apply {
+                    put("inbox_disposition", decision.disposition.name)
+                    put("in_inbox", 0)
+                }
+                val byWorkId = decision.workId?.let { workId ->
+                    update("media", values, "library_id = ? AND id = ?", arrayOf(libraryId, workId))
+                } ?: 0
+                if (byWorkId == 0) {
+                    update(
+                        "media",
+                        values,
+                        "library_id = ? AND relative_path = ?",
+                        arrayOf(libraryId, decision.relativePath),
+                    )
+                }
+            }
+            decisions.filter { it.target == InboxTarget.DISCOVERY }.forEach { decision ->
+                update(
+                    "discoveries",
+                    ContentValues().apply { put("disposition", decision.disposition.name) },
+                    "library_id = ? AND relative_path = ?",
+                    arrayOf(libraryId, decision.relativePath),
+                )
+            }
+        }
+    }
+
+    /** Applies one media decision; [inInbox] keeps the item out of the pending list. */
+    @Synchronized
+    fun setMediaInboxDecision(
+        libraryId: String,
+        workId: String,
+        relativePath: String,
+        disposition: InboxDisposition?,
+        inInbox: Boolean,
+    ) {
+        val values = ContentValues().apply {
+            disposition?.let { put("inbox_disposition", it.name) } ?: putNull("inbox_disposition")
+            put("in_inbox", inInbox.asInt())
+        }
+        val database = writableDatabase
+        val updated = database.update(
+            "media",
+            values,
+            "library_id = ? AND id = ?",
+            arrayOf(libraryId, workId),
+        )
+        if (updated == 0) {
+            database.update(
+                "media",
+                values,
+                "library_id = ? AND relative_path = ?",
+                arrayOf(libraryId, relativePath),
+            )
+        }
+    }
+
+    /** Applies one discovery decision. */
+    @Synchronized
+    fun setDiscoveryInboxDecision(
+        libraryId: String,
+        relativePath: String,
+        disposition: InboxDisposition?,
+    ) {
+        writableDatabase.update(
+            "discoveries",
+            ContentValues().apply {
+                disposition?.let { put("disposition", it.name) } ?: putNull("disposition")
+            },
+            "library_id = ? AND relative_path = ?",
+            arrayOf(libraryId, relativePath),
+        )
     }
 
     @Synchronized
@@ -645,6 +771,7 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
         secondaryPath?.let { put("secondary_path", it) } ?: putNull("secondary_path")
         put("favorite", favorite.asInt())
         put("in_inbox", inInbox.asInt())
+        inboxDisposition?.let { put("inbox_disposition", it.name) } ?: putNull("inbox_disposition")
         put("trashed", trashed.asInt())
         deletedAt?.let { put("deleted_at", it) } ?: putNull("deleted_at")
         put("needs_repair", needsRepair.asInt())
@@ -661,6 +788,7 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
         put("size", size)
         put("modified_at", modifiedAt)
         put("reason", reason.name)
+        disposition?.let { put("disposition", it.name) } ?: putNull("disposition")
     }
 
     private fun libraryFromCursor(cursor: Cursor) = LibraryRegistration(
@@ -698,6 +826,7 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
         secondaryPath = cursor.nullableString("secondary_path"),
         favorite = cursor.int("favorite") != 0,
         inInbox = cursor.int("in_inbox") != 0,
+        inboxDisposition = cursor.nullableString("inbox_disposition")?.toDisposition(),
         trashed = cursor.int("trashed") != 0,
         deletedAt = cursor.nullableLong("deleted_at"),
         needsRepair = cursor.int("needs_repair") != 0,
@@ -714,7 +843,11 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
         size = cursor.long("size"),
         modifiedAt = cursor.long("modified_at"),
         reason = DiscoveryReason.valueOf(cursor.string("reason")),
+        disposition = cursor.nullableString("disposition")?.toDisposition(),
     )
+
+    private fun String.toDisposition(): InboxDisposition? =
+        runCatching { InboxDisposition.valueOf(this) }.getOrNull()
 
     private fun Boolean.asInt() = if (this) 1 else 0
 
@@ -738,7 +871,7 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
 
     companion object {
         private const val DATABASE_NAME = "gallery-index.db"
-        private const val DATABASE_VERSION = 6
+        private const val DATABASE_VERSION = 7
         private const val ENRICHMENT_PENDING = "PENDING"
         private const val ENRICHMENT_COMPLETE = "COMPLETE"
         private const val ENRICHMENT_FAILED = "FAILED"

@@ -40,6 +40,7 @@ SAF media tree
 - `.gallery/schema/v4.json`: machine-readable contract summary;
 - `.gallery/items/catalog.json`: normalized logical catalog;
 - `.gallery/state/state.json`: progress and logical trash keyed by `work_id`;
+- `.gallery/state/inbox.json`: portable Inbox decisions keyed by relative path plus `work_id`;
 - `.gallery/imports/*.json`: program-managed import and derivation manifests;
 - `.gallery/transactions/*.json`: recoverable physical operations;
 - `.gallery/backups/`: pre-migration and pre-operation snapshots;
@@ -79,7 +80,7 @@ The converter is idempotent per document, so a stop after the catalog commit but
 - `library`: identity, initialization lease, Schema conversion, generated guide, atomic portable writer;
 - `storage`: SAF traversal, mutation, locator reuse, and directory cache;
 - `scanner`: inventory, classification candidates, enrichment, sidecar filtering;
-- `metadata`: portable catalog/state storage, provenance, recognizers, ComicInfo;
+- `metadata`: portable catalog/state/inbox storage, provenance, recognizers, ComicInfo;
 - `data`: SQLite index and repository orchestration;
 - `media`: lazy directory/archive pages, decoding, preload policy, offline previews;
 - `ui`: Compose navigation, grids, viewers, editor, search, trash, settings;
@@ -87,6 +88,19 @@ The converter is idempotent per document, so a stop after the catalog commit but
 - `importer`: copy-only system media import;
 - `derive`: explicit copy-based derived media actions;
 - `logging`: bounded, scrubbed diagnostics.
+
+## Inbox decisions
+
+`.gallery/state/inbox.json` (`PortableInboxStore`) records what the user decided about a surfaced path:
+
+- `accepted` — the suggestion stands, the Work joins the normal views;
+- `classified` — the user set the domain from Inbox; the Work's `domain` stays authoritative and the record only states what was chosen;
+- `ignored` — keep the path out of both Inbox and the normal views without touching metadata;
+- `handled` — a discovery target (unsupported file, ambiguous directory) needs no further work from Rem.
+
+A decision is keyed by relative path and carries `work_id` when the target is a Work, so a rename or Organizer move still resolves; `PortableInboxStore.relocate` rewrites the path when the Organizer commits a move. Accepting or editing a Work writes a decision as part of the same operation, which is why an external Agent or a rebuilt index cannot silently return decided content to Inbox.
+
+The device index (database v7) mirrors decisions into `media.inbox_disposition` and `discoveries.disposition`. `applyInboxDecisions` rewrites those columns from the portable document, so the document stays the single source of truth; `media.in_inbox` remains the pending flag and `discoveries` rows keep their disposition across rescans (`replaceDiscoveries` preserves it).
 
 ## Library initialization and writes
 
@@ -136,6 +150,7 @@ No cache is portable truth.
 - classification and logical relationships never move files;
 - ordinary deletion writes portable logical trash;
 - permanent deletion re-resolves the path and verifies current identity/size;
+- an Inbox decision is written to `.gallery/state/inbox.json` before the device index mirrors it, and no disposition deletes or moves media;
 - Organizer copies and verifies before deleting a source;
 - page reordering and Organizer operations have recovery journals;
 - manual provenance wins over automatic metadata;
