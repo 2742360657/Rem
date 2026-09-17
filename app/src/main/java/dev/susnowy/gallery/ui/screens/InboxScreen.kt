@@ -1,5 +1,6 @@
 package dev.susnowy.gallery.ui.screens
 
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -9,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.InsertDriveFile
 import androidx.compose.material.icons.rounded.Folder
@@ -92,7 +94,9 @@ fun InboxScreen(content: InboxContent, viewModel: GalleryViewModel) {
     LaunchedEffect(content.ignoredMedia.map(MediaItem::id)) {
         selectedIgnored = selectedIgnored.intersect(content.ignoredMedia.mapTo(mutableSetOf(), MediaItem::id))
     }
-    LaunchedEffect(content.count(section)) {
+    // Keyed on the content itself: a scan that fills Inbox arrives after the first frame, and
+    // keying on the current section's count alone would never re-run when that count stays 0.
+    LaunchedEffect(content) {
         if (content.count(section) == 0) {
             section = InboxSection.entries.firstOrNull { content.count(it) > 0 } ?: section
         }
@@ -120,6 +124,7 @@ fun InboxScreen(content: InboxContent, viewModel: GalleryViewModel) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
                 .padding(horizontal = 12.dp, vertical = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
