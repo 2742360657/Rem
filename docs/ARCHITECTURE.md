@@ -161,6 +161,10 @@ An unchanged file reuses completed enrichment only when size and modified time s
 - `compare.MergeManifest` records the evidence of a merge and is written to `.gallery/imports/merge-<editionId>.json` (program-managed, never user truth).
 - `PortableMetadataStore.upsertEdition` writes a page-plan Edition in one atomic catalog write and can set it as the Work's preferred Edition in the same write. `GalleryRepository.createMergedEdition` derives a stable Edition id from (library, target Work, both sources), so re-merging updates one Edition; sources are never modified and nothing is deleted.
 - Device cost is surfaced, not hidden: the quick comparison reads no page bytes at all, and the deep comparison reads each source once.
+- `media.editionPlanPages` turns a page plan into reader pages (`relativePath` = the file that holds the page, `archiveEntry` = entry inside an archive) and returns null for whole-container members, which makes the Work fall back to the single-source reader.
+- The repository keeps the reading order of page-plan Editions in memory, keyed per Library, refreshed whenever the catalog is loaded and published right after a merge; `pages(item)` resolves plan pages' URIs with one directory listing per parent instead of one lookup per page.
+- `MediaContentService.decodeArchivePage` takes an explicit archive path, so a merged plan's pages can come from different archives; the reader passes the page's own container at every decode site.
+- UI: `EditionCompareDialog` (from the image-set detail screen) picks a second source, runs a quick or deep comparison with progress and cancellation, renders the report, and writes the merged Edition after an explicit confirmation.
 
 ## Media and cache budgets
 

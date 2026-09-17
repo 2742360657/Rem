@@ -104,7 +104,7 @@ A second, always-available test target is the phone's own storage (`/storage/emu
 ## Known gaps
 
 - Gesture-based drag reordering is not implemented; Group and Series editors use up/down and "move to index", which also stays usable for series with hundreds of members.
-- Edition comparison and virtual merge exist in the data layer (page manifests, comparison report, page-plan Edition, `.gallery/imports/` evidence); the viewer/UI entry point and reading a merged page plan are still unfinished, and pixel-level (re-encode) matching is deliberately not implemented yet.
+- Edition comparison and virtual merge are wired end to end (quick/deep comparison, report, page-plan Edition, `.gallery/imports/` evidence, reader follows the plan); pixel-level (re-encode) matching is deliberately not implemented, and none of it is verified on a real device yet.
 - Initial inventory is still one atomic traversal; only enrichment is resumable.
 - `refreshFromDatabase()` still materializes the full media table.
 - Real E-drive scanning and mass video-preview behavior have not been validated with the latest build.
@@ -112,8 +112,8 @@ A second, always-available test target is the phone's own storage (`/storage/emu
 
 ## Next implementation order
 
-1. Connect Edition comparison and virtual merge to the UI, and let the reader follow a merged page plan.
-2. Test the current build against the actual removable Library, then decide whether inventory checkpoints and database paging are required.
+1. Test the current build against the actual removable Library (device + real E-drive), then decide whether inventory checkpoints and database paging are required.
+2. Do the same for the new editors and comparison on a real device (merged-plan reading cost, deep comparison timing, cancellation).
 3. Polish density, selection, long-press actions, contextual tools, and back behavior (including real drag reordering for Group and Series).
 
 Do not start a broad UI rewrite before portable semantics are usable.

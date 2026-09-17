@@ -16,8 +16,10 @@ import kotlinx.coroutines.withContext
  * One page of a source, identified by the container it lives in.
  *
  * [containerPath] is the Library-relative path of the file or directory that holds the page
- * and [entryPath] is the path inside an archive, so a page can come from any Asset an
- * Edition references — which is what makes a virtual merged Edition readable.
+ * and [entryPath] is the path inside that container (an archive entry, or a file name inside
+ * a directory), so a page can come from any Asset an Edition references — which is what
+ * makes a virtual merged Edition readable. `entryPath` is null only when the container *is*
+ * the page (a single image file).
  */
 data class PageEntry(
     val containerPath: String,
@@ -114,7 +116,9 @@ class PageManifestService(
             }
             pages += PageEntry(
                 containerPath = directory,
-                entryPath = null,
+                // The path inside the container, so a page can be referenced from an Edition
+                // page plan without re-listing the directory later.
+                entryPath = entry.name,
                 name = entry.name,
                 sizeBytes = entry.size,
                 sha256 = digest,

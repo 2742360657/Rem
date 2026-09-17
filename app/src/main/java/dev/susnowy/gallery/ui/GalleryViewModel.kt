@@ -9,6 +9,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.viewModelScope
 import dev.susnowy.gallery.GalleryApplication
+import dev.susnowy.gallery.compare.EditionComparisonReport
 import dev.susnowy.gallery.data.GalleryRepository
 import dev.susnowy.gallery.importer.SystemMediaAccess
 import dev.susnowy.gallery.importer.SystemMediaEntry
@@ -37,6 +38,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -121,6 +123,9 @@ class GalleryViewModel(
     val organizationPlan: StateFlow<OrganizationPlan?> = _organizationPlan
     private val _duplicateGroups = MutableStateFlow<List<List<MediaItem>>>(emptyList())
     val duplicateGroups: StateFlow<List<List<MediaItem>>> = _duplicateGroups
+    private val _comparison = MutableStateFlow(ComparisonState())
+    val comparison: StateFlow<ComparisonState> = _comparison.asStateFlow()
+    private var comparisonJob: Job? = null
     private val _offlinePreviewStats = MutableStateFlow(OfflinePreviewStats(files = 0, bytes = 0))
     val offlinePreviewStats: StateFlow<OfflinePreviewStats> = _offlinePreviewStats
     private var longOperationJob: Job? = null
@@ -508,6 +513,62 @@ class GalleryViewModel(
         }
     }
 
+    /**
+     * Compares two sources page by page.
+     *
+     * The quick pass reads no page bytes; the deep pass reads each source once and hashes
+     * pages during that pass. Both are cancellable and neither changes any media.
+     */
+    fun startComparison(left: MediaItem, right: MediaItem, deep: Boolean) {
+        comparisonJob?.cancel()
+        comparisonJob = viewModelScope.launch {
+            _comparison.value = ComparisonState(running = true, progress = "准备比较…")
+            runCatching {
+                repository.compareWorks(
+                    libraryId = left.libraryId,
+                    leftWorkId = left.id,
+                    rightWorkId = right.id,
+                    deep = deep,
+                    onProgress = { text -> _comparison.value = _comparison.value.copy(progress = text) },
+                )
+            }.onSuccess { report ->
+                _comparison.value = ComparisonState(report = report, progress = "")
+            }.onFailure { error ->
+                if (error is CancellationException) {
+                    _comparison.value = ComparisonState(message = "已取消比较")
+                } else {
+                    _comparison.value = ComparisonState(message = error.message ?: "比较失败")
+                }
+            }
+        }
+    }
+
+    fun cancelComparison() {
+        comparisonJob?.cancel()
+        comparisonJob = null
+        _comparison.value = ComparisonState()
+    }
+
+    fun clearComparison() {
+        comparisonJob?.cancel()
+        comparisonJob = null
+        _comparison.value = ComparisonState()
+    }
+
+    /** Writes the virtual merged Edition for a finished comparison. */
+    fun createMergedEdition(target: MediaItem, report: EditionComparisonReport) {
+        viewModelScope.launch {
+            runCatching { repository.createMergedEdition(target.libraryId, target.id, report) }
+                .onSuccess {
+                    _comparison.value = _comparison.value.copy(
+                        message = "已生成合并版本（页计划跨来源，媒体未改动）",
+                    )
+                    message.value = "已生成合并版本；两个来源各自保留原有版本"
+                }
+                .onFailure(::showError)
+        }
+    }
+
     /** Records a portable Inbox decision for the selected media and/or discovered paths. */
     fun decideInbox(
         items: List<MediaItem> = emptyList(),
@@ -616,8 +677,7 @@ class GalleryViewModel(
         }
     }
 
-    suspend fun pages(item: MediaItem): List<ImagePage> =
-        content.imageSetPages(item, repository.storage(item.libraryId))
+    suspend fun pages(item: MediaItem): List<ImagePage> = repository.pages(item)
 
     suspend fun resolvePath(item: MediaItem, path: String): String? =
         content.resolveUri(path, repository.storage(item.libraryId))
@@ -627,12 +687,14 @@ class GalleryViewModel(
         entryName: String,
         width: Int,
         height: Int,
+        archivePath: String? = null,
     ): Bitmap? = content.decodeArchivePage(
-        item,
-        entryName,
-        repository.storage(item.libraryId),
-        width,
-        height,
+        item = item,
+        entryName = entryName,
+        storage = repository.storage(item.libraryId),
+        targetWidth = width,
+        targetHeight = height,
+        archivePath = archivePath ?: item.relativePath,
     )
 
     suspend fun oversizedBitmap(item: MediaItem, relativePath: String): Bitmap? =
@@ -919,6 +981,13 @@ class GalleryViewModel(
     )
 
     private data class ShelfSelection(val groupId: String?, val seriesId: String?)
+
+    data class ComparisonState(
+        val running: Boolean = false,
+        val progress: String = "",
+        val report: EditionComparisonReport? = null,
+        val message: String? = null,
+    )
 
     private data class IndexedContent(
         val media: List<MediaItem>,

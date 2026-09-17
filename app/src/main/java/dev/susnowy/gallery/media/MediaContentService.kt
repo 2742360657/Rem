@@ -48,15 +48,22 @@ class MediaContentService(
     suspend fun resolveUri(path: String, storage: DocumentTreeStorage): String? =
         withContext(Dispatchers.IO) { storage.contentUri(path)?.toString() }
 
+    /**
+     * Decodes one archive entry.
+     *
+     * [archivePath] identifies the container explicitly, which a virtual merged Edition needs
+     * because its pages can live in different archives than the Work's own path.
+     */
     suspend fun decodeArchivePage(
         item: MediaItem,
         entryName: String,
         storage: DocumentTreeStorage,
         targetWidth: Int,
         targetHeight: Int,
+        archivePath: String = item.relativePath,
     ): Bitmap? = withContext(Dispatchers.IO) {
         val cacheKey = listOf(
-            item.id,
+            archivePath,
             item.modifiedAt,
             entryName,
             targetWidth,
@@ -67,13 +74,13 @@ class MediaContentService(
         archiveDecodeMutex.withLock {
             archiveBitmapCache.get(cacheKey)?.let { return@withLock it }
             val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-            decodeArchiveEntry(item, entryName, storage, bounds)
+            decodeArchiveEntry(archivePath, entryName, storage, bounds)
             if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return@withLock null
             val options = BitmapFactory.Options().apply {
                 inSampleSize = calculateSampleSize(bounds.outWidth, bounds.outHeight, targetWidth, targetHeight)
                 inPreferredConfig = Bitmap.Config.RGB_565
             }
-            decodeArchiveEntry(item, entryName, storage, options)?.also { bitmap ->
+            decodeArchiveEntry(archivePath, entryName, storage, options)?.also { bitmap ->
                 archiveBitmapCache.put(cacheKey, bitmap)
             }
         }
@@ -121,12 +128,12 @@ class MediaContentService(
     }
 
     private fun decodeArchiveEntry(
-        item: MediaItem,
+        archivePath: String,
         entryName: String,
         storage: DocumentTreeStorage,
         options: BitmapFactory.Options,
     ): Bitmap? {
-        val document = LibraryDocument(item.relativePath, item.relativePath.substringAfterLast('/'), false)
+        val document = LibraryDocument(archivePath, archivePath.substringAfterLast('/'), false)
         return storage.openInput(document).buffered().use { input ->
             ZipInputStream(input).use { zip ->
                 while (true) {

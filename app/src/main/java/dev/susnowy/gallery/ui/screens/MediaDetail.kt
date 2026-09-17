@@ -37,6 +37,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.DeleteOutline
+import androidx.compose.material.icons.rounded.Compare
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Favorite
@@ -134,6 +135,7 @@ import kotlinx.coroutines.sync.withPermit
 fun MediaDetail(
     item: MediaItem,
     browsingItems: List<MediaItem> = listOf(item),
+    libraryWorks: List<MediaItem> = emptyList(),
     viewModel: GalleryViewModel,
     onBack: () -> Unit,
 ) {
@@ -159,7 +161,12 @@ fun MediaDetail(
         return
     }
     if (item.kind == MediaKind.IMAGE_SET) {
-        ImageSetWorkDetail(item = item, viewModel = viewModel, onBack = onBack)
+        ImageSetWorkDetail(
+            item = item,
+            libraryWorks = libraryWorks,
+            viewModel = viewModel,
+            onBack = onBack,
+        )
         return
     }
     BackHandler(onBack = onBack)
@@ -364,10 +371,12 @@ private fun MixedMediaGroupDetail(
 @Composable
 private fun ImageSetWorkDetail(
     item: MediaItem,
+    libraryWorks: List<MediaItem>,
     viewModel: GalleryViewModel,
     onBack: () -> Unit,
 ) {
     var reading by rememberSaveable(item.id) { mutableStateOf(false) }
+    var comparing by rememberSaveable(item.id) { mutableStateOf(false) }
     if (reading) {
         BackHandler { reading = false }
         ImageSetReaderScreen(item = item, viewModel = viewModel, onBack = { reading = false })
@@ -378,6 +387,19 @@ private fun ImageSetWorkDetail(
             viewModel = viewModel,
             onBack = onBack,
             onRead = { reading = true },
+            onCompare = { comparing = true },
+        )
+    }
+    if (comparing) {
+        EditionCompareDialog(
+            left = item,
+            candidates = libraryWorks.filter { candidate ->
+                candidate.id != item.id &&
+                    candidate.kind == MediaKind.IMAGE_SET &&
+                    !candidate.trashed
+            },
+            viewModel = viewModel,
+            onDismiss = { comparing = false },
         )
     }
 }
@@ -389,6 +411,7 @@ private fun ImageSetOverview(
     viewModel: GalleryViewModel,
     onBack: () -> Unit,
     onRead: () -> Unit,
+    onCompare: () -> Unit,
 ) {
     val progress by produceState<PlaybackProgress?>(initialValue = null, item.id, item.modifiedAt) {
         value = viewModel.progress(item)
@@ -409,6 +432,9 @@ private fun ImageSetOverview(
                     }
                 },
                 actions = {
+                    IconButton(onClick = onCompare) {
+                        Icon(Icons.Rounded.Compare, contentDescription = "比较版本")
+                    }
                     IconButton(onClick = { showEditor = true }) {
                         Icon(Icons.Rounded.Edit, contentDescription = "编辑作品信息")
                     }
@@ -980,6 +1006,7 @@ private fun ImageSetReader(
                                         page.archiveEntry,
                                         COMIC_PAGE_TARGET_WIDTH,
                                         COMIC_PAGE_TARGET_HEIGHT,
+                                        archivePath = page.relativePath,
                                     )
                                 }
                             }
@@ -1033,7 +1060,12 @@ private fun ImageSetReader(
                         },
                         success = { SubcomposeAsyncImageContent() },
                     )
-                    page.archiveEntry != null -> ArchiveComicPage(item, page.archiveEntry, viewModel)
+                    page.archiveEntry != null -> ArchiveComicPage(
+                        item = item,
+                        entryName = page.archiveEntry,
+                        archivePath = page.relativePath,
+                        viewModel = viewModel,
+                    )
                 }
             }
         }
@@ -1116,7 +1148,12 @@ private fun ZoomableComicPage(
 }
 
 @Composable
-private fun ArchiveComicPage(item: MediaItem, entryName: String, viewModel: GalleryViewModel) {
+private fun ArchiveComicPage(
+    item: MediaItem,
+    entryName: String,
+    archivePath: String?,
+    viewModel: GalleryViewModel,
+) {
     var retry by remember(item.id, entryName) { mutableIntStateOf(0) }
     Box(modifier = Modifier.fillMaxWidth()) {
         val result by produceState<Result<android.graphics.Bitmap?>?>(
@@ -1124,6 +1161,7 @@ private fun ArchiveComicPage(item: MediaItem, entryName: String, viewModel: Gall
             item.id,
             item.modifiedAt,
             entryName,
+            archivePath,
             retry,
         ) {
             value = runCatching {
@@ -1132,6 +1170,7 @@ private fun ArchiveComicPage(item: MediaItem, entryName: String, viewModel: Gall
                     entryName,
                     COMIC_PAGE_TARGET_WIDTH,
                     COMIC_PAGE_TARGET_HEIGHT,
+                    archivePath = archivePath,
                 )
             }
         }
@@ -1301,8 +1340,19 @@ private fun ReorderPageThumbnail(item: MediaItem, page: ImagePage, viewModel: Ga
                 modifier = Modifier.fillMaxSize(),
             )
             page.archiveEntry != null -> {
-                val bitmap by produceState<android.graphics.Bitmap?>(null, item.id, page.archiveEntry) {
-                    value = viewModel.archiveBitmap(item, page.archiveEntry, 320, 420)
+                val bitmap by produceState<android.graphics.Bitmap?>(
+                    null,
+                    item.id,
+                    page.archiveEntry,
+                    page.relativePath,
+                ) {
+                    value = viewModel.archiveBitmap(
+                        item,
+                        page.archiveEntry,
+                        320,
+                        420,
+                        archivePath = page.relativePath,
+                    )
                 }
                 bitmap?.let {
                     Image(

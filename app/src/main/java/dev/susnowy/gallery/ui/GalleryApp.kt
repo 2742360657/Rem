@@ -166,6 +166,9 @@ fun GalleryApp(viewModel: GalleryViewModel = viewModel()) {
             MediaDetail(
                 item = selected,
                 browsingItems = browsingItems,
+                libraryWorks = state.allMedia.filter {
+                    it.libraryId == selected.libraryId && it.visibleInLibrary
+                },
                 viewModel = viewModel,
                 onBack = viewModel::closeDetail,
             )

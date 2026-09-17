@@ -53,9 +53,12 @@ import dev.susnowy.gallery.compare.MergeResult
 import dev.susnowy.gallery.compare.MergeSource
 import dev.susnowy.gallery.compare.PageComparison
 import dev.susnowy.gallery.library.PortableDocumentWriter
+import dev.susnowy.gallery.media.MediaContentService
 import dev.susnowy.gallery.media.PageManifestService
+import dev.susnowy.gallery.media.editionPlanPages
 import dev.susnowy.gallery.model.EditionAssetRole
 import dev.susnowy.gallery.model.PortableAsset
+import dev.susnowy.gallery.model.PortableCatalog
 import dev.susnowy.gallery.model.PortableEdition
 import dev.susnowy.gallery.model.PortableEditionAsset
 import dev.susnowy.gallery.model.PortableGroupMember
@@ -105,6 +108,7 @@ class GalleryRepository(context: Context) {
     private val derivation = DerivationService()
     private val imageSetOrder = ImageSetOrderService()
     private val pageManifests = PageManifestService()
+    private val content = MediaContentService()
     private val offlinePreviews = OfflinePreviewStore(appContext)
     private val progressWriteMutex = Mutex()
 
@@ -128,6 +132,12 @@ class GalleryRepository(context: Context) {
 
     private val _series = MutableStateFlow<List<MediaSeries>>(emptyList())
     val series: StateFlow<List<MediaSeries>> = _series.asStateFlow()
+
+    /**
+     * Reading order of Works whose preferred Edition is a page plan (a virtual merge).
+     * Rebuilt whenever the catalog is loaded, so the reader never has to read it again.
+     */
+    private val _editionPlans = MutableStateFlow<Map<String, List<ImagePage>>>(emptyMap())
 
     private val _operation = MutableStateFlow<String?>(null)
     val operation: StateFlow<String?> = _operation.asStateFlow()
@@ -172,6 +182,7 @@ class GalleryRepository(context: Context) {
                     val catalog = PortableMetadataStore(storage).loadCatalog(migrated.libraryId)
                     syncGroups(migrated.libraryId, catalog.groups)
                     syncSeries(migrated.libraryId, catalog.series)
+                    refreshEditionPlans(migrated.libraryId, catalog)
                 }.onFailure { error ->
                     RemLog.failure("GalleryRepository", "分组/系列索引回填失败", error)
                 }
@@ -460,6 +471,7 @@ class GalleryRepository(context: Context) {
             )
             syncGroups(libraryId, catalog.groups)
             syncSeries(libraryId, catalog.series)
+            refreshEditionPlans(libraryId, catalog)
             refreshFromDatabase()
             val pending = database.pendingEnrichmentCount(libraryId)
             RemLog.info(
@@ -1018,7 +1030,10 @@ class GalleryRepository(context: Context) {
                     assetId = asset.id,
                     role = EditionAssetRole.PAGE,
                     sortIndex = index.toDouble(),
-                    entryPath = page.entryPath,
+                    // Inside an archive this is the entry, inside a directory the file name,
+                    // and for a single-image container it stays null (the container is the page).
+                    entryPath = page.entryPath
+                        ?: page.name.takeIf { asset.source != dev.susnowy.gallery.model.SourceKind.FILE },
                 )
             }
             require(members.isNotEmpty()) { "合并结果为空" }
@@ -1040,6 +1055,9 @@ class GalleryRepository(context: Context) {
                 prefer = true,
             )
             writeMergeManifest(libraryId, storage, saved, targetWorkId, label, report)
+            editionPlanPages(saved.assets, assetsByPath)?.let { pages ->
+                _editionPlans.value = _editionPlans.value + (planKey(libraryId, targetWorkId) to pages)
+            }
             val updated = target.copy(
                 revision = saved.revision,
                 coverPath = target.coverPath,
@@ -1408,6 +1426,62 @@ class GalleryRepository(context: Context) {
     /** Mirrors the portable Series of one Library into the disposable index. */
     private fun syncSeries(libraryId: String, series: List<PortableSeries>) {
         database.replaceSeries(libraryId, series.map { it.toMediaSeries(libraryId) })
+    }
+
+    /**
+     * Keeps the reading order of page-plan Editions ready for the reader.
+     *
+     * A plan is only rebuilt from the catalog that was just loaded; if a plan cannot be read
+     * as a flat page list the Work simply falls back to its own single source.
+     */
+    private fun refreshEditionPlans(libraryId: String, catalog: PortableCatalog) {
+        val assetsById = catalog.assets.associateBy(PortableAsset::id)
+        val editionsByWork = catalog.editions.groupBy(PortableEdition::workId)
+        // Plans are keyed per Library so a refresh can replace one Library without touching
+        // the others.
+        val plans = _editionPlans.value.filterKeys { !it.startsWith("$libraryId:") }.toMutableMap()
+        catalog.works.forEach { work ->
+            val editions = editionsByWork[work.id].orEmpty()
+            val edition = editions.firstOrNull { it.id == work.preferredEditionId }
+                ?: editions.minByOrNull(PortableEdition::id)
+                ?: return@forEach
+            val isPagePlan = edition.assets.size > 1 || edition.assets.any { it.entryPath != null }
+            if (!isPagePlan) return@forEach
+            editionPlanPages(edition.assets, assetsById)?.let { pages ->
+                plans[planKey(libraryId, work.id)] = pages
+            }
+        }
+        _editionPlans.value = plans
+    }
+
+    private fun planKey(libraryId: String, workId: String) = "$libraryId:$workId"
+
+    /**
+     * Pages of a Work: its Edition page plan when it has one, otherwise its own source.
+     *
+     * Directory and file pages resolve their URIs with one listing per parent directory
+     * instead of one provider lookup per page, so a merged plan with hundreds of pages does
+     * not turn into hundreds of round trips.
+     */
+    suspend fun pages(item: MediaItem): List<ImagePage> {
+        val storage = storageFor(requireLibrary(item.libraryId))
+        val plan = _editionPlans.value[planKey(item.libraryId, item.id)]
+            ?: return content.imageSetPages(item, storage)
+        val parents = plan.mapNotNull { page ->
+            page.relativePath?.takeIf { page.archiveEntry == null }?.substringBeforeLast('/')
+        }.distinct()
+        val listings = parents.associateWith { parent ->
+            runCatching { storage.list(parent) }.getOrDefault(emptyList())
+                .associate { it.relativePath to it.uri }
+        }
+        return plan.map { page ->
+            val path = page.relativePath
+            if (page.archiveEntry != null || path == null) {
+                page
+            } else {
+                page.copy(uri = listings[path.substringBeforeLast('/')]?.get(path))
+            }
+        }
     }
 
     private fun MediaItem.withPortableMetadata(portable: PortableItemMetadata): MediaItem = copy(
