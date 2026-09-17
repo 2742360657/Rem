@@ -74,6 +74,7 @@ fun MediaGrid(
     selectedIds: Set<String> = emptySet(),
     onSelectionToggle: (MediaItem) -> Unit = {},
     quickActionsEnabled: Boolean = true,
+    supportingText: (MediaItem) -> String? = { null },
 ) {
     var actionItem by remember { mutableStateOf<MediaItem?>(null) }
     var editItem by remember { mutableStateOf<MediaItem?>(null) }
@@ -116,6 +117,7 @@ fun MediaGrid(
                     },
                     selected = item.id in selectedIds,
                     compact = compact,
+                    supportingText = supportingText(item),
                 )
             }
         }
@@ -123,7 +125,11 @@ fun MediaGrid(
     actionItem?.let { item ->
         RightSidePanel(
             visible = true,
-            title = if (item.kind == MediaKind.IMAGE_SET) "作品操作" else "媒体操作",
+            title = when {
+                item.kind == MediaKind.IMAGE_SET && item.domain == MediaDomain.CLASSIFIED -> "图集操作"
+                item.kind == MediaKind.IMAGE_SET -> "作品操作"
+                else -> "媒体操作"
+            },
             onDismiss = { actionItem = null },
         ) {
             MediaThumbnail(
@@ -150,7 +156,13 @@ fun MediaGrid(
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Icon(Icons.Rounded.OpenInFull, contentDescription = null)
-                Text(if (item.kind == MediaKind.IMAGE_SET) " 查看作品详情" else " 打开")
+                Text(
+                    when {
+                        item.kind == MediaKind.IMAGE_SET && item.domain == MediaDomain.CLASSIFIED -> " 查看分组"
+                        item.kind == MediaKind.IMAGE_SET -> " 查看作品详情"
+                        else -> " 打开"
+                    },
+                )
             }
             if (item.inInbox) {
                 FilledTonalButton(
@@ -265,6 +277,7 @@ fun MediaCard(
     onLongClick: (() -> Unit)? = null,
     selected: Boolean = false,
     compact: Boolean = false,
+    supportingText: String? = null,
 ) {
     Card(
         modifier = modifier
@@ -353,7 +366,7 @@ fun MediaCard(
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text(
-                        item.kind.label(),
+                        item.typeLabel(),
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.primary,
                     )
@@ -367,6 +380,15 @@ fun MediaCard(
                             color = MaterialTheme.colorScheme.error,
                         )
                     }
+                }
+                supportingText?.let { text ->
+                    Text(
+                        text,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                 }
                 if (item.domain == MediaDomain.WORKS) {
                     item.authors.takeIf { it.isNotEmpty() }?.let { authors ->
@@ -466,6 +488,11 @@ fun MediaKind.label(): String = when (this) {
     MediaKind.PHOTO -> "照片"
     MediaKind.PHOTO_VIDEO -> "相册视频"
     MediaKind.LIVE_PHOTO -> "实况照片"
+}
+
+fun MediaItem.typeLabel(): String = when {
+    kind == MediaKind.IMAGE_SET && domain == MediaDomain.CLASSIFIED -> "图集"
+    else -> kind.label()
 }
 
 private fun MediaKind.icon(): ImageVector = when (this) {

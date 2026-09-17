@@ -285,9 +285,13 @@ class GalleryRepository(context: Context) {
                     relativePath = candidate.relativePath,
                     uri = candidate.uri,
                     kind = candidate.kind,
-                    // Pre-v3 local rows defaulted to CLASSIFIED. Trust the current scan unless a
-                    // portable v3 catalog explicitly records the user's choice.
-                    domain = metadata?.domain ?: candidate.domain,
+                    // Automatic classifications may evolve as recognizers improve. Only a
+                    // portable manual decision is authoritative over the current scan.
+                    domain = if (metadata != null && isManual(MetadataField.DOMAIN)) {
+                        metadata.domain ?: candidate.domain
+                    } else {
+                        candidate.domain
+                    },
                     sourceKind = candidate.sourceKind,
                     displayTitle = when {
                         metadata != null && isManual(MetadataField.DISPLAY_TITLE) -> metadata.displayTitle

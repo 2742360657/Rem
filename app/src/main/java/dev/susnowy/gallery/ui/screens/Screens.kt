@@ -93,6 +93,7 @@ import dev.susnowy.gallery.organizer.OrganizerTemplate
 import dev.susnowy.gallery.ui.AppScreen
 import dev.susnowy.gallery.ui.GalleryUiState
 import dev.susnowy.gallery.ui.GalleryViewModel
+import dev.susnowy.gallery.ui.MixedMediaPresentation
 import dev.susnowy.gallery.ui.SeriesPresentation
 import dev.susnowy.gallery.ui.SeriesShelf
 import dev.susnowy.gallery.ui.components.MediaCard
@@ -708,21 +709,31 @@ private fun InboxScreen(
     }
 }
 
-private enum class ClassifiedType(val label: String) { IMAGES("图片"), VIDEOS("视频") }
+private enum class ClassifiedType(val label: String) { GROUPS("分组"), IMAGES("图片"), VIDEOS("视频") }
 
 @Composable
 private fun ClassifiedLibraryScreen(items: List<MediaItem>, viewModel: GalleryViewModel) {
     val classified = remember(items) { items.filter { it.domain == MediaDomain.CLASSIFIED } }
+    val groups = remember(classified) { MixedMediaPresentation.groups(classified) }
+    val groupsByPrimaryId = remember(groups) { groups.associateBy { it.primary.id } }
+    val groupedVideoIds = remember(groups) {
+        groups.flatMapTo(mutableSetOf()) { group -> group.videos.map(MediaItem::id) }
+    }
     val imageCount = classified.count { it.kind == MediaKind.IMAGE }
-    val videoCount = classified.count { it.kind == MediaKind.VIDEO }
-    var type by rememberSaveable { mutableStateOf(ClassifiedType.IMAGES) }
+    val videoCount = classified.count { it.kind == MediaKind.VIDEO && it.id !in groupedVideoIds }
+    var type by rememberSaveable { mutableStateOf(ClassifiedType.GROUPS) }
+    var groupPath by rememberSaveable { mutableStateOf<String?>(null) }
     var imagePath by rememberSaveable { mutableStateOf<String?>(null) }
     var videoPath by rememberSaveable { mutableStateOf<String?>(null) }
-    val shown = remember(classified, type) {
+    LaunchedEffect(groups.isEmpty()) {
+        if (groups.isEmpty() && type == ClassifiedType.GROUPS) type = ClassifiedType.IMAGES
+    }
+    val shown = remember(classified, groups, groupedVideoIds, type) {
         classified.filter {
             when (type) {
+                ClassifiedType.GROUPS -> it.id in groupsByPrimaryId
                 ClassifiedType.IMAGES -> it.kind == MediaKind.IMAGE
-                ClassifiedType.VIDEOS -> it.kind == MediaKind.VIDEO
+                ClassifiedType.VIDEOS -> it.kind == MediaKind.VIDEO && it.id !in groupedVideoIds
             }
         }
     }
@@ -731,6 +742,12 @@ private fun ClassifiedLibraryScreen(items: List<MediaItem>, viewModel: GalleryVi
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
         ) {
+            FilterChip(
+                selected = type == ClassifiedType.GROUPS,
+                onClick = { type = ClassifiedType.GROUPS },
+                label = { Text("分组 ${groups.size}") },
+                enabled = groups.isNotEmpty(),
+            )
             FilterChip(
                 selected = type == ClassifiedType.IMAGES,
                 onClick = { type = ClassifiedType.IMAGES },
@@ -745,16 +762,35 @@ private fun ClassifiedLibraryScreen(items: List<MediaItem>, viewModel: GalleryVi
         ClassifiedMediaScreen(
             items = shown,
             viewModel = viewModel,
-            rootDirectory = if (type == ClassifiedType.IMAGES) "Images" else "Videos",
-            emptyText = if (type == ClassifiedType.IMAGES) {
-                "这里按真实目录显示图片，不添加作者或标签层级"
-            } else {
-                "这里按真实目录显示普通视频；动漫和影视作品在“漫画 / 动漫”中"
+            rootDirectory = when (type) {
+                ClassifiedType.GROUPS -> "Mixed"
+                ClassifiedType.IMAGES -> "Images"
+                ClassifiedType.VIDEOS -> "Videos"
             },
-            currentPath = if (type == ClassifiedType.IMAGES) imagePath else videoPath,
+            emptyText = when (type) {
+                ClassifiedType.GROUPS -> "同一目录中的图片集与视频会合并为一个浏览入口"
+                ClassifiedType.IMAGES -> "这里按真实目录显示图片，不添加作者或标签层级"
+                ClassifiedType.VIDEOS -> "这里按真实目录显示普通视频；动漫和影视作品在“漫画 / 动漫”中"
+            },
+            currentPath = when (type) {
+                ClassifiedType.GROUPS -> groupPath
+                ClassifiedType.IMAGES -> imagePath
+                ClassifiedType.VIDEOS -> videoPath
+            },
             onPathChange = { path ->
-                if (type == ClassifiedType.IMAGES) imagePath = path else videoPath = path
+                when (type) {
+                    ClassifiedType.GROUPS -> groupPath = path
+                    ClassifiedType.IMAGES -> imagePath = path
+                    ClassifiedType.VIDEOS -> videoPath = path
+                }
             },
+            browsingItemsFor = { item, visible -> groupsByPrimaryId[item.id]?.members ?: visible },
+            supportingText = { item ->
+                groupsByPrimaryId[item.id]?.let { group ->
+                    "${item.pageCount ?: 0} 张图片 · ${group.videos.size} 个视频"
+                }
+            },
+            compact = type != ClassifiedType.GROUPS,
             modifier = Modifier.weight(1f),
         )
     }
@@ -1071,6 +1107,9 @@ private fun ClassifiedMediaScreen(
     modifier: Modifier = Modifier,
     currentPath: String? = null,
     onPathChange: (String?) -> Unit = {},
+    browsingItemsFor: (MediaItem, List<MediaItem>) -> List<MediaItem> = { _, visible -> visible },
+    supportingText: (MediaItem) -> String? = { null },
+    compact: Boolean = true,
 ) {
     var showTools by rememberSaveable(rootDirectory) { mutableStateOf(false) }
     val classifications = remember(items, rootDirectory) {
@@ -1163,9 +1202,10 @@ private fun ClassifiedMediaScreen(
             MediaGrid(
                 items = visibleItems,
                 viewModel = viewModel,
-                onOpen = { viewModel.open(it, visibleItems) },
+                onOpen = { item -> viewModel.open(item, browsingItemsFor(item, visibleItems)) },
                 modifier = Modifier.weight(1f),
-                compact = true,
+                compact = compact,
+                supportingText = supportingText,
             )
         }
     }

@@ -271,6 +271,7 @@ class LibraryScanner {
             }
             val directory = storage.entry(path)
             if (directory != null) {
+                val imageSetDomain = imageSetDomain(path, videos.size)
                 val totalSize = files.sumOf(StorageEntry::size)
                 val modifiedAt = maxOf(
                     directory.lastModified,
@@ -311,7 +312,7 @@ class LibraryScanner {
                     relativePath = path,
                     uri = directory.uri,
                     kind = MediaKind.IMAGE_SET,
-                    domain = MediaDomain.WORKS,
+                    domain = imageSetDomain,
                     sourceKind = SourceKind.DIRECTORY,
                     suggestedTitle = path.substringAfterLast('/'),
                     mimeType = null,
@@ -331,7 +332,7 @@ class LibraryScanner {
                     val hash = contentHash(storage, video, prior, depth, statistics)
                     output += video.toCandidate(
                         kind = MediaKind.VIDEO,
-                        domain = MediaDomain.WORKS,
+                        domain = imageSetDomain,
                         sourceKind = SourceKind.FILE,
                         contentHash = hash.value,
                         recognizedMetadata = parsed.copy(
@@ -744,6 +745,9 @@ class LibraryScanner {
             "anime", "animation", "animations", "works", "movies", "movie", "films", "film",
             "series", "shows", "tv", "动漫", "动画", "番剧", "影视", "电影", "剧集", "作品",
         )
+        private val WORK_IMAGE_SET_ROOTS = setOf(
+            "comics", "comic", "imagesets", "image-sets", "works", "manga", "漫画", "作品",
+        )
         private val EXIF_DATE = DateTimeFormatter.ofPattern("yyyy:MM:dd HH:mm:ss", Locale.ROOT)
         private val VIDEO_DATE = DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmssX", Locale.ROOT)
 
@@ -755,6 +759,13 @@ class LibraryScanner {
             if (path.isBlank() || imageCount < MIN_IMAGE_SET_PAGES || hasChildDirectories) return false
             val root = path.replace('\\', '/').trim('/').substringBefore('/')
             return root.lowercase(Locale.ROOT) !in setOf("photos", "images", "videos")
+        }
+
+        /** Mixed photo/video leaves default to the folder-browsing surface, not comics. */
+        internal fun imageSetDomain(path: String, videoCount: Int): MediaDomain {
+            if (videoCount == 0) return MediaDomain.WORKS
+            val root = path.replace('\\', '/').trim('/').substringBefore('/').lowercase(Locale.ROOT)
+            return if (root in WORK_IMAGE_SET_ROOTS) MediaDomain.WORKS else MediaDomain.CLASSIFIED
         }
     }
 }

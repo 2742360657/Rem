@@ -73,8 +73,8 @@ The sample proves that the Library contains app-generated metadata, manually arr
 
 ## Known gaps in the current implementation
 
-- A mixed leaf directory is emitted as one `IMAGE_SET` plus independent video items. The shared parent/series is not an explicit logical relationship.
-- `IMAGE_SET` currently implies `WORKS`, while directories below `Images/` are deliberately prevented from becoming image sets. This blocks photo-set grouping in 图片 / 视频.
+- Mixed leaf directories now have a derived 图片 / 视频 group, but the relationship is inferred from direct physical children and is not yet a portable, manually editable Group.
+- Pure image-only leaf directories still default to `WORKS` outside the explicit `Images/` root. Moving arbitrary photo sets into 图片 / 视频 still needs a portable/manual Group decision instead of more folder heuristics.
 - `SeriesRef` is embedded in each item. There is no portable series membership document, no explicit group membership, and no edition relationship.
 - Discovery rows are currently rebuildable device-local evidence only. There is not yet a portable user decision for “ignore”, “handled”, or a manually chosen classification, so such decisions would be lost after rebuilding the index.
 - Automatic hashes stop above 64 MiB, and directory fingerprints describe structure rather than byte-identical pages. Current duplicate detection cannot merge two image-set editions page by page.
@@ -91,6 +91,7 @@ The sample proves that the Library contains app-generated metadata, manually arr
 - Unsupported user-visible files and ambiguous directory structures are indexed separately and shown under Inbox's “其他待判断”. Known Rem internals and sidecars are filtered explicitly. These discovery rows do not enter the portable catalog.
 - Works can be browsed as a series shelf or flat item grid. The shelf groups legacy same-title references for display, keeps unassigned works visible, and orders entries by manual sort index then season/episode or volume/chapter. The editor preserves and edits every existing series position field.
 - Large scans now publish a byte-free inventory first, then checkpoint hashes, archive inspection, ComicInfo, and capture metadata in a device-local v6 queue. Completed batches resume after process restart; the queue is disposable and never becomes portable truth.
+- A directory-backed image set and its direct child videos can be shown as one derived 图片 / 视频 group. Mixed leaves outside explicit work roots default to `classified`; an existing manual domain remains authoritative. This presentation neither moves files nor creates a portable relationship.
 
 ## Preferred implementation path
 

@@ -113,9 +113,10 @@ import dev.susnowy.gallery.model.SeriesRef
 import dev.susnowy.gallery.model.SourceKind
 import dev.susnowy.gallery.ui.GalleryViewModel
 import dev.susnowy.gallery.ui.components.MetadataEditor
+import dev.susnowy.gallery.ui.components.MediaGrid
 import dev.susnowy.gallery.ui.components.MediaThumbnail
 import dev.susnowy.gallery.ui.components.RightSidePanel
-import dev.susnowy.gallery.ui.components.label
+import dev.susnowy.gallery.ui.components.typeLabel
 import java.text.DateFormat
 import java.util.Date
 import kotlinx.coroutines.flow.debounce
@@ -136,6 +137,27 @@ fun MediaDetail(
     viewModel: GalleryViewModel,
     onBack: () -> Unit,
 ) {
+    val mixedMembers = remember(item.id, browsingItems) {
+        if (item.kind != MediaKind.IMAGE_SET || item.sourceKind != SourceKind.DIRECTORY) {
+            emptyList()
+        } else {
+            browsingItems.filter { candidate ->
+                candidate.libraryId == item.libraryId &&
+                    (candidate.id == item.id ||
+                        candidate.kind == MediaKind.VIDEO &&
+                        candidate.relativePath.substringBeforeLast('/', "") == item.relativePath)
+            }.distinctBy(MediaItem::id)
+        }
+    }
+    if (mixedMembers.size > 1) {
+        MixedMediaGroupDetail(
+            primary = item,
+            members = mixedMembers,
+            viewModel = viewModel,
+            onBack = onBack,
+        )
+        return
+    }
     if (item.kind == MediaKind.IMAGE_SET) {
         ImageSetWorkDetail(item = item, viewModel = viewModel, onBack = onBack)
         return
@@ -279,6 +301,63 @@ fun MediaDetail(
             },
             dismissButton = { TextButton(onClick = { showDerivePage = false }) { Text("取消") } },
         )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun MixedMediaGroupDetail(
+    primary: MediaItem,
+    members: List<MediaItem>,
+    viewModel: GalleryViewModel,
+    onBack: () -> Unit,
+) {
+    var openedId by rememberSaveable(primary.id) { mutableStateOf<String?>(null) }
+    val opened = members.firstOrNull { it.id == openedId }
+    if (opened != null) {
+        MediaDetail(
+            item = opened,
+            browsingItems = listOf(opened),
+            viewModel = viewModel,
+            onBack = { openedId = null },
+        )
+        return
+    }
+    BackHandler(onBack = onBack)
+    val videoCount = members.count { it.kind == MediaKind.VIDEO }
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text(primary.displayTitle, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回")
+                    }
+                },
+            )
+        },
+    ) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding),
+        ) {
+            Text(
+                "同一目录 · ${primary.pageCount ?: 0} 张图片 · $videoCount 个视频",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+            )
+            MediaGrid(
+                items = members,
+                viewModel = viewModel,
+                onOpen = { openedId = it.id },
+                modifier = Modifier.weight(1f),
+                supportingText = { member ->
+                    if (member.id == primary.id) "浏览全部图片" else "播放组内视频"
+                },
+            )
+        }
     }
 }
 
@@ -1321,7 +1400,7 @@ private fun MetadataSummary(item: MediaItem) {
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp, vertical = 10.dp),
         ) {
-            Text("${item.kind.label()} · ${item.domain.displayLabel()}", style = MaterialTheme.typography.labelMedium)
+            Text("${item.typeLabel()} · ${item.domain.displayLabel()}", style = MaterialTheme.typography.labelMedium)
             Text("位置：${item.relativePath}", style = MaterialTheme.typography.bodySmall)
             val time = item.capturedAt ?: item.modifiedAt
             if (time > 0) {

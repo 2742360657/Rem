@@ -1,6 +1,7 @@
 package dev.susnowy.gallery.scanner
 
 import dev.susnowy.gallery.storage.StorageEntry
+import dev.susnowy.gallery.model.MediaDomain
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -118,5 +119,12 @@ class ScanSnapshotReuseTest {
         )
 
         assertTrue(failed.protectsPreviouslyIndexed("Images/a.jpg"))
+    }
+
+    @Test
+    fun mixedImageVideoLeafDefaultsToClassifiedMedia() {
+        assertEquals(MediaDomain.WORKS, LibraryScanner.imageSetDomain("creator/work", videoCount = 0))
+        assertEquals(MediaDomain.CLASSIFIED, LibraryScanner.imageSetDomain("creator/work", videoCount = 1))
+        assertEquals(MediaDomain.WORKS, LibraryScanner.imageSetDomain("Comics/work", videoCount = 1))
     }
 }
