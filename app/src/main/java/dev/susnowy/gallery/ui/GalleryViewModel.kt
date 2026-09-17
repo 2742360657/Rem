@@ -24,6 +24,7 @@ import dev.susnowy.gallery.model.InboxDisposition
 import dev.susnowy.gallery.model.MediaGroup
 import dev.susnowy.gallery.model.MediaItem
 import dev.susnowy.gallery.model.MediaSeries
+import dev.susnowy.gallery.model.MembershipRules
 import dev.susnowy.gallery.model.MediaDomain
 import dev.susnowy.gallery.model.MediaKind
 import dev.susnowy.gallery.model.PlaybackProgress
@@ -444,6 +445,41 @@ class GalleryViewModel(
                 )
             }.onSuccess { message.value = "分组已保存" }
                 .onFailure(::showError)
+        }
+    }
+
+    /** Adds the selected Works to an existing Group in one portable write. */
+    fun addToGroup(group: MediaGroup, items: List<MediaItem>) {
+        if (items.isEmpty()) return
+        val members = MembershipRules.appendMembers(group.memberIds, items.map(MediaItem::id))
+        val already = MembershipRules.alreadyMembers(group.memberIds, items.map(MediaItem::id))
+        if (members.size == group.memberIds.size) {
+            message.value = "选中的 ${items.size} 项都已经在这个分组里"
+            return
+        }
+        updateGroup(group, memberIds = members, coverWorkId = group.coverWorkId ?: members.first())
+        if (already.isNotEmpty()) {
+            message.value = "已加入 ${items.size - already.size} 项；${already.size} 项原本就在分组中"
+        }
+    }
+
+    /**
+     * Adds the selected Works to an existing Series.
+     *
+     * Works already numbered in another Series are reported instead of being moved, because
+     * a Work belongs to one Series and that choice has to stay explicit.
+     */
+    fun addToSeries(series: MediaSeries, items: List<MediaItem>) {
+        if (items.isEmpty()) return
+        val (joinable, skipped) = MembershipRules.seriesJoinable(series.id, items)
+        if (joinable.isEmpty()) {
+            message.value = "选中的作品都已属于其他系列；请先在各自的作品信息里移出系列"
+            return
+        }
+        val members = MembershipRules.appendMembers(series.memberIds, joinable.map(MediaItem::id))
+        saveSeries(series, title = series.title, memberIds = members)
+        if (skipped.isNotEmpty()) {
+            message.value = "已加入 ${joinable.size} 部；${skipped.size} 部属于其他系列，未改动"
         }
     }
 

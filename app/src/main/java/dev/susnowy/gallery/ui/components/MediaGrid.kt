@@ -18,6 +18,8 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Collections
+import androidx.compose.material.icons.rounded.Compare
+import androidx.compose.material.icons.rounded.FormatListNumbered
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Edit
@@ -43,6 +45,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Alignment
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -77,6 +80,12 @@ fun MediaGrid(
     var actionItem by remember { mutableStateOf<MediaItem?>(null) }
     var editItem by remember { mutableStateOf<MediaItem?>(null) }
     var trashItem by remember { mutableStateOf<MediaItem?>(null) }
+    var groupPickerFor by remember { mutableStateOf<MediaItem?>(null) }
+    var seriesPickerFor by remember { mutableStateOf<MediaItem?>(null) }
+    var compareItem by remember { mutableStateOf<MediaItem?>(null) }
+    // Groups and Series are needed to offer "add to …" straight from a card; the state is
+    // collected once per grid, not per card.
+    val libraryState by viewModel.uiState.collectAsStateWithLifecycle()
     if (items.isEmpty()) {
         Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Text("这里还没有内容", color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -206,6 +215,42 @@ fun MediaGrid(
                     Text(" 复制到分类图片")
                 }
             }
+            if (item.kind in setOf(MediaKind.IMAGE_SET, MediaKind.VIDEO, MediaKind.IMAGE)) {
+                FilledTonalButton(
+                    onClick = {
+                        actionItem = null
+                        groupPickerFor = item
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Icon(Icons.Rounded.Collections, contentDescription = null)
+                    Text(" 加入分组…")
+                }
+            }
+            if (item.kind in setOf(MediaKind.IMAGE_SET, MediaKind.VIDEO)) {
+                FilledTonalButton(
+                    onClick = {
+                        actionItem = null
+                        seriesPickerFor = item
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Icon(Icons.Rounded.FormatListNumbered, contentDescription = null)
+                    Text(" 加入系列…")
+                }
+            }
+            if (item.kind == MediaKind.IMAGE_SET) {
+                FilledTonalButton(
+                    onClick = {
+                        actionItem = null
+                        compareItem = item
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Icon(Icons.Rounded.Compare, contentDescription = null)
+                    Text(" 比较版本…")
+                }
+            }
             if (selectionEnabled) {
                 FilledTonalButton(
                     onClick = {
@@ -261,6 +306,57 @@ fun MediaGrid(
                 }) { Text("移入回收站") }
             },
             dismissButton = { TextButton(onClick = { trashItem = null }) { Text("取消") } },
+        )
+    }
+    groupPickerFor?.let { item ->
+        TargetPickerDialog(
+            title = "把《${item.displayTitle}》加入分组",
+            emptyText = "还没有分组；可以在“图片 / 视频 → 分组”里新建",
+            options = libraryState.groups.map { group ->
+                TargetOption(
+                    id = group.id,
+                    title = group.title,
+                    subtitle = "${group.memberIds.size} 个成员",
+                )
+            },
+            onDismiss = { groupPickerFor = null },
+            onPick = { option ->
+                groupPickerFor = null
+                libraryState.groups.firstOrNull { it.id == option.id }
+                    ?.let { group -> viewModel.addToGroup(group, listOf(item)) }
+            },
+        )
+    }
+    seriesPickerFor?.let { item ->
+        TargetPickerDialog(
+            title = "把《${item.displayTitle}》加入系列",
+            emptyText = "还没有系列；可以在作品信息里填写系列标题",
+            options = libraryState.series.map { series ->
+                TargetOption(
+                    id = series.id,
+                    title = series.title,
+                    subtitle = "${series.memberIds.size} 部作品",
+                )
+            },
+            onDismiss = { seriesPickerFor = null },
+            onPick = { option ->
+                seriesPickerFor = null
+                libraryState.series.firstOrNull { it.id == option.id }
+                    ?.let { series -> viewModel.addToSeries(series, listOf(item)) }
+            },
+        )
+    }
+    compareItem?.let { item ->
+        EditionCompareDialog(
+            left = item,
+            candidates = libraryState.allMedia.filter { candidate ->
+                candidate.id != item.id &&
+                    candidate.kind == MediaKind.IMAGE_SET &&
+                    !candidate.trashed &&
+                    !candidate.inInbox
+            },
+            viewModel = viewModel,
+            onDismiss = { compareItem = null },
         )
     }
 }

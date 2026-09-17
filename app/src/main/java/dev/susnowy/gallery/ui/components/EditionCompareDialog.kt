@@ -1,4 +1,4 @@
-package dev.susnowy.gallery.ui.screens
+package dev.susnowy.gallery.ui.components
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement

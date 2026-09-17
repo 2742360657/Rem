@@ -115,6 +115,7 @@ import dev.susnowy.gallery.model.SourceKind
 import dev.susnowy.gallery.ui.GalleryViewModel
 import dev.susnowy.gallery.ui.components.MetadataEditor
 import dev.susnowy.gallery.ui.components.MediaGrid
+import dev.susnowy.gallery.ui.components.EditionCompareDialog
 import dev.susnowy.gallery.ui.components.MediaThumbnail
 import dev.susnowy.gallery.ui.components.RightSidePanel
 import dev.susnowy.gallery.ui.components.typeLabel
