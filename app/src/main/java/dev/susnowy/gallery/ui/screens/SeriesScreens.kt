@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -51,6 +52,9 @@ import dev.susnowy.gallery.model.MediaItem
 import dev.susnowy.gallery.model.MediaSeries
 import dev.susnowy.gallery.ui.GalleryViewModel
 import dev.susnowy.gallery.ui.components.MediaThumbnail
+import dev.susnowy.gallery.ui.components.REORDER_ROW_HEIGHT
+import dev.susnowy.gallery.ui.components.ReorderableRow
+import dev.susnowy.gallery.ui.components.rememberDragReorderState
 import dev.susnowy.gallery.ui.components.WorkPickerDialog
 
 /**
@@ -76,6 +80,11 @@ fun SeriesEditor(
     var addOpen by remember { mutableStateOf(false) }
     var deleteOpen by remember { mutableStateOf(false) }
     var relocateIndex by remember { mutableStateOf<Int?>(null) }
+    val dragState = rememberDragReorderState(REORDER_ROW_HEIGHT)
+    dragState.itemCount = memberIds.size
+    fun move(from: Int, to: Int) {
+        memberIds = memberIds.toMutableList().apply { add(to, removeAt(from)) }
+    }
     val dirty = memberIds != series.memberIds || clearPositions
 
     fun save() {
@@ -165,60 +174,43 @@ fun SeriesEditor(
             ) {
                 itemsIndexed(memberIds, key = { _, id -> id }) { index, workId ->
                     val item = worksById[workId]
-                    ListItem(
-                        headlineContent = {
+                    ReorderableRow(
+                        index = index,
+                        state = dragState,
+                        onMove = ::move,
+                        leading = { if (item != null) MediaThumbnail(item, viewModel, Modifier.fillMaxSize()) },
+                        onClick = {
+                            item?.let { viewModel.open(it, memberIds.mapNotNull(worksById::get)) }
+                        },
+                        headline = {
                             Text(
                                 item?.displayTitle ?: workId,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                             )
                         },
-                        supportingContent = {
+                        supporting = {
                             Text(
                                 buildString {
                                     append("${index + 1}. ")
                                     append(series.positionLabel(workId) ?: "未编号")
-                                    item?.let { append(" · ${it.relativePath}") }
                                 },
-                                maxLines = 2,
+                                maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                                 style = MaterialTheme.typography.bodySmall,
                             )
                         },
-                        leadingContent = {
-                            if (item != null) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(48.dp)
-                                        .clip(RoundedCornerShape(8.dp)),
-                                ) {
-                                    MediaThumbnail(
-                                        item = item,
-                                        viewModel = viewModel,
-                                        modifier = Modifier.fillMaxSize(),
-                                    )
-                                }
-                            }
-                        },
-                        trailingContent = {
+                        trailing = {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 IconButton(
                                     enabled = index > 0,
-                                    onClick = {
-                                        memberIds = memberIds.toMutableList().apply {
-                                            add(index - 1, removeAt(index))
-                                        }
-                                    },
+                                    onClick = { move(index, index - 1) },
                                 ) {
                                     Icon(Icons.Rounded.ArrowUpward, contentDescription = "上移")
                                 }
                                 IconButton(
                                     enabled = index < memberIds.lastIndex,
-                                    onClick = {
-                                        memberIds = memberIds.toMutableList().apply {
-                                            add(index + 1, removeAt(index))
-                                        }
-                                    },
+                                    onClick = { move(index, index + 1) },
                                 ) {
                                     Icon(Icons.Rounded.ArrowDownward, contentDescription = "下移")
                                 }
@@ -232,9 +224,6 @@ fun SeriesEditor(
                                     Icon(Icons.Rounded.Close, contentDescription = "移出系列")
                                 }
                             }
-                        },
-                        modifier = Modifier.clickable {
-                            item?.let { viewModel.open(it, memberIds.mapNotNull(worksById::get)) }
                         },
                     )
                     HorizontalDivider()

@@ -57,6 +57,9 @@ import dev.susnowy.gallery.model.derivedGroupId
 import dev.susnowy.gallery.ui.GalleryViewModel
 import dev.susnowy.gallery.ui.MixedMediaPresentation
 import dev.susnowy.gallery.ui.components.MediaThumbnail
+import dev.susnowy.gallery.ui.components.REORDER_ROW_HEIGHT
+import dev.susnowy.gallery.ui.components.ReorderableRow
+import dev.susnowy.gallery.ui.components.rememberDragReorderState
 import dev.susnowy.gallery.ui.components.WorkPickerDialog
 
 /**
@@ -298,6 +301,11 @@ fun GroupDetail(
     var renameOpen by remember { mutableStateOf(false) }
     var deleteOpen by remember { mutableStateOf(false) }
     val dirty = memberIds != group.memberIds || coverWorkId != group.coverWorkId
+    val dragState = rememberDragReorderState(REORDER_ROW_HEIGHT)
+    dragState.itemCount = memberIds.size
+    fun move(from: Int, to: Int) {
+        memberIds = memberIds.toMutableList().apply { add(to, removeAt(from)) }
+    }
 
     BackHandler(enabled = true) {
         if (dirty) viewModel.updateGroup(group, memberIds, coverWorkId = coverWorkId)
@@ -358,60 +366,44 @@ fun GroupDetail(
             ) {
                 itemsIndexed(memberIds, key = { _, id -> id }) { index, memberId ->
                     val item = itemsById[memberId]
-                    ListItem(
-                        headlineContent = {
+                    ReorderableRow(
+                        index = index,
+                        state = dragState,
+                        onMove = ::move,
+                        leading = { if (item != null) MediaThumbnail(item, viewModel, Modifier.fillMaxSize()) },
+                        onClick = {
+                            item?.let { viewModel.open(it, memberIds.mapNotNull(itemsById::get)) }
+                        },
+                        headline = {
                             Text(
                                 item?.displayTitle ?: memberId,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                             )
                         },
-                        supportingContent = {
+                        supporting = {
                             Text(
                                 buildString {
                                     append("${index + 1}. ")
                                     append(item?.relativePath ?: "成员不在当前索引中")
                                     if (memberId == coverWorkId) append(" · 当前封面")
                                 },
-                                maxLines = 2,
+                                maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                                 style = MaterialTheme.typography.bodySmall,
                             )
                         },
-                        leadingContent = {
-                            if (item != null) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(48.dp)
-                                        .clip(RoundedCornerShape(8.dp)),
-                                ) {
-                                    MediaThumbnail(
-                                        item = item,
-                                        viewModel = viewModel,
-                                        modifier = Modifier.fillMaxSize(),
-                                    )
-                                }
-                            }
-                        },
-                        trailingContent = {
+                        trailing = {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 IconButton(
                                     enabled = index > 0,
-                                    onClick = {
-                                        memberIds = memberIds.toMutableList().apply {
-                                            add(index - 1, removeAt(index))
-                                        }
-                                    },
+                                    onClick = { move(index, index - 1) },
                                 ) {
                                     Icon(Icons.Rounded.ArrowUpward, contentDescription = "上移")
                                 }
                                 IconButton(
                                     enabled = index < memberIds.lastIndex,
-                                    onClick = {
-                                        memberIds = memberIds.toMutableList().apply {
-                                            add(index + 1, removeAt(index))
-                                        }
-                                    },
+                                    onClick = { move(index, index + 1) },
                                 ) {
                                     Icon(Icons.Rounded.ArrowDownward, contentDescription = "下移")
                                 }
@@ -430,9 +422,6 @@ fun GroupDetail(
                                     Icon(Icons.Rounded.Close, contentDescription = "移出分组")
                                 }
                             }
-                        },
-                        modifier = Modifier.clickable {
-                            item?.let { viewModel.open(it, memberIds.mapNotNull(itemsById::get)) }
                         },
                     )
                     HorizontalDivider()
