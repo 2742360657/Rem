@@ -1,10 +1,12 @@
 package dev.susnowy.gallery.media
 
 import android.graphics.Bitmap
+import java.io.ByteArrayInputStream
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.util.LruCache
 import dev.susnowy.gallery.library.LibraryDocument
+import dev.susnowy.gallery.logging.RemLog
 import dev.susnowy.gallery.model.MediaItem
 import dev.susnowy.gallery.model.SourceKind
 import dev.susnowy.gallery.scanner.MediaClassifier
@@ -24,8 +26,14 @@ data class ImagePage(
 )
 
 class MediaContentService(
+    /**
+     * Required, not optional: an instance without the cache silently falls back to the
+     * streaming archive reader, which cannot open every ZIP layout (a stored entry with an
+     * extended data descriptor is one real example). Making it a constructor parameter is
+     * what keeps a second, cache-less instance from appearing somewhere else.
+     */
+    private val archives: ArchiveCache,
     archiveBitmapCacheBytes: Int = DEFAULT_ARCHIVE_BITMAP_CACHE_BYTES,
-    private val archives: ArchiveCache? = null,
 ) {
     private val archiveBitmapCache = object : LruCache<String, Bitmap>(archiveBitmapCacheBytes) {
         override fun sizeOf(key: String, value: Bitmap): Int = value.allocationByteCount
@@ -75,8 +83,22 @@ class MediaContentService(
         archiveDecodeMutex.withLock {
             archiveBitmapCache.get(cacheKey)?.let { return@withLock it }
             val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-            decodeArchiveEntry(archivePath, entryName, storage, bounds, item)
-            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return@withLock null
+            val readSucceeded = runCatching {
+                decodeArchiveEntry(archivePath, entryName, storage, bounds, item)
+            }.onFailure { error ->
+                RemLog.failure(TAG, "读取压缩包条目失败：$archivePath!$entryName", error)
+            }.isSuccess
+            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
+                // The UI can only say "cannot decode"; the log has to say why, otherwise a page
+                // that never renders cannot be diagnosed from a user report.
+                RemLog.info(
+                    TAG,
+                    "页面不可解码：$archivePath!$entryName" +
+                        "（bounds=${bounds.outWidth}x${bounds.outHeight}，" +
+                        "条目读取=${if (readSucceeded) "成功" else "失败"}）",
+                )
+                return@withLock null
+            }
             val options = BitmapFactory.Options().apply {
                 inSampleSize = calculateSampleSize(bounds.outWidth, bounds.outHeight, targetWidth, targetHeight)
                 inPreferredConfig = Bitmap.Config.RGB_565
@@ -98,7 +120,7 @@ class MediaContentService(
         val document = LibraryDocument(relativePath, relativePath.substringAfterLast('/'), false)
         if (shouldKeepAnimated(document, storage)) return@withContext null
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        storage.openInput(document).use { BitmapFactory.decodeStream(it, null, bounds) }
+        storage.openInput(document).buffered().use { BitmapFactory.decodeStream(it, null, bounds) }
         if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return@withContext null
         val pixels = bounds.outWidth.toLong() * bounds.outHeight.toLong()
         if (pixels <= OVERSIZED_IMAGE_PIXELS &&
@@ -110,7 +132,7 @@ class MediaContentService(
             inSampleSize = calculateMemorySafeSampleSize(bounds.outWidth, bounds.outHeight)
             inPreferredConfig = Bitmap.Config.ARGB_8888
         }
-        storage.openInput(document).use { BitmapFactory.decodeStream(it, null, options) }
+        storage.openInput(document).buffered().use { BitmapFactory.decodeStream(it, null, options) }
     }
 
     /**
@@ -118,7 +140,7 @@ class MediaContentService(
      * because a stream cannot seek and rejects some real-world ZIP layouts.
      */
     private suspend fun archiveEntryNames(item: MediaItem, storage: DocumentTreeStorage): List<String> {
-        archives?.open(item, storage)?.use { zip ->
+        archives.open(item, storage)?.use { zip ->
             return zip.entries().asSequence()
                 .filter { !it.isDirectory && MediaClassifier.isImage(it.name, null) }
                 .map { it.name }
@@ -150,7 +172,7 @@ class MediaContentService(
         val entry = if (owner == null) runCatching { storage.entry(archivePath) }.getOrNull() else null
         val libraryId = item?.libraryId
         if (libraryId != null) {
-            archives?.open(
+            archives.open(
                 libraryId = libraryId,
                 relativePath = archivePath,
                 size = owner?.size ?: entry?.size ?: 0L,
@@ -158,7 +180,11 @@ class MediaContentService(
                 storage = storage,
             )?.use { zip ->
                 val zipEntry = zip.getEntry(entryName) ?: return null
-                return zip.getInputStream(zipEntry).use { BitmapFactory.decodeStream(it, null, options) }
+                // ZipFile entry streams are not markable and BitmapFactory's bounds probe
+                // rewinds the stream, so it must be wrapped before decoding.
+                return zip.getInputStream(zipEntry).buffered().use {
+                    BitmapFactory.decodeStream(it, null, options)
+                }
             }
         }
         val document = LibraryDocument(archivePath, archivePath.substringAfterLast('/'), false)
@@ -167,7 +193,15 @@ class MediaContentService(
                 while (true) {
                     val entry = zip.nextEntry ?: return@use null
                     if (!entry.isDirectory && entry.name == entryName) {
-                        return@use BitmapFactory.decodeStream(zip, null, options)
+                        // The fallback path cannot rewind the archive stream either, so the
+                        // entry is read once into memory (a page is small) and decoded from a
+                        // markable stream.
+                        val bytes = zip.readBytes()
+                        return@use BitmapFactory.decodeStream(
+                            ByteArrayInputStream(bytes),
+                            null,
+                            options,
+                        )
                     }
                     zip.closeEntry()
                 }
@@ -226,6 +260,7 @@ class MediaContentService(
     }
 
     companion object {
+        private const val TAG = "MediaContentService"
         private const val DEFAULT_ARCHIVE_BITMAP_CACHE_BYTES = 64 * 1024 * 1024
         private const val MAX_DECODED_PIXELS = 8_000_000L
         private const val MAX_DECODED_DIMENSION = 12_000

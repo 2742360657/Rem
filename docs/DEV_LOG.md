@@ -10,6 +10,42 @@
 
 ---
 
+## 2026-09-18 · 修复：漫画（含数据描述符的压缩包）在阅读器里无法解码
+
+**范围**：`media`、`data`、`ui`；便携格式与媒体不变
+
+### 现场
+
+用户在真机上打开“爱神巧克力”系列的 CBZ 时，阅读器每页都显示“此页无法解码”，等于整本打不开；而同一批文件在扫描阶段页数统计是正确的（3/1/1 页），所以缺陷只在**阅读解码**这一侧。我此前只在设备上验证过页数与 Inbox 卡片，没有真正翻开过一本 CBZ。
+
+### 根因
+
+上一轮把压缩包读取改成“复制到缓存后用 `ZipFile` 走中央目录”时，只把这份缓存注入到了**仓储**持有的 `MediaContentService`。但 `GalleryViewModel` 里还有一个自己 `new` 的 `MediaContentService()`（`OfflinePreviewStore` 里也有第三个），而阅读器的 `archiveBitmap` 走的正是 ViewModel 那个实例：
+
+- 没有缓存 → 只能走旧的流式回退路径；
+- 这类 CBZ 的条目是 STORED + 扩展数据描述符，`ZipInputStream` 会抛 `ZipException`；
+- 异常被吞掉，界面只剩一句“此页无法解码”。离线预览同样受这个“第三个实例”影响。
+
+### 措施
+
+- **让错误构造不可能发生**：`MediaContentService` 与 `PageManifestService` 的 `ArchiveCache` 改为必需构造参数（不再可空），`OfflinePreviewStore` 也接收同一份缓存；仓储是唯一构造点，把同一个实例注入三者。ViewModel 不再持有自己的服务，改为调用仓储的 `resolvePath` / `archiveBitmap` / `oversizedBitmap`。
+- 顺带修掉两类流的可回退性问题：`ZipFile.getInputStream` 与 SAF 输入流都**不支持 mark/reset**，而 `BitmapFactory` 的 bounds 探测会回退流位置；现在所有解码前都包一层 `BufferedInputStream`（流式回退路径则把条目读进内存后用 `ByteArrayInputStream`）。
+- 解码失败不再是静默的：记录条目路径、bounds 结果与“条目读取是否抛异常”，UI 文案保持简洁，日志里有可定位的原因。
+
+### 验证
+
+- 在模拟器上**复现**：修复前打开同一本 CBZ，每页“此页无法解码”（截图存档）。
+- 修复后同一路径打开：连续两页正常渲染，日志中无“不可解码”记录。
+- `testDebugUnitTest`：**185 项通过，0 失败，0 跳过**；`lintDebug` 0 errors / 31 warnings；`assembleDebug`、`assembleDebugAndroidTest` 成功。
+- 真机/模拟器 `connectedDebugAndroidTest`：**8 项全部通过**（含 SAF、离线预览、数据库迁移）。
+
+### 剩余风险
+
+- 模拟器上用的是同一批文件，但存储介质不同；真机上尚未重新验证（手机已拔出）。
+- 这条路径缺少自动化回归：解码依赖 Android 的 `BitmapFactory`，普通 JVM 测试覆盖不到。计划补一个仪器测试，构造含 STORED+描述符条目的压缩包并断言首页可解码。
+
+---
+
 ## 2026-09-17 · 为 E 盘全量验收补齐可离线取证的度量
 
 **范围**：`storage`、`data`、`logging`；便携格式与媒体不变

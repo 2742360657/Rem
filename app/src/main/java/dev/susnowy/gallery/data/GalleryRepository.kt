@@ -2,6 +2,7 @@ package dev.susnowy.gallery.data
 
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
 import android.net.Uri
 import androidx.core.net.toUri
 import dev.susnowy.gallery.derive.DerivationService
@@ -113,7 +114,7 @@ class GalleryRepository(context: Context) {
     private val archives = ArchiveCache(File(appContext.cacheDir, "archives"))
     private val pageManifests = PageManifestService(archives = archives)
     private val content = MediaContentService(archives = archives)
-    private val offlinePreviews = OfflinePreviewStore(appContext)
+    private val offlinePreviews = OfflinePreviewStore(appContext, archives = archives)
     private val progressWriteMutex = Mutex()
 
     /** Serializes attach: a repeated folder-selection tap must not initialize twice. */
@@ -1473,6 +1474,34 @@ class GalleryRepository(context: Context) {
      * instead of one provider lookup per page, so a merged plan with hundreds of pages does
      * not turn into hundreds of round trips.
      */
+    /**
+     * Reader-side media access.
+     *
+     * These live on the repository because it owns the single [MediaContentService], the one
+     * wired to the archive cache. A second instance somewhere else silently loses that cache
+     * and falls back to the streaming reader, which cannot open every archive layout.
+     */
+    suspend fun resolvePath(item: MediaItem, path: String): String? =
+        content.resolveUri(path, storageFor(requireLibrary(item.libraryId)))
+
+    suspend fun archiveBitmap(
+        item: MediaItem,
+        entryName: String,
+        width: Int,
+        height: Int,
+        archivePath: String? = null,
+    ): Bitmap? = content.decodeArchivePage(
+        item = item,
+        entryName = entryName,
+        storage = storageFor(requireLibrary(item.libraryId)),
+        targetWidth = width,
+        targetHeight = height,
+        archivePath = archivePath ?: item.relativePath,
+    )
+
+    suspend fun oversizedBitmap(item: MediaItem, relativePath: String): Bitmap? =
+        content.decodeOversizedImage(relativePath, storageFor(requireLibrary(item.libraryId)))
+
     suspend fun pages(item: MediaItem): List<ImagePage> {
         val storage = storageFor(requireLibrary(item.libraryId))
         val plan = _editionPlans.value[planKey(item.libraryId, item.id)]

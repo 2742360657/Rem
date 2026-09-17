@@ -64,8 +64,8 @@ data class SourceManifest(
  * Nothing here writes to the Library or changes media.
  */
 class PageManifestService(
+    private val archives: ArchiveCache,
     private val cache: PageManifestCache = PageManifestCache(),
-    private val archives: ArchiveCache? = null,
 ) {
     suspend fun manifest(
         item: MediaItem,
@@ -145,7 +145,7 @@ class PageManifestService(
         // Central-directory access first: it reads the same bytes once, handles every ZIP
         // layout, and avoids the streaming reader's inability to see STORED entries that
         // carry an extended data descriptor.
-        archives?.open(item, storage)?.let { zip ->
+        archives.open(item, storage)?.let { zip ->
             return zip.use { readArchivePages(it, item.relativePath, hashPages, counter, onProgress) }
         }
         return storage.openInput(document).buffered().use { input ->

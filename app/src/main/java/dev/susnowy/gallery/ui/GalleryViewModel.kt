@@ -15,7 +15,6 @@ import dev.susnowy.gallery.importer.SystemMediaAccess
 import dev.susnowy.gallery.importer.SystemMediaEntry
 import dev.susnowy.gallery.importer.WorkImportKind
 import dev.susnowy.gallery.media.ImagePage
-import dev.susnowy.gallery.media.MediaContentService
 import dev.susnowy.gallery.media.OfflinePreviewStats
 import dev.susnowy.gallery.logging.RemLog
 import dev.susnowy.gallery.model.LibraryRegistration
@@ -101,7 +100,6 @@ class GalleryViewModel(
     private val savedStateHandle: SavedStateHandle,
 ) : AndroidViewModel(application) {
     private val repository: GalleryRepository = (application as GalleryApplication).repository
-    private val content = MediaContentService()
     private val preferences = application.getSharedPreferences("gallery-settings", 0)
     private val activeLibraryId = MutableStateFlow(preferences.getString(ACTIVE_LIBRARY_KEY, null))
     private val screen = MutableStateFlow(
@@ -716,7 +714,7 @@ class GalleryViewModel(
     suspend fun pages(item: MediaItem): List<ImagePage> = repository.pages(item)
 
     suspend fun resolvePath(item: MediaItem, path: String): String? =
-        content.resolveUri(path, repository.storage(item.libraryId))
+        repository.resolvePath(item, path)
 
     suspend fun archiveBitmap(
         item: MediaItem,
@@ -724,17 +722,10 @@ class GalleryViewModel(
         width: Int,
         height: Int,
         archivePath: String? = null,
-    ): Bitmap? = content.decodeArchivePage(
-        item = item,
-        entryName = entryName,
-        storage = repository.storage(item.libraryId),
-        targetWidth = width,
-        targetHeight = height,
-        archivePath = archivePath ?: item.relativePath,
-    )
+    ): Bitmap? = repository.archiveBitmap(item, entryName, width, height, archivePath)
 
     suspend fun oversizedBitmap(item: MediaItem, relativePath: String): Bitmap? =
-        content.decodeOversizedImage(relativePath, repository.storage(item.libraryId))
+        repository.oversizedBitmap(item, relativePath)
 
     suspend fun progress(item: MediaItem): PlaybackProgress? = repository.progress(item.id)
 

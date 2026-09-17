@@ -61,11 +61,12 @@ class OfflinePreviewStore(
     private val maxFiles: Int = MAX_FILES,
     private val edgePixels: Int = EDGE_PIXELS,
     rootDirectory: File? = null,
+    private val archives: ArchiveCache,
 ) {
     private val appContext = context.applicationContext
     private val root = rootDirectory ?: File(appContext.noBackupFilesDir, DIRECTORY)
     private val mutex = Mutex()
-    private val content = MediaContentService(8 * 1024 * 1024)
+    private val content = MediaContentService(archives, 8 * 1024 * 1024)
     private var cachedFiles = -1
     private var cachedBytes = -1L
 
@@ -156,7 +157,7 @@ class OfflinePreviewStore(
     private fun decodeImage(storage: DocumentTreeStorage, relativePath: String): Bitmap? {
         val document = LibraryDocument(relativePath, relativePath.substringAfterLast('/'), false)
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        storage.openInput(document).use { BitmapFactory.decodeStream(it, null, bounds) }
+        storage.openInput(document).buffered().use { BitmapFactory.decodeStream(it, null, bounds) }
         if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
         var sample = 1
         while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= edgePixels) sample *= 2
@@ -164,7 +165,9 @@ class OfflinePreviewStore(
             inSampleSize = sample
             inPreferredConfig = Bitmap.Config.RGB_565
         }
-        return storage.openInput(document).use { BitmapFactory.decodeStream(it, null, options) }
+        return storage.openInput(document).buffered().use {
+            BitmapFactory.decodeStream(it, null, options)
+        }
     }
 
     private fun videoFrame(item: MediaItem): Bitmap? {

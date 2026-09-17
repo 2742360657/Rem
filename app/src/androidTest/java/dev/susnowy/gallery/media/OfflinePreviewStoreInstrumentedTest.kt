@@ -82,6 +82,7 @@ class OfflinePreviewStoreInstrumentedTest {
             context = context,
             edgePixels = 128,
             rootDirectory = previewRoot,
+            archives = ArchiveCache(File(context.cacheDir, "archive-cache-test")),
         )
 
         val preview = store.getOrCreate(item, storage)
