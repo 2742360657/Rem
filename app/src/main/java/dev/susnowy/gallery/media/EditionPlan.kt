@@ -56,7 +56,6 @@ fun editionPlanPages(
                     relativePath = container,
                 )
             }
-            else -> return null
         }
     }
     return pages.takeIf(List<ImagePage>::isNotEmpty)

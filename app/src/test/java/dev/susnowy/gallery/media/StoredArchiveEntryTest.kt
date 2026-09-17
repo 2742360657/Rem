@@ -206,6 +206,21 @@ class StoredArchiveEntryTest {
         assertTrue(directory.isDirectory)
     }
 
+    @Test
+    fun cacheStatsAndClearReportOnlyDeletedFiles() = runBlocking {
+        val directory = File.createTempFile("archive-cache-stats", "").also(File::delete)
+        directory.mkdirs()
+        File(directory, "first.zip").writeBytes(ByteArray(7))
+        File(directory, "second.part").writeBytes(ByteArray(5))
+        val cache = ArchiveCache(directory)
+
+        assertEquals(ArchiveCacheStats(files = 2, bytes = 12), cache.stats())
+        assertEquals(ArchiveCacheStats(files = 2, bytes = 12), cache.clear())
+        assertEquals(ArchiveCacheStats(files = 0, bytes = 0), cache.stats())
+        directory.delete()
+        Unit
+    }
+
     private fun sha256(bytes: ByteArray): String =
         java.security.MessageDigest.getInstance("SHA-256").digest(bytes)
             .joinToString("") { "%02x".format(it) }

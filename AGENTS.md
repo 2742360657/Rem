@@ -17,8 +17,8 @@ Rem is an Android, local-first library for large image, comic, photo-set, and vi
 Current priorities:
 
 1. a clean portable logical model;
-2. non-destructive Edition comparison and merge;
-3. real-device testing with the large E-drive Library;
+2. a complete Series/reader flow and predictable viewing gestures;
+3. real-device testing with the large E-drive Library when the user chooses to run it;
 4. interaction polish inspired by EhViewer and MT Manager.
 
 The project is pre-release. Prefer the cleanest current design over compatibility layers for formats that were never stable. Schema v4 is current; v3 has one explicit backup-first conversion path only. Do not add support for older experiments unless the user explicitly asks.
@@ -102,26 +102,31 @@ A second, always-available test target is the phone's own storage (`/storage/emu
 - batch Series editing: atomic `upsertSeries`/`deleteSeries`, rename, batch add/remove, reorder (`sort_index`) and numbering reset, with `field_sources.series = manual` stamped on every touched Work so recognition cannot re-assign it; projected into a disposable `series` table (database v9);
 - card context actions for "add to Group", "add to Series" and Edition comparison, backed by the pure `MembershipRules` (order preserved, duplicates dropped, Works in another Series reported instead of moved);
 - `SelectableMediaGrid` gives the image/video and works lists the same selection mode and batch actions (add to Group/Series, favourite, append metadata, trash), with `BatchMetadataDialog` shared instead of duplicated.
+- recoverable portable-document commits: every previous revision uses a stable `.<name>.rem-backup` slot that the next read restores after a process stop, including Library identity inspection;
+- repository-wide serialization for catalog/state/Inbox read-modify-write operations, with scanning reloading portable truth after the long inventory before projecting it into SQLite;
+- an App-private `ArchiveCache` settings entry with size/clear, plus protection that keeps the archive currently being opened from evicting itself when it exceeds the nominal 512 MiB budget.
 
 ## Known gaps
 
 - Edition comparison and virtual merge are wired end to end (quick/deep comparison, report, page-plan Edition, `.gallery/imports/` evidence, reader follows the plan) and were walked through on a device on 2026-09-17; pixel-level (re-encode) matching is deliberately not implemented.
 - Initial inventory is still one atomic traversal; only enrichment is resumable.
 - `refreshFromDatabase()` still materializes the full media table.
+- Enrichment reads media outside the portable-write mutex and currently applies the `MediaItem` snapshot captured before that read. If the user edits the same item meanwhile, the completed batch can temporarily overwrite the newer SQLite projection (portable truth remains intact and a rescan restores it). Re-read the current row immediately before merging/applying an enrichment result; do not hold the mutex during media I/O.
 - Real E-drive scanning and mass video-preview behavior have not been validated with the latest build.
 - A few decoder formats can display through Coil but cannot generate the BitmapFactory-based offline JPEG.
-- The archive cache has no UI entry yet (size/clear), and the real-device feel of page-by-page archive reading after the change is still unverified.
+- Archive cache size/clear was walked through on the Android 16 emulator on 2026-09-18 (16-byte private fixture: 1 file/16 B -> clear -> 0/0 with snackbar). The real-device feel of long page-by-page archive reading is still unverified.
 - Device walkthroughs done on 2026-09-17 (Xiaomi 23127PN0CC, curated Library on phone storage): Inbox accept, derived-Group save, Group reorder, Series reorder with `manual` stamping, card actions, batch add-to-Series/add-to-Group, deep comparison, virtual merge, and reading the merged plan. Those runs found and fixed the missing `@Serializable` on projection types, the empty comparison candidate list and the unreachable merge button.
 - Also verified on a device (2026-09-17): Series drag handle, "clear numbering" (positions cleared, manual order kept) and rename.
 - Also verified on a device (2026-09-17, second pass): the Group editor's drag / set-cover / remove-member / rename (all in one save) and Series "remove member".
 - Verified on the emulator (Android 16 AVD, 2026-09-18): archive page decoding after the `ArchiveCache` ownership fix, and the zoom container through injected gestures (`pinch`, `doubleClick`, `swipe`).
-- Reader work still open: the comic reader (directory ImageSet + archive pages) still uses its own zoom implementation instead of `ui.components.Zoomable`, tap-to-hide controls and the "lock the current page while zoomed" behaviour are not wired, and a Series still reads as separate Works without a chapter list or automatic advance to the next chapter.
+- Reader work still open: the comic reader (directory ImageSet + archive pages) already toggles controls on tap and disables list scrolling while one page is zoomed, but still uses its own zoom implementation instead of the tested `ui.components.Zoomable`; it therefore lacks the shared double-tap and exact clamping behaviour. A Series has an ordered Work list but no automatic advance to the next chapter.
 - Still unverified on a device: drag handles on very long lists (auto-scroll while dragging is not implemented), and the full ~465 GiB E-drive inventory, which is the one step that needs the drive attached to the phone (the user has decided not to run it on the phone for now).
 
 ## Next implementation order
 
-1. Test the current build against the actual removable Library (device + real E-drive), then decide whether inventory checkpoints and database paging are required. This is the only remaining item that needs the user to attach the drive.
-2. Continue interaction polish: density options, back behaviour, drag auto-scroll for long member lists, archive-cache size/clear in settings.
+1. When the user is ready, test the current build against the actual removable Library (device + real E-drive), then decide whether inventory checkpoints and database paging are required. This is the only remaining item that needs the drive attached to the phone.
+2. Complete Series reading (progress/continue entry and controlled next-chapter advance), then unify comic-page zoom with `ui.components.Zoomable`.
+3. Continue interaction polish: density options, back behaviour and drag auto-scroll for long member lists.
 
 Do not start a broad UI rewrite before portable semantics are usable.
 
@@ -167,6 +172,7 @@ Before handoff:
 - Removable-storage performance is dominated by provider/Binder query count, not only bytes.
 - `DocumentFile` convenience calls can hide repeated queries.
 - A provider may qualify a conflicting name with ` (1)`; a successful rename result does not prove the requested path was committed.
+- A unique temporary name is not enough for crash recovery: the old live revision needs a stable, discoverable recovery path, and every read path (especially `library.json` inspection) must use it.
 - Library identity must be committed last and initialization needs an expiring exclusive lease.
 - A temporarily unreadable subtree is not proof that its indexed contents were deleted.
 - Fake providers must reproduce real conflict semantics.
@@ -174,6 +180,6 @@ Before handoff:
 - Every intermediate state of a migration or physical transaction must be attachable or safely resumable.
 - Tests have repeatedly found storage bugs faster than inspection alone.
 - The current phone and removable drive can reach roughly 360 MB/s for a large sequential video copy. Do not use the earlier 20 MB/s estimate as a hardware limit: full-Library work can still be dominated by SAF/provider round-trips, many small files, archive handling and hashing. Whole-payload operations such as deep duplicate hashing must therefore remain opt-in, scoped, cancellable and cached.
-- Archive reading goes through `ArchiveCache` + `ZipFile` (central directory): `ZipInputStream` cannot seek and rejects STORED entries that carry an extended data descriptor, which is a layout real downloaders produce. Cache copies are keyed by (library, path, size, modified time), budgeted (512 MiB) and trimmed oldest-first.
+- Archive reading goes through `ArchiveCache` + `ZipFile` (central directory): `ZipInputStream` cannot seek and rejects STORED entries that carry an extended data descriptor, which is a layout real downloaders produce. Cache copies are keyed by (library, path, size, modified time), budgeted (512 MiB) and trimmed oldest-first; the file currently being opened must be passed as the protected entry so an oversized archive remains readable.
 - The archive cache is a **required** constructor dependency of every reader service, and the repository is its only owner. An optional/second instance looks harmless but silently degrades to the streaming fallback — that is exactly how "a comic opens as 此页无法解码" shipped. When adding a service that reads archives, take `ArchiveCache` as a parameter instead of defaulting it.
 - Streams handed to `BitmapFactory` must be markable: wrap `ZipFile.getInputStream` and SAF streams in `BufferedInputStream` (or read the entry into memory) because the bounds probe rewinds the stream. A page that cannot decode must log the entry and the reason, not just fail silently in the UI.

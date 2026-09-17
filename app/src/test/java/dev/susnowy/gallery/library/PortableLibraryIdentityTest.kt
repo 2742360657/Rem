@@ -114,7 +114,10 @@ class PortableDocumentWriterCommitTest {
         assertTrue("写入必须被拒绝，实际抛出 $thrown", thrown is IllegalStateException)
         assertEquals("original", access.files.getValue("counter.json").decodeToString())
         assertEquals(1, access.files.keys.count { it.startsWith("counter") })
-        assertTrue("不得留下暂存文件", access.files.keys.none { it.contains(".tmp") || it.contains(".bak") })
+        assertTrue(
+            "不得留下暂存或恢复文件",
+            access.files.keys.none { it.contains(".tmp") || it.endsWith(".rem-backup") },
+        )
     }
 
     @Test
@@ -124,7 +127,76 @@ class PortableDocumentWriterCommitTest {
 
         PortableDocumentWriter(access).write("plain.json", """{"ok":true}""", "application/json")
 
-        assertTrue(access.files.keys.none { it.contains(".tmp") || it.contains(".bak") })
+        assertTrue(
+            access.files.keys.none { it.contains(".tmp") || it.endsWith(".rem-backup") },
+        )
+    }
+
+    @Test
+    fun failedCommitRestoresThePreviousRevisionFromTheStableBackup() {
+        var targetAttempts = 0
+        val access = CollisionSuffixingAccess(
+            refusesRename = { requested ->
+                requested == "counter.json" && targetAttempts++ == 0
+            },
+        ).apply {
+            files["counter.json"] = "original".encodeToByteArray()
+        }
+
+        val thrown = runCatching {
+            PortableDocumentWriter(access).write("counter.json", "replacement", "application/json")
+        }.exceptionOrNull()
+
+        assertTrue("提交失败必须向调用方报告", thrown is IllegalStateException)
+        assertEquals("original", access.files.getValue("counter.json").decodeToString())
+        assertTrue(
+            "回滚后不得留下暂存或恢复文件",
+            access.files.keys.none { it.contains(".tmp") || it.endsWith(".rem-backup") },
+        )
+    }
+
+    @Test
+    fun readRecoversThePreviousRevisionAfterAnInterruptedCommit() {
+        val access = CollisionSuffixingAccess().apply {
+            files[".counter.json.rem-backup"] = "original".encodeToByteArray()
+        }
+
+        val recovered = PortableDocumentWriter(access).read("counter.json")
+
+        assertEquals("original", recovered)
+        assertEquals("original", access.files.getValue("counter.json").decodeToString())
+        assertTrue("恢复后不得保留备份占位", ".counter.json.rem-backup" !in access.files)
+    }
+
+    @Test
+    fun nextWriteDiscardsAStaleBackupLeftAfterACommittedRevision() {
+        val access = CollisionSuffixingAccess().apply {
+            files["counter.json"] = "current".encodeToByteArray()
+            files[".counter.json.rem-backup"] = "older".encodeToByteArray()
+        }
+
+        PortableDocumentWriter(access).write("counter.json", "next", "application/json")
+
+        assertEquals("next", access.files.getValue("counter.json").decodeToString())
+        assertTrue("成功提交后不得保留旧备份", ".counter.json.rem-backup" !in access.files)
+    }
+
+    @Test
+    fun libraryInspectionRecoversAnIdentityWhoseCommitWasInterrupted() {
+        val access = CollisionSuffixingAccess()
+        val manager = PortableLibraryManager(access)
+        val initialized = manager.initialize("Library")
+        access.files[".gallery/.library.json.rem-backup"] =
+            access.files.remove(".gallery/library.json")!!
+
+        val inspection = manager.inspect()
+
+        assertEquals(initialized, (inspection as LibraryInspection.Valid).library)
+        assertTrue("Library 身份应恢复到正式路径", ".gallery/library.json" in access.files)
+        assertTrue(
+            "恢复后不得保留备份占位",
+            ".gallery/.library.json.rem-backup" !in access.files,
+        )
     }
 }
 

@@ -9,9 +9,10 @@ import java.util.UUID
  * child slightly after the rename returns. A fixed `.name.tmp` staging file
  * therefore races with concurrent writers (a progress save can observe a file a
  * previous save just renamed or deleted), so every commit stages through a
- * private unique name, keeps the previous revision as a private backup until the
- * new revision is committed, and never deletes the live document before the
- * replacement exists.
+ * private unique name. The previous revision moves to a stable recovery name:
+ * if the process stops in the short interval before the staged revision reaches
+ * its final name, the next read restores that backup instead of treating the
+ * portable document as missing.
  *
  * A write only counts as committed once the staged document has actually moved onto the
  * requested path. Providers differ in what they do when a rename targets a name that
@@ -27,18 +28,32 @@ class PortableDocumentWriter(private val access: LibraryDocumentAccess) {
         val name = relativePath.substringAfterLast('/')
         val parent = relativePath.substringBeforeLast('/', "")
         if (parent.isNotEmpty()) access.ensureDirectory(parent)
+        val backupPath = recoveryPath(relativePath)
+        val backupName = backupPath.substringAfterLast('/')
+        val previous = recoverIfInterrupted(relativePath)
+        // A live target plus a recovery file means the new revision reached its final
+        // name and the process stopped before cleanup. The live target is authoritative.
+        access.find(backupPath)?.let { stale ->
+            check(previous != null && runCatching { access.delete(stale) }.getOrDefault(false)) {
+                "无法清理 $relativePath 的旧恢复文件"
+            }
+        }
         val stagingId = UUID.randomUUID().toString()
         val temporaryPath = stagingPath(parent, ".$stagingId.$name.tmp")
-        val backupName = ".$stagingId.$name.bak"
-        val backupPath = stagingPath(parent, backupName)
 
         val temporary = access.createFile(temporaryPath, mimeType)
         access.openOutput(temporary).bufferedWriter(Charsets.UTF_8).use { it.write(value) }
 
-        val previous = access.find(relativePath)
         if (previous != null && !access.rename(previous, backupName)) {
             runCatching { access.find(temporaryPath)?.let(access::delete) }
             error("无法备份 $relativePath")
+        }
+        if (previous != null && (access.find(relativePath) != null || access.find(backupPath) == null)) {
+            // A provider that copied or qualified the rename did not actually move the
+            // live revision into the recovery slot. Keep the original and refuse to commit.
+            runCatching { access.find(backupPath)?.let(access::delete) }
+            runCatching { access.find(temporaryPath)?.let(access::delete) }
+            error("无法备份 $relativePath：文件提供方没有提交到恢复位置")
         }
 
         val moved = runCatching { access.rename(temporary, name) }.getOrDefault(false)
@@ -53,8 +68,9 @@ class PortableDocumentWriter(private val access: LibraryDocumentAccess) {
             error("无法提交 $relativePath：写入后目标文件不可见")
         }
 
-        // Cleanup must not make a committed write look like a failure: a provider
-        // can briefly expose the backup before it becomes addressable by path.
+        // Cleanup must not make a committed write look like a failure. If the process
+        // stops here, the next write recognizes the live target and removes this stale
+        // recovery file before starting another commit.
         runCatching { access.find(backupPath)?.let(access::delete) }
     }
 
@@ -84,8 +100,26 @@ class PortableDocumentWriter(private val access: LibraryDocumentAccess) {
         if (parent.isEmpty()) stagingName else "$parent/$stagingName"
 
     fun read(relativePath: String): String? {
-        val document = access.find(relativePath) ?: return null
+        val document = recoverIfInterrupted(relativePath) ?: return null
         return access.openInput(document).bufferedReader(Charsets.UTF_8).use { it.readText() }
+    }
+
+    private fun recoverIfInterrupted(relativePath: String): LibraryDocument? {
+        access.find(relativePath)?.let { return it }
+        val backupPath = recoveryPath(relativePath)
+        val backup = access.find(backupPath) ?: return null
+        val name = relativePath.substringAfterLast('/')
+        check(runCatching { access.rename(backup, name) }.getOrDefault(false)) {
+            "$relativePath 上次写入中断，且旧版本无法恢复"
+        }
+        return access.find(relativePath)
+            ?: error("$relativePath 上次写入中断，恢复后目标文件不可见")
+    }
+
+    private fun recoveryPath(relativePath: String): String {
+        val parent = relativePath.substringBeforeLast('/', "")
+        val name = relativePath.substringAfterLast('/')
+        return stagingPath(parent, ".$name.rem-backup")
     }
 
     /** Copies a document into `targetPath`, used for pre-migration snapshots. */

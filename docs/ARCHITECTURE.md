@@ -127,9 +127,11 @@ Derived folder groups stay presentation-only inference until saved; after that t
 
 Initialization claims a provider-exclusive root lease before creating `.gallery/`. The lease carries a timestamp and expires after 15 minutes. `library.json` is the completion marker and is committed last.
 
-`PortableDocumentWriter` stages every write with a unique name, temporarily moves the previous revision aside, then verifies the requested final path exists. If a provider publishes a qualified ` (1)` copy or leaves the staging document visible, the writer removes the refused result and restores the previous revision.
+`PortableDocumentWriter` stages every write with a unique name, moves the previous revision to the stable `.<name>.rem-backup` recovery path, then verifies the requested final path exists. A process stop between both renames is recovered by the next read (including `library.json` identity inspection); a live target wins over a stale recovery file. If a provider publishes a qualified ` (1)` copy or leaves the staging document visible, the writer refuses the commit and restores the previous revision.
 
 A returned rename URI or Boolean alone is not treated as proof of commit.
+
+All repository mutations of portable catalog/state/Inbox documents share one process-local mutex. This prevents two read-modify-write operations (for example playback progress and trash, or Group and metadata edits) from committing stale snapshots over each other. Accepted/classified Inbox actions commit Work metadata first and the Inbox decision second, so a catalog failure cannot hide an item whose manual classification was never saved.
 
 ## Scanning
 
@@ -140,6 +142,8 @@ Scanning has two phases.
 The inventory traverses directories using one projected query per directory. It classifies paths and commits a usable media/discovery index without reading media payloads.
 
 The initial inventory is still one atomic traversal. If killed before its commit, it restarts. An unreadable subtree protects its previous indexed rows and is not treated as deletion.
+
+Inventory deliberately does not hold the portable-write mutex for the long directory traversal. After traversal finishes, the repository reloads catalog/state/Inbox and holds the mutex only while projecting that fresh snapshot into SQLite. An edit made during inventory is included; an edit that starts during projection waits instead of being overwritten by stale local rows.
 
 ### Enrichment
 
@@ -157,7 +161,7 @@ An unchanged file reuses completed enrichment only when size and modified time s
 
 ## Edition comparison and virtual merge
 
-- `media.PageManifestService` turns one source (a Work's preferred Edition, resolved to pages) into an ordered `SourceManifest`. Directories cost one listing (plus one read per page only when hashing); archives cost exactly one sequential pass, because `ZipInputStream` cannot seek — hashing during that pass adds no I/O; single files cost one entry. Progress and cancellation are cooperatively checked per entry, and a session LRU caches manifests by (library, path, size, modified time, hashed).
+- `media.PageManifestService` turns one source (a Work's preferred Edition, resolved to pages) into an ordered `SourceManifest`. Directories cost one listing (plus one read per page only when hashing); archives reuse the `ArchiveCache` copy, enumerate its central directory once and read each page once only when hashing; single files cost one entry. Progress and cancellation are cooperatively checked per entry, and a session LRU caches manifests by (library, path, size, modified time, hashed).
 - `compare.PageComparison` is pure: it matches by content hash first and by normalized page name second, and never calls a same-name-same-size page "identical" when bytes were not read. `compare.MergePlan` builds the virtual reading order (left order preserved, right-only pages inserted before the next shared page). Both are unit-tested without Android.
 - `compare.MergeManifest` records the evidence of a merge and is written to `.gallery/imports/merge-<editionId>.json` (program-managed, never user truth).
 - `PortableMetadataStore.upsertEdition` writes a page-plan Edition in one atomic catalog write and can set it as the Work's preferred Edition in the same write. `GalleryRepository.createMergedEdition` derives a stable Edition id from (library, target Work, both sources), so re-merging updates one Edition; sources are never modified and nothing is deleted.
@@ -181,10 +185,11 @@ An unchanged file reuses completed enrichment only when size and modified time s
 
 ## Archive access
 
-- All archive reading goes through `media.ArchiveCache`: the SAF document is copied once into the app cache directory and opened with `ZipFile`, whose central-directory walk accepts every ZIP layout. `ZipInputStream` rejects archives whose entries are stored uncompressed with an extended data descriptor (`only DEFLATED entries can have EXT descriptor`) — a layout real downloaders produce — which used to cost page counts, page lists and ComicInfo for those files.
-- Cache keys carry (library, relative path, size, modified time), so changed content is never reused; copies are written to a `.part` file and renamed; the budget defaults to 512 MiB and trims oldest-use-first to a 90% low-water mark (`archiveEvictions`, pure and unit-tested).
+- The primary archive path goes through `media.ArchiveCache`: the SAF document is copied once into the app cache directory and opened with `ZipFile`, whose central-directory walk accepts every ZIP layout. `ZipInputStream` rejects archives whose entries are stored uncompressed with an extended data descriptor (`only DEFLATED entries can have EXT descriptor`) — a layout real downloaders produce — which used to cost page counts, page lists and ComicInfo for those files.
+- Cache keys carry (library, relative path, size, modified time), so changed content is never reused; copies are written to a `.part` file and renamed; the budget defaults to 512 MiB and trims oldest-use-first to a 90% low-water mark (`archiveEvictions`, pure and unit-tested). The file currently being opened is protected from its own trim, so a single archive larger than the budget remains readable while older copies are evicted.
 - Callers keep a streaming fallback for when no cached copy is available. `ComicInfoReader.inspectArchive(zip, …)`, `readArchivePages(zip, …)` and `MediaContentService`'s entry listing/decoding prefer the cached copy; a merged page plan passes the archive it actually references.
 - Because a cached copy is randomly accessible, reaching page N no longer reads the rest of the archive, and reading consecutive pages no longer re-reads the whole file per page.
+- `ArchiveCache.stats/clear` are serialized with cache writes and exposed through repository/ViewModel to “设置 → 压缩包阅读缓存”. Clearing affects only the App-private cache.
 
 ## Reader interaction
 
@@ -208,7 +213,7 @@ No cache is portable truth.
 - classification and logical relationships never move files;
 - ordinary deletion writes portable logical trash;
 - permanent deletion re-resolves the path and verifies current identity/size;
-- an Inbox decision is written to `.gallery/state/inbox.json` before the device index mirrors it, and no disposition deletes or moves media;
+- accepted/classified Work metadata is committed before its Inbox decision; every decision is committed before the device index mirrors it, and no disposition deletes or moves media;
 - Organizer copies and verifies before deleting a source;
 - page reordering and Organizer operations have recovery journals;
 - manual provenance wins over automatic metadata;

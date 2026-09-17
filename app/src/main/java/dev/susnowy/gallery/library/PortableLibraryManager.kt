@@ -47,9 +47,8 @@ class PortableLibraryManager(
     private val writer = PortableDocumentWriter(access)
 
     fun inspect(): LibraryInspection {
-        val document = access.find(LIBRARY_JSON) ?: return LibraryInspection.Missing
         return try {
-            val text = access.openInput(document).bufferedReader(Charsets.UTF_8).use { it.readText() }
+            val text = writer.read(LIBRARY_JSON) ?: return LibraryInspection.Missing
             val library = json.decodeFromString<PortableLibrary>(text)
             when {
                 library.format != GALLERY_FORMAT -> LibraryInspection.Invalid("未知的 Library 格式")
@@ -83,14 +82,13 @@ class PortableLibraryManager(
      * the identity was lost — a deleted `.gallery/library.json`, an interrupted first
      * attach, a hand-copied folder — not that the user has to clear them out by hand.
      * Only a document this client could not write safely is refused.
-     */
+    */
     fun initialize(name: String): PortableLibrary {
-        check(access.find(LIBRARY_JSON) == null) { "Library 已经初始化" }
-        val existingSchema = access.find(SCHEMA_FILE) ?: access.find(LEGACY_SCHEMA_FILE)
-        val declaredSchema = existingSchema?.let { document ->
+        check(writer.read(LIBRARY_JSON) == null) { "Library 已经初始化" }
+        val existingSchema = writer.read(SCHEMA_FILE) ?: writer.read(LEGACY_SCHEMA_FILE)
+        val declaredSchema = existingSchema?.let { text ->
             try {
-                json.decodeFromString<SchemaVersion>(access.openInput(document)
-                    .bufferedReader(Charsets.UTF_8).use { it.readText() }).schemaVersion
+                json.decodeFromString<SchemaVersion>(text).schemaVersion
             } catch (error: Exception) {
                 throw IllegalStateException("残留 Schema 文档无法解析，已拒绝自动认领", error)
             }
@@ -131,13 +129,13 @@ class PortableLibraryManager(
         }
         val needsLegacyConversion = recoveredId != null &&
             (recoveredVersions + listOfNotNull(declaredSchema)).any { it == LEGACY_SCHEMA_VERSION }
-        val hasGuide = access.find(GUIDE_FILE) != null
+        val hasGuide = writer.read(GUIDE_FILE) != null
 
         val initializationLock = claimInitializationLock()
         try {
             // The identity may have appeared after the first inspection but before this
             // caller won the lock. Report a race so the repository re-reads the winner.
-            if (access.find(LIBRARY_JSON) != null) throw InitializationInProgressException()
+            if (writer.read(LIBRARY_JSON) != null) throw InitializationInProgressException()
             REQUIRED_DIRECTORIES.forEach(access::ensureDirectory)
             val now = Instant.now().toString()
             val library = PortableLibrary(
@@ -208,11 +206,9 @@ class PortableLibraryManager(
     }.getOrDefault(false)
 
     private fun readPortableHeader(path: String): PortableDocumentHeader? {
-        val document = access.find(path) ?: return null
+        val text = writer.read(path) ?: return null
         return try {
-            json.decodeFromString<PortableDocumentHeader>(
-                access.openInput(document).bufferedReader(Charsets.UTF_8).use { it.readText() },
-            )
+            json.decodeFromString<PortableDocumentHeader>(text)
         } catch (error: Exception) {
             throw IllegalStateException("残留便携文档无法解析，已拒绝自动认领：$path", error)
         }

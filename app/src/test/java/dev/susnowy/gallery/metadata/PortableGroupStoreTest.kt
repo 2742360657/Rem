@@ -130,8 +130,4 @@ class PortableGroupStoreTest {
 
         assertEquals(listOf("work-1"), saved.members.map(PortableGroupMember::workId))
     }
-
-    private fun PortableMetadataStore.saveItems(items: List<MediaItem>) {
-        items.forEachIndexed { index, item -> saveItem(item, index.toLong()) }
-    }
 }

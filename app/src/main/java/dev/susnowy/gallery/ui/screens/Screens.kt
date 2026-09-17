@@ -1755,9 +1755,13 @@ private fun SettingsScreen(state: GalleryUiState, viewModel: GalleryViewModel) {
     }
     val duplicateGroups by viewModel.duplicateGroups.collectAsStateWithLifecycle()
     val offlinePreviewStats by viewModel.offlinePreviewStats.collectAsStateWithLifecycle()
+    val archiveCacheStats by viewModel.archiveCacheStats.collectAsStateWithLifecycle()
     val context = androidx.compose.ui.platform.LocalContext.current
     var diagnosticsText by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(Unit) { viewModel.refreshOfflinePreviewStats() }
+    LaunchedEffect(Unit) {
+        viewModel.refreshOfflinePreviewStats()
+        viewModel.refreshArchiveCacheStats()
+    }
     LazyColumn(contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
         item {
             ListItem(
@@ -1829,6 +1833,21 @@ private fun SettingsScreen(state: GalleryUiState, viewModel: GalleryViewModel) {
                 onClick = viewModel::clearOfflinePreviews,
                 enabled = offlinePreviewStats.files > 0,
             ) { Text("清除离线预览") }
+        }
+        item {
+            Text("压缩包阅读缓存", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "已缓存 ${archiveCacheStats.files} 个压缩包 · ${archiveCacheStats.bytes.formatBytes()}。" +
+                    "用于快速定位 CBZ/ZIP 页面，只存在本机，默认预算 512 MB；" +
+                    "打开单个更大的文件时可临时超出；" +
+                    "清除后不会影响 Library 原文件。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            TextButton(
+                onClick = viewModel::clearArchiveCache,
+                enabled = archiveCacheStats.files > 0,
+            ) { Text("清除压缩包缓存") }
         }
         item {
             Text("诊断日志", style = MaterialTheme.typography.titleMedium)

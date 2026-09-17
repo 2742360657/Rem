@@ -71,15 +71,28 @@ class ArchiveCache(
         }
     }
 
-    /** Removes every cached copy; used by the settings screen and tests. */
-    suspend fun clear() = withContext(Dispatchers.IO) {
-        mutex.withLock { directory.listFiles()?.forEach { it.delete() } }
-        Unit
+    /** Removes every cached copy and reports what was actually removed. */
+    suspend fun clear(): ArchiveCacheStats = withContext(Dispatchers.IO) {
+        mutex.withLock {
+            val files = directory.listFiles().orEmpty().filter(File::isFile)
+            var removedFiles = 0
+            var removedBytes = 0L
+            files.forEach { file ->
+                val bytes = file.length()
+                if (file.delete()) {
+                    removedFiles++
+                    removedBytes += bytes
+                }
+            }
+            ArchiveCacheStats(removedFiles, removedBytes)
+        }
     }
 
-    suspend fun stats(): Pair<Int, Long> = withContext(Dispatchers.IO) {
-        val files = directory.listFiles().orEmpty()
-        files.size to files.sumOf(File::length)
+    suspend fun stats(): ArchiveCacheStats = withContext(Dispatchers.IO) {
+        mutex.withLock {
+            val files = directory.listFiles().orEmpty().filter(File::isFile)
+            ArchiveCacheStats(files.size, files.sumOf(File::length))
+        }
     }
 
     private suspend fun copyInto(relativePath: String, storage: DocumentTreeStorage, target: File): Boolean {
@@ -106,7 +119,10 @@ class ArchiveCache(
                 staging.copyTo(target, overwrite = true)
                 staging.delete()
             }
-            trim()
+            // The archive being opened must survive its own trim. This also lets one large
+            // archive exceed the nominal cache budget temporarily instead of making it
+            // impossible to read at all; older cache entries are still evicted first.
+            trim(keep = target.path)
             true
         }.getOrElse {
             staging.delete()
@@ -115,12 +131,12 @@ class ArchiveCache(
     }
 
     /** Keeps the cache inside its byte budget, oldest use first. */
-    private fun trim() {
+    private fun trim(keep: String? = null) {
         val entries = directory.listFiles()
             ?.filter { it.isFile && !it.name.endsWith(".part") }
             ?.map { ArchiveCacheEntry(it.path, it.length(), it.lastModified()) }
             .orEmpty()
-        val doomed = archiveEvictions(entries, maxBytes)
+        val doomed = archiveEvictions(entries, maxBytes, keep)
         doomed.forEach { path -> runCatching { File(path).delete() } }
     }
 
@@ -138,6 +154,8 @@ class ArchiveCache(
         const val DEFAULT_MAX_BYTES: Long = 512L * 1024 * 1024
     }
 }
+
+data class ArchiveCacheStats(val files: Int, val bytes: Long)
 
 data class ArchiveCacheEntry(val path: String, val bytes: Long, val lastUsed: Long)
 

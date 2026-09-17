@@ -17,6 +17,7 @@ import dev.susnowy.gallery.library.PortableLibraryManager
 import dev.susnowy.gallery.library.LibraryDocument
 import dev.susnowy.gallery.logging.RemLog
 import dev.susnowy.gallery.media.ArchiveCache
+import dev.susnowy.gallery.media.ArchiveCacheStats
 import dev.susnowy.gallery.media.ImagePage
 import dev.susnowy.gallery.media.ImageSetOrderResult
 import dev.susnowy.gallery.media.ImageSetOrderService
@@ -115,7 +116,15 @@ class GalleryRepository(context: Context) {
     private val pageManifests = PageManifestService(archives = archives)
     private val content = MediaContentService(archives = archives)
     private val offlinePreviews = OfflinePreviewStore(appContext, archives = archives)
-    private val progressWriteMutex = Mutex()
+    /**
+     * Every portable store performs a read-modify-write of one of the shared `.gallery`
+     * documents. Serializing only playback progress is insufficient: a simultaneous trash,
+     * metadata, Group or Series edit can otherwise commit an older snapshot over it.
+     *
+     * This is deliberately repository-wide rather than per document. Several user actions
+     * update catalog/state and Inbox together, and their ordering is part of the commit.
+     */
+    private val portableWriteMutex = Mutex()
 
     /** Serializes attach: a repeated folder-selection tap must not initialize twice. */
     private val attachMutex = Mutex()
@@ -156,7 +165,7 @@ class GalleryRepository(context: Context) {
 
     suspend fun attach(treeUri: Uri, requestedName: String? = null): LibraryRegistration =
         attachMutex.withLock {
-            onIo {
+            withPortableWrite {
                 val storage = DocumentTreeStorage(appContext, treeUri)
                 require(storage.isAvailable) { "无法读取所选目录" }
                 val manager = PortableLibraryManager(storage)
@@ -260,33 +269,33 @@ class GalleryRepository(context: Context) {
                 refreshFromDatabase()
                 throw FileNotFoundException("${registration.name} 当前离线")
             }
-            val manager = PortableLibraryManager(storage)
-            val identity = when (val inspection = manager.inspect()) {
-                is LibraryInspection.Valid -> inspection.library
-                is LibraryInspection.Unsupported -> error(
-                    "Library Schema v${inspection.schemaVersion} 高于本客户端支持的版本，已拒绝写入",
+            val effectiveRegistration = portableWriteMutex.withLock {
+                val manager = PortableLibraryManager(storage)
+                val identity = when (val inspection = manager.inspect()) {
+                    is LibraryInspection.Valid -> inspection.library
+                    is LibraryInspection.Unsupported -> error(
+                        "Library Schema v${inspection.schemaVersion} 高于本客户端支持的版本，已拒绝写入",
+                    )
+                    is LibraryInspection.Invalid -> error(inspection.reason)
+                    LibraryInspection.Missing -> error("Library 身份文件缺失，请重新接入并检查目录")
+                }
+                require(identity.libraryId == libraryId) { "Library 身份与本机登记不一致，已拒绝写入" }
+                val migratedIdentity = manager.migrateSchema(identity)
+                if (migratedIdentity.schemaVersion != identity.schemaVersion) {
+                    _events.tryEmit(
+                        "已把便携元数据升级到 Schema v${migratedIdentity.schemaVersion}（原数据已备份）",
+                    )
+                }
+                manager.ensureMediaStoreIgnored()
+                val recoveredPageOrders = imageSetOrder.recoverInterrupted(storage)
+                if (recoveredPageOrders > 0) {
+                    _events.tryEmit("已恢复 $recoveredPageOrders 个中断的漫画页序事务")
+                }
+                registration.copy(
+                    name = migratedIdentity.name,
+                    schemaVersion = migratedIdentity.schemaVersion,
                 )
-                is LibraryInspection.Invalid -> error(inspection.reason)
-                LibraryInspection.Missing -> error("Library 身份文件缺失，请重新接入并检查目录")
             }
-            require(identity.libraryId == libraryId) { "Library 身份与本机登记不一致，已拒绝写入" }
-            val migratedIdentity = manager.migrateSchema(identity)
-            val effectiveRegistration = registration.copy(
-                name = migratedIdentity.name,
-                schemaVersion = migratedIdentity.schemaVersion,
-            )
-            if (migratedIdentity.schemaVersion != identity.schemaVersion) {
-                _events.tryEmit("已把便携元数据升级到 Schema v${migratedIdentity.schemaVersion}（原数据已备份）")
-            }
-            manager.ensureMediaStoreIgnored()
-            val recoveredPageOrders = imageSetOrder.recoverInterrupted(storage)
-            if (recoveredPageOrders > 0) {
-                _events.tryEmit("已恢复 $recoveredPageOrders 个中断的漫画页序事务")
-            }
-            val portableStore = PortableMetadataStore(storage)
-            val catalog = portableStore.loadCatalog(libraryId)
-            val state = portableStore.loadState(libraryId)
-            val inbox = PortableInboxStore(storage).load(libraryId)
             val inventoryStartedAt = System.currentTimeMillis()
             val result = scanner.scan(
                 storage,
@@ -306,6 +315,15 @@ class GalleryRepository(context: Context) {
                 }
             }
             val inventoryMillis = System.currentTimeMillis() - inventoryStartedAt
+            // Inventory can take a long time on a removable tree. Load portable truth only
+            // after that traversal, then keep it stable until the disposable projection is
+            // committed. Edits made while inventory was running are therefore included,
+            // while a later edit waits instead of being overwritten in the local index.
+            portableWriteMutex.withLock {
+            val portableStore = PortableMetadataStore(storage)
+            val catalog = portableStore.loadCatalog(libraryId)
+            val state = portableStore.loadState(libraryId)
+            val inbox = PortableInboxStore(storage).load(libraryId)
             val existing = database.media(libraryId)
             val existingByPath = existing.associateBy(MediaItem::relativePath)
             val metadataById = catalog.items.associateBy { it.id }
@@ -480,6 +498,7 @@ class GalleryRepository(context: Context) {
             syncSeries(libraryId, catalog.series)
             refreshEditionPlans(libraryId, catalog)
             refreshFromDatabase()
+            }
             val pending = database.pendingEnrichmentCount(libraryId)
             RemLog.info(
                 SCAN_TAG,
@@ -599,7 +618,7 @@ class GalleryRepository(context: Context) {
     }
 
     suspend fun updateMedia(updated: MediaItem): MediaItem = runOperation("正在保存元数据…") {
-        onIo {
+        withPortableWrite {
             val storage = storageFor(requireLibrary(updated.libraryId))
             val stored = database.mediaItem(updated.id)
             val locked = updated.copy(fieldSources = updated.withManualEdits(stored))
@@ -639,11 +658,11 @@ class GalleryRepository(context: Context) {
      */
     suspend fun acceptSuggestions(libraryId: String, itemIds: Collection<String>): Int =
         runOperation("正在接受识别建议…") {
-            onIo {
+            withPortableWrite {
                 val items = itemIds.distinct().mapNotNull(database::mediaItem)
                     .filter(MediaItem::inInbox)
                 require(items.all { it.libraryId == libraryId }) { "不能跨 Library 接受识别建议" }
-                if (items.isEmpty()) return@onIo 0
+                if (items.isEmpty()) return@withPortableWrite 0
                 val storage = storageFor(requireLibrary(libraryId))
                 val portable = PortableMetadataStore(storage).saveItems(items).associateBy { it.id }
                 PortableInboxStore(storage).upsert(
@@ -685,15 +704,35 @@ class GalleryRepository(context: Context) {
         disposition: InboxDisposition,
         domain: MediaDomain? = null,
     ): Int = runOperation("正在保存 Inbox 决策…") {
-        onIo {
+        withPortableWrite {
             val media = items.distinctBy(MediaItem::id)
             val discovered = discoveries.distinctBy(DiscoveredEntry::relativePath)
             require(media.all { it.libraryId == libraryId } && discovered.all { it.libraryId == libraryId }) {
                 "不能跨 Library 保存 Inbox 决策"
             }
-            if (media.isEmpty() && discovered.isEmpty()) return@onIo 0
+            if (media.isEmpty() && discovered.isEmpty()) return@withPortableWrite 0
             val now = java.time.Instant.now().toString()
             val storage = storageFor(requireLibrary(libraryId))
+            val prepared = if (disposition != InboxDisposition.IGNORED) {
+                media.map { item ->
+                    if (disposition == InboxDisposition.CLASSIFIED && domain != null && item.domain != domain) {
+                        item.copy(domain = domain)
+                            .let { changed -> changed.copy(fieldSources = changed.withManualEdits(item)) }
+                    } else {
+                        item
+                    }
+                }
+            } else {
+                emptyList()
+            }
+            val portableById = if (prepared.isNotEmpty()) {
+                // Commit the Work before recording an accepted/classified decision. If the
+                // catalog write fails, Inbox remains pending instead of hiding an item whose
+                // manual classification never reached portable truth.
+                PortableMetadataStore(storage).saveItems(prepared).associateBy { it.id }
+            } else {
+                emptyMap()
+            }
             val updated = PortableInboxStore(storage).upsert(
                 libraryId,
                 media.map { item ->
@@ -713,25 +752,16 @@ class GalleryRepository(context: Context) {
                     )
                 },
             )
-            if (media.isNotEmpty() && disposition != InboxDisposition.IGNORED) {
-                val prepared = media.map { item ->
-                    if (disposition == InboxDisposition.CLASSIFIED && domain != null && item.domain != domain) {
-                        item.copy(domain = domain)
-                            .let { changed -> changed.copy(fieldSources = changed.withManualEdits(item)) }
-                    } else {
-                        item
-                    }
-                }
-                val portable = PortableMetadataStore(storage).saveItems(prepared).associateBy { it.id }
+            if (prepared.isNotEmpty()) {
                 prepared.forEach { item ->
                     database.upsertMedia(
-                        item.withPortableMetadata(portable.getValue(item.id)).copy(
+                        item.withPortableMetadata(portableById.getValue(item.id)).copy(
                             inInbox = false,
                             inboxDisposition = disposition,
                         ),
                     )
                 }
-                synchronizeSeriesProjection(libraryId, portable.values)
+                synchronizeSeriesProjection(libraryId, portableById.values)
             }
             // The portable document is the truth: mirror it, including clearing the
             // decisions that were removed and leaving pending rows untouched.
@@ -752,13 +782,13 @@ class GalleryRepository(context: Context) {
         items: List<MediaItem> = emptyList(),
         discoveries: List<DiscoveredEntry> = emptyList(),
     ): Int = runOperation("正在撤销 Inbox 决策…") {
-        onIo {
+        withPortableWrite {
             val media = items.distinctBy(MediaItem::id)
             val discovered = discoveries.distinctBy(DiscoveredEntry::relativePath)
             require(media.all { it.libraryId == libraryId } && discovered.all { it.libraryId == libraryId }) {
                 "不能跨 Library 撤销 Inbox 决策"
             }
-            if (media.isEmpty() && discovered.isEmpty()) return@onIo 0
+            if (media.isEmpty() && discovered.isEmpty()) return@withPortableWrite 0
             val storage = storageFor(requireLibrary(libraryId))
             val keys = media.flatMap { listOf(it.id, it.relativePath) }.toSet() +
                 discovered.map(DiscoveredEntry::relativePath)
@@ -798,7 +828,7 @@ class GalleryRepository(context: Context) {
         coverWorkId: String? = null,
         expectedRevision: Long? = null,
     ): MediaGroup = runOperation("正在保存分组…") {
-        onIo {
+        withPortableWrite {
             val storage = storageFor(requireLibrary(libraryId))
             val existing = database.groups(libraryId).firstOrNull { it.id == groupId }
             val members = memberIds.distinct().mapNotNull { memberId ->
@@ -853,7 +883,7 @@ class GalleryRepository(context: Context) {
     )
 
     suspend fun deleteGroup(libraryId: String, groupId: String): Boolean = runOperation("正在删除分组…") {
-        onIo {
+        withPortableWrite {
             val storage = storageFor(requireLibrary(libraryId))
             val removed = PortableMetadataStore(storage).deleteGroup(libraryId, groupId)
             if (removed) {
@@ -879,7 +909,7 @@ class GalleryRepository(context: Context) {
         clearPositions: Boolean = false,
         expectedRevision: Long? = null,
     ): MediaSeries = runOperation("正在保存系列…") {
-        onIo {
+        withPortableWrite {
             val ordered = memberIds.distinct()
             require(ordered.isNotEmpty()) { "系列至少需要一个成员" }
             require(title.isNotBlank()) { "系列标题不能为空" }
@@ -925,7 +955,7 @@ class GalleryRepository(context: Context) {
      */
     suspend fun deleteSeries(libraryId: String, seriesId: String): Boolean =
         runOperation("正在删除系列…") {
-            onIo {
+            withPortableWrite {
                 val storage = storageFor(requireLibrary(libraryId))
                 val store = PortableMetadataStore(storage)
                 val existing = store.loadCatalog(libraryId).series.firstOrNull { it.id == seriesId }
@@ -1027,7 +1057,7 @@ class GalleryRepository(context: Context) {
         targetWorkId: String,
         report: EditionComparisonReport,
     ): MediaItem = runOperation("正在生成虚拟合并版本…") {
-        onIo {
+        withPortableWrite {
             val target = database.mediaItem(targetWorkId) ?: error("目标作品不在本机索引中")
             val storage = storageFor(requireLibrary(libraryId))
             val store = PortableMetadataStore(storage)
@@ -1151,10 +1181,10 @@ class GalleryRepository(context: Context) {
         addCollections: List<String> = emptyList(),
         favorite: Boolean? = null,
     ): Int = runOperation("正在批量保存元数据…") {
-        onIo {
+        withPortableWrite {
             val items = itemIds.distinct().mapNotNull(database::mediaItem)
             require(items.all { it.libraryId == libraryId }) { "不能跨 Library 批量修改" }
-            if (items.isEmpty()) return@onIo 0
+            if (items.isEmpty()) return@withPortableWrite 0
             val updated = items.map { item ->
                 val changed = item.copy(
                     authors = (item.authors + addAuthors).distinct(),
@@ -1196,8 +1226,8 @@ class GalleryRepository(context: Context) {
     suspend fun setTrashed(itemId: String, trashed: Boolean) = runOperation(
         if (trashed) "正在移入回收站…" else "正在恢复…",
     ) {
-        onIo {
-            val item = database.mediaItem(itemId) ?: return@onIo
+        withPortableWrite {
+            val item = database.mediaItem(itemId) ?: return@withPortableWrite
             val deletedAt = if (trashed) System.currentTimeMillis() else null
             val storage = storageFor(requireLibrary(item.libraryId))
             PortableMetadataStore(storage).setTrashed(item, trashed, deletedAt ?: 0)
@@ -1208,10 +1238,10 @@ class GalleryRepository(context: Context) {
 
     suspend fun setTrashedBatch(libraryId: String, itemIds: Collection<String>): Int =
         runOperation("正在批量移入回收站…") {
-            onIo {
+            withPortableWrite {
                 val items = itemIds.distinct().mapNotNull(database::mediaItem)
                 require(items.all { it.libraryId == libraryId }) { "不能跨 Library 批量修改" }
-                if (items.isEmpty()) return@onIo 0
+                if (items.isEmpty()) return@withPortableWrite 0
                 val deletedAt = System.currentTimeMillis()
                 val storage = storageFor(requireLibrary(libraryId))
                 PortableMetadataStore(storage).setTrashed(items, true, deletedAt)
@@ -1224,18 +1254,16 @@ class GalleryRepository(context: Context) {
         }
 
     suspend fun purge(itemId: String) = runOperation("正在永久删除…") {
-        onIo {
+        withPortableWrite {
             purgeInternal(itemId)
         }
     }
 
-    suspend fun saveProgress(progress: PlaybackProgress) = progressWriteMutex.withLock {
-        onIo {
-            val item = database.mediaItem(progress.itemId) ?: return@onIo
-            val storage = storageFor(requireLibrary(item.libraryId))
-            PortableMetadataStore(storage).saveProgress(item.libraryId, progress)
-            database.upsertProgress(progress)
-        }
+    suspend fun saveProgress(progress: PlaybackProgress) = withPortableWrite {
+        val item = database.mediaItem(progress.itemId) ?: return@withPortableWrite
+        val storage = storageFor(requireLibrary(item.libraryId))
+        PortableMetadataStore(storage).saveProgress(item.libraryId, progress)
+        database.upsertProgress(progress)
     }
 
     suspend fun progress(itemId: String): PlaybackProgress? = onIo { database.progress(itemId) }
@@ -1246,6 +1274,10 @@ class GalleryRepository(context: Context) {
     suspend fun offlinePreviewStats(): OfflinePreviewStats = offlinePreviews.stats()
 
     suspend fun clearOfflinePreviews(): OfflinePreviewStats = offlinePreviews.clear()
+
+    suspend fun archiveCacheStats(): ArchiveCacheStats = archives.stats()
+
+    suspend fun clearArchiveCache(): ArchiveCacheStats = archives.clear()
 
     suspend fun previewOrganization(
         libraryId: String,
@@ -1260,7 +1292,7 @@ class GalleryRepository(context: Context) {
     }
 
     suspend fun executeOrganization(plan: OrganizationPlan) = runOperation("正在执行整理事务…") {
-        onIo {
+        withPortableWrite {
             val libraryId = plan.steps.firstOrNull()?.item?.libraryId ?: error("整理计划为空")
             organizer.execute(plan, storageFor(requireLibrary(libraryId))) { moved ->
                 database.upsertMedia(moved)
@@ -1310,11 +1342,13 @@ class GalleryRepository(context: Context) {
 
     suspend fun recoverInterruptedTransactions(libraryId: String): Int =
         runOperation("正在恢复未完成事务…") {
-            onIo { organizer.recoverInterrupted(libraryId, storageFor(requireLibrary(libraryId))) }
+            withPortableWrite {
+                organizer.recoverInterrupted(libraryId, storageFor(requireLibrary(libraryId)))
+            }
         }
 
-    suspend fun cleanupExpired(retentionDays: Int): Int = onIo {
-        if (retentionDays <= 0) return@onIo 0
+    suspend fun cleanupExpired(retentionDays: Int): Int = withPortableWrite {
+        if (retentionDays <= 0) return@withPortableWrite 0
         val threshold = System.currentTimeMillis() - retentionDays.coerceAtLeast(1) * 86_400_000L
         val expired = database.media().filter {
             it.trashed && (it.deletedAt ?: Long.MAX_VALUE) <= threshold
@@ -1353,7 +1387,7 @@ class GalleryRepository(context: Context) {
 
     suspend fun reorderImageSet(itemId: String, pages: List<ImagePage>): ImageSetOrderResult =
         runOperation("正在写入漫画页序…") {
-            onIo {
+            withPortableWrite {
                 val item = database.mediaItem(itemId) ?: error("漫画不存在")
                 val storage = storageFor(requireLibrary(item.libraryId))
                 val result = imageSetOrder.reorder(item, pages, storage)
@@ -1607,6 +1641,9 @@ class GalleryRepository(context: Context) {
             _operation.value = null
         }
     }
+
+    private suspend fun <T> withPortableWrite(block: suspend () -> T): T =
+        portableWriteMutex.withLock { onIo(block) }
 
     private suspend fun <T> onIo(block: suspend () -> T): T = withContext(Dispatchers.IO) { block() }
 

@@ -15,6 +15,7 @@ import dev.susnowy.gallery.importer.SystemMediaAccess
 import dev.susnowy.gallery.importer.SystemMediaEntry
 import dev.susnowy.gallery.importer.WorkImportKind
 import dev.susnowy.gallery.media.ImagePage
+import dev.susnowy.gallery.media.ArchiveCacheStats
 import dev.susnowy.gallery.media.OfflinePreviewStats
 import dev.susnowy.gallery.logging.RemLog
 import dev.susnowy.gallery.model.LibraryRegistration
@@ -127,6 +128,8 @@ class GalleryViewModel(
     private var comparisonJob: Job? = null
     private val _offlinePreviewStats = MutableStateFlow(OfflinePreviewStats(files = 0, bytes = 0))
     val offlinePreviewStats: StateFlow<OfflinePreviewStats> = _offlinePreviewStats
+    private val _archiveCacheStats = MutableStateFlow(ArchiveCacheStats(files = 0, bytes = 0))
+    val archiveCacheStats: StateFlow<ArchiveCacheStats> = _archiveCacheStats
     private var longOperationJob: Job? = null
     private var systemMediaJob: Job? = null
 
@@ -221,6 +224,7 @@ class GalleryViewModel(
         }
         viewModelScope.launch {
             _offlinePreviewStats.value = repository.offlinePreviewStats()
+            _archiveCacheStats.value = repository.archiveCacheStats()
         }
     }
 
@@ -747,6 +751,25 @@ class GalleryViewModel(
                 .onSuccess { removed ->
                     _offlinePreviewStats.value = OfflinePreviewStats(files = 0, bytes = 0)
                     message.value = "已清除 ${removed.files} 张离线预览（${removed.bytes.formatBytes()}）"
+                }
+                .onFailure(::showError)
+        }
+    }
+
+    fun refreshArchiveCacheStats() {
+        viewModelScope.launch {
+            runCatching { repository.archiveCacheStats() }
+                .onSuccess { _archiveCacheStats.value = it }
+                .onFailure(::showError)
+        }
+    }
+
+    fun clearArchiveCache() {
+        viewModelScope.launch {
+            runCatching { repository.clearArchiveCache() }
+                .onSuccess { removed ->
+                    _archiveCacheStats.value = repository.archiveCacheStats()
+                    message.value = "已清除 ${removed.files} 个压缩包缓存（${removed.bytes.formatBytes()}）"
                 }
                 .onFailure(::showError)
         }
