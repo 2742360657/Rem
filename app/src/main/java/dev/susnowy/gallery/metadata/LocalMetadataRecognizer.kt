@@ -207,6 +207,31 @@ class ComicInfoReader {
         return storage.openInput(document).use { input -> inspectArchive(input, isPage) }
     }
 
+    /**
+     * Inspects an archive through its central directory.
+     *
+     * Preferred over the streaming path because `ZipInputStream` rejects archives whose
+     * entries are stored uncompressed with an extended data descriptor — a layout real
+     * downloaders produce — and because random access costs one entry read per page.
+     */
+    fun inspectArchive(zip: java.util.zip.ZipFile, isPage: (String) -> Boolean): ArchiveInspection {
+        var pageCount = 0
+        var metadata: RecognizedMetadata? = null
+        val entries = zip.entries()
+        while (entries.hasMoreElements()) {
+            val entry = entries.nextElement()
+            if (entry.isDirectory) continue
+            when {
+                isPage(entry.name) -> pageCount++
+                metadata == null && entry.name.substringAfterLast('/')
+                    .equals("ComicInfo.xml", ignoreCase = true) -> {
+                    metadata = runCatching { zip.getInputStream(entry).use(::parse) }.getOrNull()
+                }
+            }
+        }
+        return ArchiveInspection(pageCount, metadata)
+    }
+
     internal fun inspectArchive(
         input: InputStream,
         isPage: (String) -> Boolean,

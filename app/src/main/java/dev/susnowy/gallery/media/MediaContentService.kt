@@ -25,6 +25,7 @@ data class ImagePage(
 
 class MediaContentService(
     archiveBitmapCacheBytes: Int = DEFAULT_ARCHIVE_BITMAP_CACHE_BYTES,
+    private val archives: ArchiveCache? = null,
 ) {
     private val archiveBitmapCache = object : LruCache<String, Bitmap>(archiveBitmapCacheBytes) {
         override fun sizeOf(key: String, value: Bitmap): Int = value.allocationByteCount
@@ -74,13 +75,13 @@ class MediaContentService(
         archiveDecodeMutex.withLock {
             archiveBitmapCache.get(cacheKey)?.let { return@withLock it }
             val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-            decodeArchiveEntry(archivePath, entryName, storage, bounds)
+            decodeArchiveEntry(archivePath, entryName, storage, bounds, item)
             if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return@withLock null
             val options = BitmapFactory.Options().apply {
                 inSampleSize = calculateSampleSize(bounds.outWidth, bounds.outHeight, targetWidth, targetHeight)
                 inPreferredConfig = Bitmap.Config.RGB_565
             }
-            decodeArchiveEntry(archivePath, entryName, storage, options)?.also { bitmap ->
+            decodeArchiveEntry(archivePath, entryName, storage, options, item)?.also { bitmap ->
                 archiveBitmapCache.put(cacheKey, bitmap)
             }
         }
@@ -112,7 +113,18 @@ class MediaContentService(
         storage.openInput(document).use { BitmapFactory.decodeStream(it, null, options) }
     }
 
-    private fun archiveEntryNames(item: MediaItem, storage: DocumentTreeStorage): List<String> {
+    /**
+     * Lists the image entries of an archive, preferring the central directory of a local copy
+     * because a stream cannot seek and rejects some real-world ZIP layouts.
+     */
+    private suspend fun archiveEntryNames(item: MediaItem, storage: DocumentTreeStorage): List<String> {
+        archives?.open(item, storage)?.use { zip ->
+            return zip.entries().asSequence()
+                .filter { !it.isDirectory && MediaClassifier.isImage(it.name, null) }
+                .map { it.name }
+                .sortedWith(MediaClassifier::naturalCompare)
+                .toList()
+        }
         val document = LibraryDocument(item.relativePath, item.relativePath.substringAfterLast('/'), false)
         return storage.openInput(document).buffered().use { input ->
             ZipInputStream(input).use { zip ->
@@ -127,12 +139,28 @@ class MediaContentService(
         }
     }
 
-    private fun decodeArchiveEntry(
+    private suspend fun decodeArchiveEntry(
         archivePath: String,
         entryName: String,
         storage: DocumentTreeStorage,
         options: BitmapFactory.Options,
+        item: MediaItem?,
     ): Bitmap? {
+        val owner = item?.takeIf { it.relativePath == archivePath }
+        val entry = if (owner == null) runCatching { storage.entry(archivePath) }.getOrNull() else null
+        val libraryId = item?.libraryId
+        if (libraryId != null) {
+            archives?.open(
+                libraryId = libraryId,
+                relativePath = archivePath,
+                size = owner?.size ?: entry?.size ?: 0L,
+                modifiedAt = owner?.modifiedAt ?: entry?.lastModified ?: 0L,
+                storage = storage,
+            )?.use { zip ->
+                val zipEntry = zip.getEntry(entryName) ?: return null
+                return zip.getInputStream(zipEntry).use { BitmapFactory.decodeStream(it, null, options) }
+            }
+        }
         val document = LibraryDocument(archivePath, archivePath.substringAfterLast('/'), false)
         return storage.openInput(document).buffered().use { input ->
             ZipInputStream(input).use { zip ->

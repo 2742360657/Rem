@@ -111,6 +111,7 @@ A second, always-available test target is the phone's own storage (`/storage/emu
 - `refreshFromDatabase()` still materializes the full media table.
 - Real E-drive scanning and mass video-preview behavior have not been validated with the latest build.
 - A few decoder formats can display through Coil but cannot generate the BitmapFactory-based offline JPEG.
+- The archive cache has no UI entry yet (size/clear), and the real-device feel of page-by-page archive reading after the change is still unverified.
 
 ## Next implementation order
 
@@ -169,4 +170,4 @@ Before handoff:
 - Every intermediate state of a migration or physical transaction must be attachable or safely resumable.
 - Tests have repeatedly found storage bugs faster than inspection alone.
 - Removable-media throughput on a phone is roughly 20 MB/s and fluctuates, so any feature that reads whole page payloads (deep duplicate hashing) must be opt-in, scoped and cached, or deferred to a PC-side Agent reading the same portable format.
-- The archive reader streams with `ZipInputStream`, so it cannot random-access an entry: enumerating or hashing pages of a CBZ costs one full pass over the file, and re-opening the archive per page would read the whole file N times. Any per-page work must be batched into a single sequential pass and cached by (path, size, modified time).
+- Archive reading goes through `ArchiveCache` + `ZipFile` (central directory): `ZipInputStream` cannot seek and rejects STORED entries that carry an extended data descriptor, which is a layout real downloaders produce. Cache copies are keyed by (library, path, size, modified time), budgeted (512 MiB) and trimmed oldest-first; a streaming fallback stays for when no copy is available.

@@ -179,6 +179,13 @@ An unchanged file reuses completed enrichment only when size and modified time s
 - The grid owns only ids: every action is one repository call (one portable write), and long-press still opens the per-card panel while selection mode is off. Back exits selection before it leaves the screen.
 - `ui.components.BatchMetadataDialog` is the single append-only metadata editor shared by all selection toolbars.
 
+## Archive access
+
+- All archive reading goes through `media.ArchiveCache`: the SAF document is copied once into the app cache directory and opened with `ZipFile`, whose central-directory walk accepts every ZIP layout. `ZipInputStream` rejects archives whose entries are stored uncompressed with an extended data descriptor (`only DEFLATED entries can have EXT descriptor`) — a layout real downloaders produce — which used to cost page counts, page lists and ComicInfo for those files.
+- Cache keys carry (library, relative path, size, modified time), so changed content is never reused; copies are written to a `.part` file and renamed; the budget defaults to 512 MiB and trims oldest-use-first to a 90% low-water mark (`archiveEvictions`, pure and unit-tested).
+- Callers keep a streaming fallback for when no cached copy is available. `ComicInfoReader.inspectArchive(zip, …)`, `readArchivePages(zip, …)` and `MediaContentService`'s entry listing/decoding prefer the cached copy; a merged page plan passes the archive it actually references.
+- Because a cached copy is randomly accessible, reaching page N no longer reads the rest of the archive, and reading consecutive pages no longer re-reads the whole file per page.
+
 ## Media and cache budgets
 
 - directory/archive pages are loaded lazily;

@@ -65,6 +65,7 @@ data class SourceManifest(
  */
 class PageManifestService(
     private val cache: PageManifestCache = PageManifestCache(),
+    private val archives: ArchiveCache? = null,
 ) {
     suspend fun manifest(
         item: MediaItem,
@@ -141,6 +142,12 @@ class PageManifestService(
             name = item.relativePath.substringAfterLast('/'),
             isDirectory = false,
         )
+        // Central-directory access first: it reads the same bytes once, handles every ZIP
+        // layout, and avoids the streaming reader's inability to see STORED entries that
+        // carry an extended data descriptor.
+        archives?.open(item, storage)?.let { zip ->
+            return zip.use { readArchivePages(it, item.relativePath, hashPages, counter, onProgress) }
+        }
         return storage.openInput(document).buffered().use { input ->
             readArchivePages(item.relativePath, input, hashPages, counter, onProgress)
         }
@@ -187,6 +194,48 @@ class PageManifestService(
     private fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it) }
 
     internal class ByteCounter(var bytes: Long = 0L)
+}
+
+/**
+ * Reads every image entry of one archive through its central directory.
+ *
+ * Each entry is read exactly once, and the archive is never re-scanned per page.
+ */
+internal suspend fun readArchivePages(
+    zip: java.util.zip.ZipFile,
+    containerPath: String,
+    hashPages: Boolean,
+    counter: PageManifestService.ByteCounter = PageManifestService.ByteCounter(),
+    onProgress: (pages: Int, bytesRead: Long) -> Unit = { _, _ -> },
+): List<PageEntry> {
+    val pages = mutableListOf<PageEntry>()
+    val entries = zip.entries()
+    while (entries.hasMoreElements()) {
+        val entry = entries.nextElement()
+        if (entry.isDirectory || !MediaClassifier.isImage(entry.name, null)) continue
+        val digest = if (hashPages) MessageDigest.getInstance("SHA-256") else null
+        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+        var size = 0L
+        zip.getInputStream(entry).use { input ->
+            while (true) {
+                coroutineContext.ensureActive()
+                val count = input.read(buffer)
+                if (count < 0) break
+                size += count
+                counter.bytes += count
+                digest?.update(buffer, 0, count)
+            }
+        }
+        pages += PageEntry(
+            containerPath = containerPath,
+            entryPath = entry.name,
+            name = entry.name.substringAfterLast('/'),
+            sizeBytes = size,
+            sha256 = digest?.digest()?.joinToString("") { "%02x".format(it) },
+        )
+        onProgress(pages.size, counter.bytes)
+    }
+    return pages.sortedWith { left, right -> MediaClassifier.naturalCompare(left.name, right.name) }
 }
 
 /**

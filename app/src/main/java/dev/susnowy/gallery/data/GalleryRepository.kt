@@ -15,6 +15,7 @@ import dev.susnowy.gallery.library.InitializationInProgressException
 import dev.susnowy.gallery.library.PortableLibraryManager
 import dev.susnowy.gallery.library.LibraryDocument
 import dev.susnowy.gallery.logging.RemLog
+import dev.susnowy.gallery.media.ArchiveCache
 import dev.susnowy.gallery.media.ImagePage
 import dev.susnowy.gallery.media.ImageSetOrderResult
 import dev.susnowy.gallery.media.ImageSetOrderService
@@ -77,6 +78,7 @@ import dev.susnowy.gallery.scanner.ScanResult
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import dev.susnowy.gallery.storage.DocumentTreeStorage
+import java.io.File
 import java.io.FileNotFoundException
 import java.security.MessageDigest
 import java.util.UUID
@@ -107,8 +109,9 @@ class GalleryRepository(context: Context) {
     private val systemMediaCatalog = SystemMediaCatalog(appContext)
     private val derivation = DerivationService()
     private val imageSetOrder = ImageSetOrderService()
-    private val pageManifests = PageManifestService()
-    private val content = MediaContentService()
+    private val archives = ArchiveCache(File(appContext.cacheDir, "archives"))
+    private val pageManifests = PageManifestService(archives = archives)
+    private val content = MediaContentService(archives = archives)
     private val offlinePreviews = OfflinePreviewStore(appContext)
     private val progressWriteMutex = Mutex()
 
@@ -519,7 +522,7 @@ class GalleryRepository(context: Context) {
             val enriched = mutableListOf<MediaItem>()
             batch.forEach { item ->
                 coroutineContext.ensureActive()
-                runCatching { scanner.enrich(storage, item) }
+                runCatching { scanner.enrich(storage, item, archives) }
                     .onSuccess { result -> enriched += item.withEnrichment(result) }
                     .onFailure { error ->
                         if (error is CancellationException) throw error

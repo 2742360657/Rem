@@ -582,7 +582,11 @@ class LibraryScanner {
      * Completes one inventory row. Callers commit small batches so a killed process can
      * continue from the remaining local queue without rescanning already enriched bytes.
      */
-    suspend fun enrich(storage: DocumentTreeStorage, item: MediaItem): ScanEnrichment =
+    suspend fun enrich(
+        storage: DocumentTreeStorage,
+        item: MediaItem,
+        archives: dev.susnowy.gallery.media.ArchiveCache? = null,
+    ): ScanEnrichment =
         withContext(Dispatchers.IO) {
             val statistics = ScanStatistics()
             if (item.sourceKind == SourceKind.DIRECTORY) {
@@ -623,7 +627,12 @@ class LibraryScanner {
             }
             val hash = contentHash(storage, entry, emptyMap(), ScanDepth.FULL, statistics).value
             if (item.sourceKind == SourceKind.ARCHIVE) {
-                val inspection = comicInfo.inspectArchive(
+                // A local copy read through the central directory handles every ZIP layout,
+                // including stored entries with an extended data descriptor that the streaming
+                // reader refuses. The streaming path stays as the fallback.
+                val inspection = archives?.open(item, storage)?.use { zip ->
+                    comicInfo.inspectArchive(zip) { name -> MediaClassifier.isImage(name, null) }
+                } ?: comicInfo.inspectArchive(
                     storage = storage,
                     archivePath = item.relativePath,
                     locator = entry.uri,
