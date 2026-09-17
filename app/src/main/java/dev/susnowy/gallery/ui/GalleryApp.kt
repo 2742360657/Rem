@@ -71,8 +71,10 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.viewmodel.compose.viewModel
 import dev.susnowy.gallery.model.MediaKind
+import dev.susnowy.gallery.model.visibleInLibrary
 import dev.susnowy.gallery.ui.screens.EmptyLibraryScreen
 import dev.susnowy.gallery.ui.screens.GalleryScreenContent
+import dev.susnowy.gallery.ui.screens.GroupDetail
 import dev.susnowy.gallery.ui.screens.MediaDetail
 import dev.susnowy.gallery.ui.theme.GalleryTheme
 import kotlinx.coroutines.launch
@@ -165,6 +167,19 @@ fun GalleryApp(viewModel: GalleryViewModel = viewModel()) {
                 browsingItems = browsingItems,
                 viewModel = viewModel,
                 onBack = viewModel::closeDetail,
+            )
+            return@GalleryTheme
+        }
+
+        val selectedGroup = state.selectedGroup
+        if (selectedGroup != null) {
+            GroupDetail(
+                group = selectedGroup,
+                items = state.allMedia.filter {
+                    it.libraryId == selectedGroup.libraryId && it.visibleInLibrary
+                },
+                viewModel = viewModel,
+                onBack = viewModel::closeGroup,
             )
             return@GalleryTheme
         }

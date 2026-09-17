@@ -80,6 +80,7 @@ import dev.susnowy.gallery.importer.SystemMediaEntry
 import dev.susnowy.gallery.importer.SystemMediaType
 import dev.susnowy.gallery.importer.WorkImportKind
 import dev.susnowy.gallery.logging.RemLog
+import dev.susnowy.gallery.model.MediaGroup
 import dev.susnowy.gallery.model.MediaItem
 import dev.susnowy.gallery.model.InboxDisposition
 import dev.susnowy.gallery.model.MediaDomain
@@ -137,7 +138,7 @@ fun GalleryScreenContent(
     val visible = state.media.filterNot { it.trashed || it.mutedByInboxDecision }
     val accepted = visible.filterNot(MediaItem::inInbox)
     when (state.screen) {
-        AppScreen.MEDIA -> ClassifiedLibraryScreen(accepted, viewModel)
+        AppScreen.MEDIA -> ClassifiedLibraryScreen(accepted, state.groups, viewModel)
         AppScreen.WORKS -> WorksLibraryScreen(accepted, viewModel)
         AppScreen.LIBRARIES -> LibrariesScreen(state, viewModel, onChooseFolder)
         AppScreen.INBOX -> InboxScreen(
@@ -557,26 +558,29 @@ private fun LibrariesScreen(
 private enum class ClassifiedType(val label: String) { GROUPS("分组"), IMAGES("图片"), VIDEOS("视频") }
 
 @Composable
-private fun ClassifiedLibraryScreen(items: List<MediaItem>, viewModel: GalleryViewModel) {
+private fun ClassifiedLibraryScreen(
+    items: List<MediaItem>,
+    manualGroups: List<MediaGroup>,
+    viewModel: GalleryViewModel,
+) {
     val classified = remember(items) { items.filter { it.domain == MediaDomain.CLASSIFIED } }
-    val groups = remember(classified) { MixedMediaPresentation.groups(classified) }
-    val groupsByPrimaryId = remember(groups) { groups.associateBy { it.primary.id } }
-    val groupedVideoIds = remember(groups) {
-        groups.flatMapTo(mutableSetOf()) { group -> group.videos.map(MediaItem::id) }
+    val derived = remember(classified) { MixedMediaPresentation.groups(classified) }
+    val groupedVideoIds = remember(derived) {
+        derived.flatMapTo(mutableSetOf()) { group -> group.videos.map(MediaItem::id) }
     }
     val imageCount = classified.count { it.kind == MediaKind.IMAGE }
     val videoCount = classified.count { it.kind == MediaKind.VIDEO && it.id !in groupedVideoIds }
     var type by rememberSaveable { mutableStateOf(ClassifiedType.GROUPS) }
-    var groupPath by rememberSaveable { mutableStateOf<String?>(null) }
     var imagePath by rememberSaveable { mutableStateOf<String?>(null) }
     var videoPath by rememberSaveable { mutableStateOf<String?>(null) }
-    LaunchedEffect(groups.isEmpty()) {
-        if (groups.isEmpty() && type == ClassifiedType.GROUPS) type = ClassifiedType.IMAGES
+    val groupCount = manualGroups.size + derived.size
+    LaunchedEffect(groupCount == 0) {
+        if (groupCount == 0 && type == ClassifiedType.GROUPS) type = ClassifiedType.IMAGES
     }
-    val shown = remember(classified, groups, groupedVideoIds, type) {
+    val shown = remember(classified, groupedVideoIds, type) {
         classified.filter {
             when (type) {
-                ClassifiedType.GROUPS -> it.id in groupsByPrimaryId
+                ClassifiedType.GROUPS -> false
                 ClassifiedType.IMAGES -> it.kind == MediaKind.IMAGE
                 ClassifiedType.VIDEOS -> it.kind == MediaKind.VIDEO && it.id !in groupedVideoIds
             }
@@ -590,8 +594,8 @@ private fun ClassifiedLibraryScreen(items: List<MediaItem>, viewModel: GalleryVi
             FilterChip(
                 selected = type == ClassifiedType.GROUPS,
                 onClick = { type = ClassifiedType.GROUPS },
-                label = { Text("分组 ${groups.size}") },
-                enabled = groups.isNotEmpty(),
+                label = { Text("分组 $groupCount") },
+                enabled = groupCount > 0,
             )
             FilterChip(
                 selected = type == ClassifiedType.IMAGES,
@@ -604,38 +608,29 @@ private fun ClassifiedLibraryScreen(items: List<MediaItem>, viewModel: GalleryVi
                 label = { Text("视频 $videoCount") },
             )
         }
+        if (type == ClassifiedType.GROUPS) {
+            GroupShelf(
+                items = classified,
+                groups = manualGroups,
+                viewModel = viewModel,
+                modifier = Modifier.weight(1f),
+            )
+            return@Column
+        }
         ClassifiedMediaScreen(
             items = shown,
             viewModel = viewModel,
-            rootDirectory = when (type) {
-                ClassifiedType.GROUPS -> "Mixed"
-                ClassifiedType.IMAGES -> "Images"
-                ClassifiedType.VIDEOS -> "Videos"
+            rootDirectory = if (type == ClassifiedType.IMAGES) "Images" else "Videos",
+            emptyText = if (type == ClassifiedType.IMAGES) {
+                "这里按真实目录显示图片，不添加作者或标签层级"
+            } else {
+                "这里按真实目录显示普通视频；动漫和影视作品在“漫画 / 动漫”中"
             },
-            emptyText = when (type) {
-                ClassifiedType.GROUPS -> "同一目录中的图片集与视频会合并为一个浏览入口"
-                ClassifiedType.IMAGES -> "这里按真实目录显示图片，不添加作者或标签层级"
-                ClassifiedType.VIDEOS -> "这里按真实目录显示普通视频；动漫和影视作品在“漫画 / 动漫”中"
-            },
-            currentPath = when (type) {
-                ClassifiedType.GROUPS -> groupPath
-                ClassifiedType.IMAGES -> imagePath
-                ClassifiedType.VIDEOS -> videoPath
-            },
+            currentPath = if (type == ClassifiedType.IMAGES) imagePath else videoPath,
             onPathChange = { path ->
-                when (type) {
-                    ClassifiedType.GROUPS -> groupPath = path
-                    ClassifiedType.IMAGES -> imagePath = path
-                    ClassifiedType.VIDEOS -> videoPath = path
-                }
+                if (type == ClassifiedType.IMAGES) imagePath = path else videoPath = path
             },
-            browsingItemsFor = { item, visible -> groupsByPrimaryId[item.id]?.members ?: visible },
-            supportingText = { item ->
-                groupsByPrimaryId[item.id]?.let { group ->
-                    "${item.pageCount ?: 0} 张图片 · ${group.videos.size} 个视频"
-                }
-            },
-            compact = type != ClassifiedType.GROUPS,
+            compact = true,
             modifier = Modifier.weight(1f),
         )
     }

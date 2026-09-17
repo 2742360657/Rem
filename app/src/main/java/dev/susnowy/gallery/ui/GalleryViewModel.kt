@@ -20,6 +20,7 @@ import dev.susnowy.gallery.logging.RemLog
 import dev.susnowy.gallery.model.LibraryRegistration
 import dev.susnowy.gallery.model.DiscoveredEntry
 import dev.susnowy.gallery.model.InboxDisposition
+import dev.susnowy.gallery.model.MediaGroup
 import dev.susnowy.gallery.model.MediaItem
 import dev.susnowy.gallery.model.MediaDomain
 import dev.susnowy.gallery.model.MediaKind
@@ -28,6 +29,7 @@ import dev.susnowy.gallery.model.SeriesAssignment
 import dev.susnowy.gallery.model.toSeriesRef
 import dev.susnowy.gallery.organizer.OrganizationPlan
 import dev.susnowy.gallery.organizer.OrganizerTemplate
+import java.util.UUID
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.CancellationException
@@ -64,6 +66,8 @@ data class GalleryUiState(
     val media: List<MediaItem> = emptyList(),
     val discoveries: List<DiscoveredEntry> = emptyList(),
     val allMedia: List<MediaItem> = emptyList(),
+    val groups: List<MediaGroup> = emptyList(),
+    val selectedGroupId: String? = null,
     val screen: AppScreen = AppScreen.PHOTOS,
     val selectedItemId: String? = null,
     val detailItemIds: List<String> = emptyList(),
@@ -80,6 +84,8 @@ data class GalleryUiState(
         get() = libraries.firstOrNull { it.libraryId == activeLibraryId }
     val selectedItem: MediaItem?
         get() = allMedia.firstOrNull { it.id == selectedItemId }
+    val selectedGroup: MediaGroup?
+        get() = groups.firstOrNull { it.id == selectedGroupId }
 }
 
 class GalleryViewModel(
@@ -96,6 +102,7 @@ class GalleryViewModel(
             ?: AppScreen.PHOTOS,
     )
     private val selectedItemId = MutableStateFlow(savedStateHandle.get<String>(SELECTED_ITEM_KEY))
+    private val selectedGroupId = MutableStateFlow<String?>(null)
     private val detailItemIds = MutableStateFlow<List<String>>(emptyList())
     private val searchQuery = MutableStateFlow(savedStateHandle.get<String>(SEARCH_QUERY_KEY).orEmpty())
     private val message = MutableStateFlow<String?>(null)
@@ -115,11 +122,17 @@ class GalleryViewModel(
 
     val uiState: StateFlow<GalleryUiState> = combine(
         repository.libraries,
-        combine(repository.media, repository.discoveries) { media, discoveries ->
-            IndexedContent(media, discoveries)
+        combine(repository.media, repository.discoveries, repository.groups) { media, discoveries, groups ->
+            IndexedContent(media, discoveries, groups)
         },
-        combine(screen, selectedItemId, searchQuery, detailItemIds) { currentScreen, selected, query, detailIds ->
-            NavigationStatus(currentScreen, selected, query, detailIds)
+        combine(
+            screen,
+            selectedItemId,
+            searchQuery,
+            detailItemIds,
+            selectedGroupId,
+        ) { currentScreen, selected, query, detailIds, groupId ->
+            NavigationStatus(currentScreen, selected, query, detailIds, groupId)
         },
         combine(
             repository.operation,
@@ -145,6 +158,10 @@ class GalleryViewModel(
             discoveries = indexed.discoveries.filter {
                 resolvedActiveId == null || it.libraryId == resolvedActiveId
             },
+            groups = indexed.groups.filter {
+                resolvedActiveId == null || it.libraryId == resolvedActiveId
+            },
+            selectedGroupId = navigation.selectedGroupId,
             screen = navigation.screen,
             selectedItemId = navigation.selectedItemId,
             detailItemIds = navigation.detailItemIds,
@@ -269,6 +286,101 @@ class GalleryViewModel(
     fun closeDetail() {
         setSelectedItem(null)
         detailItemIds.value = emptyList()
+    }
+
+    fun openGroup(groupId: String) {
+        selectedGroupId.value = groupId
+    }
+
+    fun closeGroup() {
+        selectedGroupId.value = null
+    }
+
+    /** Creates a Group from an explicit member list, used by "新建分组". */
+    fun createGroup(title: String, memberIds: List<String>) {
+        val libraryId = activeLibraryId.value ?: return
+        if (title.isBlank() || memberIds.isEmpty()) return
+        viewModelScope.launch {
+            runCatching {
+                repository.saveGroup(
+                    libraryId = libraryId,
+                    groupId = UUID.randomUUID().toString(),
+                    title = title.trim(),
+                    memberIds = memberIds,
+                )
+            }.onSuccess { group ->
+                openGroup(group.id)
+                message.value = "已建立分组 ${group.title}"
+            }.onFailure(::showError)
+        }
+    }
+
+    /** Saves a derived mixed folder as a portable Group the user can then edit. */
+    fun saveDerivedGroup(primary: MediaItem, title: String, memberIds: List<String>) {
+        if (memberIds.isEmpty()) return
+        viewModelScope.launch {
+            runCatching {
+                repository.saveDerivedGroup(
+                    libraryId = primary.libraryId,
+                    primaryItemId = primary.id,
+                    title = title,
+                    memberIds = memberIds,
+                )
+            }.onSuccess { group ->
+                message.value = "已把 ${group.title} 保存为分组，可以手动增删和排序"
+            }.onFailure(::showError)
+        }
+    }
+
+    /**
+     * Saves title, membership, order and cover in one portable write.
+     *
+     * Member order is the list order; the repository turns it into `sort_index`. Nothing
+     * here moves media, and an empty member list is refused instead of silently deleting
+     * the group.
+     */
+    fun updateGroup(
+        group: MediaGroup,
+        memberIds: List<String> = group.memberIds,
+        title: String = group.title,
+        coverWorkId: String? = group.coverWorkId,
+    ) {
+        if (memberIds.isEmpty()) {
+            message.value = "分组至少需要一个成员；如果不再需要它，请直接删除分组"
+            return
+        }
+        if (title.isBlank()) {
+            message.value = "分组标题不能为空"
+            return
+        }
+        viewModelScope.launch {
+            runCatching {
+                repository.saveGroup(
+                    libraryId = group.libraryId,
+                    groupId = group.id,
+                    title = title.trim(),
+                    memberIds = memberIds,
+                    type = group.type,
+                    ordered = group.ordered,
+                    coverWorkId = coverWorkId?.takeIf { it in memberIds } ?: memberIds.first(),
+                    expectedRevision = group.revision,
+                )
+            }.onSuccess { message.value = "分组已保存" }
+                .onFailure(::showError)
+        }
+    }
+
+    fun deleteGroup(group: MediaGroup) {
+        viewModelScope.launch {
+            runCatching { repository.deleteGroup(group.libraryId, group.id) }
+                .onSuccess { removed ->
+                    if (removed) {
+                        if (selectedGroupId.value == group.id) closeGroup()
+                        message.value = "已删除分组；媒体原文件没有变化"
+                    }
+                }
+                .onFailure(::showError)
+        }
     }
 
     fun updateSearch(query: String) {
@@ -730,11 +842,13 @@ class GalleryViewModel(
         val selectedItemId: String?,
         val searchQuery: String,
         val detailItemIds: List<String>,
+        val selectedGroupId: String?,
     )
 
     private data class IndexedContent(
         val media: List<MediaItem>,
         val discoveries: List<DiscoveredEntry>,
+        val groups: List<MediaGroup>,
     )
 
     private data class SystemGalleryStatus(

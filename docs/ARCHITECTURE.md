@@ -102,6 +102,18 @@ A decision is keyed by relative path and carries `work_id` when the target is a 
 
 The device index (database v7) mirrors decisions into `media.inbox_disposition` and `discoveries.disposition`. `applyInboxDecisions` rewrites those columns from the portable document, so the document stays the single source of truth; `media.in_inbox` remains the pending flag and `discoveries` rows keep their disposition across rescans (`replaceDiscoveries` preserves it).
 
+## Groups
+
+A Group is "Works browsed together". It is edited only through explicit user actions; a scan never creates, reorders or deletes one.
+
+- `PortableMetadataStore.upsertGroup` creates or replaces a Group in one atomic catalog write (`revision` conflict checked, members deduplicated, title trimmed, references validated). `deleteGroup` removes only the relationship.
+- Order is the member list itself: the repository maps list position to `PortableGroupMember.sortIndex`, and `MediaGroup.membersInOrder()` reads it back.
+- Saving a derived mixed folder uses `derivedGroupId(libraryId, primaryWorkId)`, so the same folder saved twice updates one Group instead of creating a second.
+- Database v8 projects Groups into a `groups` table (`members_json`, disposable). `syncGroups` rewrites it from the catalog after attach and scan, and `upsertGroup`/`deleteGroupRow` keep single edits cheap; nothing in the table is a user decision.
+- UI: the `图片 / 视频 → 分组` tab lists saved Groups first and unfiled derived folders second (with "保存为 Group"), and `GroupDetail` edits title, membership, order and cover locally until one explicit save.
+
+Derived folder groups stay presentation-only inference until saved; after that the folder is no longer listed as a candidate and the Group is the user's.
+
 ## Library initialization and writes
 
 Initialization claims a provider-exclusive root lease before creating `.gallery/`. The lease carries a timestamp and expires after 15 minutes. `library.json` is the completion marker and is committed last.
@@ -130,7 +142,7 @@ An unchanged file reuses completed enrichment only when size and modified time s
 
 - `MediaItem` is the current SQLite/UI projection of a preferred Edition and its Work.
 - The Series shelf is derived from normalized Series projected back to `SeriesRef`.
-- Mixed directory groups are still presentation-only inference; they are not yet written as `PortableGroup`.
+- Groups are read from the device projection of `catalog.json`; derived mixed folders remain presentation-only until the user saves one.
 - Search and facet viewers retain their originating result order.
 - Large UI collections are reconstructed from the local index rather than stored in Android saved state.
 

@@ -34,6 +34,14 @@ import dev.susnowy.gallery.model.MediaDomain
 import dev.susnowy.gallery.model.MediaItem
 import dev.susnowy.gallery.model.PermissionState
 import dev.susnowy.gallery.model.PlaybackProgress
+import dev.susnowy.gallery.model.GroupMemberRole
+import dev.susnowy.gallery.model.GroupType
+import dev.susnowy.gallery.model.MediaGroup
+import dev.susnowy.gallery.model.derivedGroupId
+import dev.susnowy.gallery.model.roleForKind
+import dev.susnowy.gallery.model.toMediaGroup
+import dev.susnowy.gallery.model.PortableGroup
+import dev.susnowy.gallery.model.PortableGroupMember
 import dev.susnowy.gallery.model.PortableInboxDecision
 import dev.susnowy.gallery.model.PortableItemMetadata
 import dev.susnowy.gallery.model.PortableLibrary
@@ -91,6 +99,9 @@ class GalleryRepository(context: Context) {
     private val _discoveries = MutableStateFlow<List<DiscoveredEntry>>(emptyList())
     val discoveries: StateFlow<List<DiscoveredEntry>> = _discoveries.asStateFlow()
 
+    private val _groups = MutableStateFlow<List<MediaGroup>>(emptyList())
+    val groups: StateFlow<List<MediaGroup>> = _groups.asStateFlow()
+
     private val _operation = MutableStateFlow<String?>(null)
     val operation: StateFlow<String?> = _operation.asStateFlow()
 
@@ -129,6 +140,12 @@ class GalleryRepository(context: Context) {
                     database.applyInboxDecisions(migrated.libraryId, inbox.decisions)
                 }.onFailure { error ->
                     RemLog.failure("GalleryRepository", "Inbox 决策回填失败", error)
+                }
+                runCatching {
+                    val catalog = PortableMetadataStore(storage).loadCatalog(migrated.libraryId)
+                    syncGroups(migrated.libraryId, catalog.groups)
+                }.onFailure { error ->
+                    RemLog.failure("GalleryRepository", "分组索引回填失败", error)
                 }
                 refreshFromDatabase()
                 registration
@@ -413,6 +430,7 @@ class GalleryRepository(context: Context) {
                     lastScanAt = System.currentTimeMillis(),
                 ),
             )
+            syncGroups(libraryId, catalog.groups)
             refreshFromDatabase()
             val pending = database.pendingEnrichmentCount(libraryId)
             RemLog.info(
@@ -712,6 +730,88 @@ class GalleryRepository(context: Context) {
         }
     }
 
+    /**
+     * Creates or updates a browsing Group.
+     *
+     * Members are Works, so a group never owns media: adding, reordering or removing a
+     * member only edits the relationship, and deleting the group removes just that.
+     */
+    suspend fun saveGroup(
+        libraryId: String,
+        groupId: String,
+        title: String,
+        memberIds: List<String>,
+        type: GroupType = GroupType.MEDIA_SET,
+        ordered: Boolean = true,
+        coverWorkId: String? = null,
+        expectedRevision: Long? = null,
+    ): MediaGroup = runOperation("正在保存分组…") {
+        onIo {
+            val storage = storageFor(requireLibrary(libraryId))
+            val existing = database.groups(libraryId).firstOrNull { it.id == groupId }
+            val members = memberIds.distinct().mapNotNull { memberId ->
+                database.mediaItem(memberId)?.takeIf { it.libraryId == libraryId }
+            }
+            require(members.size == memberIds.distinct().size) { "分组包含不属于当前 Library 的成员" }
+            val portable = PortableGroup(
+                id = groupId,
+                title = title,
+                type = type,
+                ordered = ordered,
+                members = members.mapIndexed { index, item ->
+                    PortableGroupMember(
+                        workId = item.id,
+                        role = existing?.roleOf(item.id)?.takeIf { it != GroupMemberRole.ITEM }
+                            ?: roleForKind(item.kind),
+                        sortIndex = index.toDouble(),
+                    )
+                },
+                coverWorkId = coverWorkId ?: existing?.coverWorkId ?: members.firstOrNull()?.id,
+                revision = existing?.revision ?: 1,
+                updatedAt = java.time.Instant.now().toString(),
+            )
+            val saved = PortableMetadataStore(storage).upsertGroup(
+                libraryId = libraryId,
+                group = portable,
+                expectedRevision = expectedRevision ?: existing?.revision,
+            )
+            val projected = saved.toMediaGroup(libraryId)
+            database.upsertGroup(projected)
+            refreshFromDatabase()
+            projected
+        }
+    }
+
+    /**
+     * Saves a derived mixed folder as a real Group.
+     *
+     * The id is derived from the primary Work, so saving the same folder twice updates the
+     * existing group instead of creating a second one.
+     */
+    suspend fun saveDerivedGroup(
+        libraryId: String,
+        primaryItemId: String,
+        title: String,
+        memberIds: List<String>,
+    ): MediaGroup = saveGroup(
+        libraryId = libraryId,
+        groupId = derivedGroupId(libraryId, primaryItemId),
+        title = title,
+        memberIds = memberIds,
+    )
+
+    suspend fun deleteGroup(libraryId: String, groupId: String): Boolean = runOperation("正在删除分组…") {
+        onIo {
+            val storage = storageFor(requireLibrary(libraryId))
+            val removed = PortableMetadataStore(storage).deleteGroup(libraryId, groupId)
+            if (removed) {
+                database.deleteGroupRow(groupId)
+                refreshFromDatabase()
+            }
+            removed
+        }
+    }
+
     private fun mediaDecision(
         item: MediaItem,
         disposition: InboxDisposition,
@@ -1003,6 +1103,18 @@ class GalleryRepository(context: Context) {
         _libraries.value = database.libraries()
         _media.value = database.media()
         _discoveries.value = database.discoveries()
+        _groups.value = database.groups()
+    }
+
+    /**
+     * Mirrors the portable Groups of one Library into the disposable index.
+     *
+     * Called after a scan, after an attach, and after every group edit; the portable
+     * catalog is the truth and this projection only exists so the UI can render a group
+     * without loading the whole catalog.
+     */
+    private fun syncGroups(libraryId: String, groups: List<PortableGroup>) {
+        database.replaceGroups(libraryId, groups.map { it.toMediaGroup(libraryId) })
     }
 
     private fun MediaItem.withPortableMetadata(portable: PortableItemMetadata): MediaItem = copy(

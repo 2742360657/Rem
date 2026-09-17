@@ -13,6 +13,7 @@ import dev.susnowy.gallery.model.PortableCatalog
 import dev.susnowy.gallery.model.PortableEdition
 import dev.susnowy.gallery.model.PortableEditionAsset
 import dev.susnowy.gallery.model.PortableGroup
+import dev.susnowy.gallery.model.PortableGroupMember
 import dev.susnowy.gallery.model.PortableItemMetadata
 import dev.susnowy.gallery.model.PortableProgress
 import dev.susnowy.gallery.model.PortableSeries
@@ -396,6 +397,65 @@ class PortableMetadataStore(
                     updatedAt = now,
                 ) else it
             },
+        )
+        validate(updated)
+        writeSafely(CATALOG_PATH, json.encodeToString(updated), "application/json")
+        return true
+    }
+
+    /**
+     * Creates or replaces a Group.
+     *
+     * A Group is the portable way to say "these Works are browsed together". It lives in
+     * `catalog.json` next to Works so the decision travels with the Library, and the whole
+     * catalog is rewritten for that one relation; that is why group editing stays an
+     * explicit user action rather than something a scan does.
+     *
+     * Replacing a Group never touches media, and removing a member only removes the
+     * relationship.
+     */
+    fun upsertGroup(
+        libraryId: String,
+        group: PortableGroup,
+        expectedRevision: Long? = null,
+    ): PortableGroup {
+        val catalog = loadCatalog(libraryId)
+        val existing = catalog.groups.firstOrNull { it.id == group.id }
+        if (expectedRevision != null && existing != null && existing.revision != expectedRevision) {
+            throw RevisionConflictException(
+                "${existing.title} 已被其他设备修改（磁盘 ${existing.revision}，本机 $expectedRevision）",
+            )
+        }
+        require(group.title.isNotBlank()) { "Group 标题不能为空" }
+        val now = Instant.now().toString()
+        val replaced = group.copy(
+            title = group.title.trim(),
+            members = group.members.distinctBy(PortableGroupMember::workId),
+            revision = (existing?.revision ?: 0) + 1,
+            updatedAt = now,
+        )
+        val updated = catalog.copy(
+            schemaVersion = CURRENT_SCHEMA_VERSION,
+            revision = catalog.revision + 1,
+            updatedAt = now,
+            groups = (catalog.groups.filterNot { it.id == group.id } + replaced)
+                .sortedBy(PortableGroup::id),
+        )
+        validate(updated)
+        writeSafely(CATALOG_PATH, json.encodeToString(updated), "application/json")
+        return replaced
+    }
+
+    /** Removes the browsing relationship only; Works, Editions and media stay untouched. */
+    fun deleteGroup(libraryId: String, groupId: String): Boolean {
+        val catalog = loadCatalog(libraryId)
+        if (catalog.groups.none { it.id == groupId }) return false
+        val now = Instant.now().toString()
+        val updated = catalog.copy(
+            schemaVersion = CURRENT_SCHEMA_VERSION,
+            revision = catalog.revision + 1,
+            updatedAt = now,
+            groups = catalog.groups.filterNot { it.id == groupId },
         )
         validate(updated)
         writeSafely(CATALOG_PATH, json.encodeToString(updated), "application/json")

@@ -8,9 +8,13 @@ import android.database.sqlite.SQLiteOpenHelper
 import androidx.core.database.sqlite.transaction
 import dev.susnowy.gallery.model.DiscoveredEntry
 import dev.susnowy.gallery.model.DiscoveryReason
+import dev.susnowy.gallery.model.GroupMemberRole
+import dev.susnowy.gallery.model.GroupType
 import dev.susnowy.gallery.model.InboxDisposition
 import dev.susnowy.gallery.model.InboxTarget
 import dev.susnowy.gallery.model.LibraryRegistration
+import dev.susnowy.gallery.model.MediaGroup
+import dev.susnowy.gallery.model.MediaGroupMember
 import dev.susnowy.gallery.model.MediaItem
 import dev.susnowy.gallery.model.MediaDomain
 import dev.susnowy.gallery.model.MediaKind
@@ -104,7 +108,32 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
         db.execSQL("CREATE INDEX media_search_title ON media(display_title)")
         db.execSQL("CREATE INDEX media_trash ON media(trashed, deleted_at)")
         createDiscoveriesTable(db)
+        createGroupsTable(db)
         createScanEnrichmentTable(db)
+    }
+
+    /**
+     * Disposable projection of portable Groups. Members are stored as JSON because the
+     * device index only ever renders one group at a time; the portable catalog stays the
+     * normalized source of truth.
+     */
+    private fun createGroupsTable(db: SQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS groups (
+                id TEXT PRIMARY KEY NOT NULL,
+                library_id TEXT NOT NULL,
+                title TEXT NOT NULL,
+                type TEXT NOT NULL,
+                ordered INTEGER NOT NULL,
+                cover_work_id TEXT,
+                revision INTEGER NOT NULL,
+                members_json TEXT NOT NULL,
+                FOREIGN KEY(library_id) REFERENCES libraries(library_id) ON DELETE CASCADE
+            )
+            """.trimIndent(),
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS groups_library ON groups(library_id, title)")
     }
 
     private fun createDiscoveriesTable(db: SQLiteDatabase) {
@@ -186,9 +215,13 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
             db.execSQL("ALTER TABLE media ADD COLUMN inbox_disposition TEXT")
             db.execSQL("ALTER TABLE discoveries ADD COLUMN disposition TEXT")
         }
+        if (oldVersion < 8) {
+            createGroupsTable(db)
+        }
         if (oldVersion > newVersion) {
             db.execSQL("DROP TABLE IF EXISTS progress")
             db.execSQL("DROP TABLE IF EXISTS discoveries")
+            db.execSQL("DROP TABLE IF EXISTS groups")
             db.execSQL("DROP TABLE IF EXISTS scan_enrichment")
             db.execSQL("DROP TABLE IF EXISTS media")
             db.execSQL("DROP TABLE IF EXISTS libraries")
@@ -595,6 +628,105 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
         )
     }
 
+    /**
+     * Replaces the Group projection of one Library from the portable catalog.
+     *
+     * Groups the catalog no longer contains are dropped here as well, so a removal made on
+     * another device disappears on the next attach or scan.
+     */
+    @Synchronized
+    fun replaceGroups(libraryId: String, groups: List<MediaGroup>) {
+        require(groups.all { it.libraryId == libraryId }) { "不能跨 Library 写入分组索引" }
+        val database = writableDatabase
+        database.transaction {
+            val keep = groups.mapTo(mutableSetOf(), MediaGroup::id)
+            query(
+                "groups",
+                arrayOf("id"),
+                "library_id = ?",
+                arrayOf(libraryId),
+                null,
+                null,
+                null,
+            ).use { cursor ->
+                while (cursor.moveToNext()) {
+                    val id = cursor.string("id")
+                    if (id !in keep) delete("groups", "id = ?", arrayOf(id))
+                }
+            }
+            groups.forEach { group ->
+                insertWithOnConflict(
+                    "groups",
+                    null,
+                    ContentValues().apply {
+                        put("id", group.id)
+                        put("library_id", group.libraryId)
+                        put("title", group.title)
+                        put("type", group.type.name)
+                        put("ordered", group.ordered.asInt())
+                        group.coverWorkId?.let { put("cover_work_id", it) } ?: putNull("cover_work_id")
+                        put("revision", group.revision)
+                        put("members_json", json.encodeToString(group.membersInOrder()))
+                    },
+                    SQLiteDatabase.CONFLICT_REPLACE,
+                )
+            }
+        }
+    }
+
+    /** Writes one projected Group row; the portable catalog remains the source of truth. */
+    @Synchronized
+    fun upsertGroup(group: MediaGroup) {
+        writableDatabase.insertWithOnConflict(
+            "groups",
+            null,
+            ContentValues().apply {
+                put("id", group.id)
+                put("library_id", group.libraryId)
+                put("title", group.title)
+                put("type", group.type.name)
+                put("ordered", group.ordered.asInt())
+                group.coverWorkId?.let { put("cover_work_id", it) } ?: putNull("cover_work_id")
+                put("revision", group.revision)
+                put("members_json", json.encodeToString(group.membersInOrder()))
+            },
+            SQLiteDatabase.CONFLICT_REPLACE,
+        )
+    }
+
+    @Synchronized
+    fun deleteGroupRow(groupId: String) {
+        writableDatabase.delete("groups", "id = ?", arrayOf(groupId))
+    }
+
+    @Synchronized
+    fun groups(libraryId: String? = null): List<MediaGroup> {
+        val selection = libraryId?.let { "library_id = ?" }
+        val args = if (libraryId == null) null else arrayOf(libraryId)
+        return readableDatabase.query(
+            "groups",
+            null,
+            selection,
+            args,
+            null,
+            null,
+            "title COLLATE NOCASE",
+        ).use { cursor -> cursor.mapRows(::groupFromCursor) }
+    }
+
+    private fun groupFromCursor(cursor: Cursor) = MediaGroup(
+        id = cursor.string("id"),
+        libraryId = cursor.string("library_id"),
+        title = cursor.string("title"),
+        type = runCatching { GroupType.valueOf(cursor.string("type")) }.getOrDefault(GroupType.MEDIA_SET),
+        ordered = cursor.int("ordered") != 0,
+        members = cursor.string("members_json").let { stored ->
+            runCatching { json.decodeFromString<List<MediaGroupMember>>(stored) }.getOrDefault(emptyList())
+        },
+        coverWorkId = cursor.nullableString("cover_work_id"),
+        revision = cursor.long("revision"),
+    )
+
     @Synchronized
     fun removeMedia(itemId: String) {
         val database = writableDatabase
@@ -625,6 +757,7 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
     fun clearMediaIndex(libraryId: String) {
         writableDatabase.delete("media", "library_id = ?", arrayOf(libraryId))
         writableDatabase.delete("discoveries", "library_id = ?", arrayOf(libraryId))
+        writableDatabase.delete("groups", "library_id = ?", arrayOf(libraryId))
         writableDatabase.delete("scan_enrichment", "library_id = ?", arrayOf(libraryId))
     }
 
@@ -871,7 +1004,7 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
 
     companion object {
         private const val DATABASE_NAME = "gallery-index.db"
-        private const val DATABASE_VERSION = 7
+        private const val DATABASE_VERSION = 8
         private const val ENRICHMENT_PENDING = "PENDING"
         private const val ENRICHMENT_COMPLETE = "COMPLETE"
         private const val ENRICHMENT_FAILED = "FAILED"

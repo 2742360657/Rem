@@ -17,11 +17,10 @@ Rem is an Android, local-first library for large image, comic, photo-set, and vi
 Current priorities:
 
 1. a clean portable logical model;
-2. editable image/video Groups;
-3. first-class Series editing;
-4. non-destructive Edition comparison and merge;
-5. real-device testing with the large E-drive Library;
-6. interaction polish inspired by EhViewer and MT Manager.
+2. first-class Series editing;
+3. non-destructive Edition comparison and merge;
+4. real-device testing with the large E-drive Library;
+5. interaction polish inspired by EhViewer and MT Manager.
 
 The project is pre-release. Prefer the cleanest current design over compatibility layers for formats that were never stable. Schema v4 is current; v3 has one explicit backup-first conversion path only. Do not add support for older experiments unless the user explicitly asks.
 
@@ -99,12 +98,11 @@ A second, always-available test target is the phone's own storage (`/storage/emu
 - derived Series shelf and mixed image/video presentation;
 - bounded device-private offline previews;
 - normalized Schema v4 plus idempotent v3-to-v4 conversion after snapshots;
-- portable Inbox decisions in `.gallery/state/inbox.json` (accept, classify, ignore, handle, undo), mirrored into a disposable device index.
+- portable Inbox decisions in `.gallery/state/inbox.json` (accept, classify, ignore, handle, undo), mirrored into a disposable device index;
+- editable Groups: explicit save of a derived mixed folder with a stable id, plus create/rename/member/order/cover/delete operations written through `catalog.json` and projected into a disposable `groups` table (database v8).
 
 ## Known gaps
 
-- Derived mixed groups cannot yet be saved or manually edited as Group entities.
-- Group membership, cover, role, and order have no UI.
 - Series entities exist portably, but batch member editing and drag reordering are unfinished.
 - Edition comparison, page-level hashes, virtual merge, and recoverable cleanup UI are unfinished.
 - Initial inventory is still one atomic traversal; only enrichment is resumable.
@@ -114,12 +112,10 @@ A second, always-available test target is the phone's own storage (`/storage/emu
 
 ## Next implementation order
 
-1. Add repository operations and UI for Group create/edit/member order/cover.
-2. Offer saving a derived mixed folder as an explicit Group.
-3. Add atomic Series member editing and reordering.
-4. Add cheap-first Edition comparison (page counts and entry sizes before any byte hashing) and virtual merge as a new Edition on the confirmed Work.
-5. Test the current build against the actual removable Library, then decide whether inventory checkpoints and database paging are required.
-6. Polish density, selection, long-press actions, contextual tools, and back behavior.
+1. Add atomic Series member editing, renaming and reordering.
+2. Add cheap-first Edition comparison (page counts and entry sizes before any byte hashing) and virtual merge as a new Edition on the confirmed Work.
+3. Test the current build against the actual removable Library, then decide whether inventory checkpoints and database paging are required.
+4. Polish density, selection, long-press actions, contextual tools, and back behavior.
 
 Do not start a broad UI rewrite before portable semantics are usable.
 

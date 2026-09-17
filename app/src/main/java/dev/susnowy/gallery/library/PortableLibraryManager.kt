@@ -364,6 +364,7 @@ class PortableLibraryManager(
             - 不得擅自修改 ID、`revision`、时间戳、哈希、事务或活动回收站记录。
             - `.gallery/state/inbox.json` 是用户的决定：不要删除已有决定，不要让被 `ignored` 的路径重新出现在建议里。Agent 自己写入时必须把 `by` 标为 `agent:<标识>`，且 `handled` 只能用于 `target` 为 `discovery` 的路径；`classified` 的权威归属仍在 Work 的 `domain`。
             - Group 只表达一起浏览；Series 只表达顺序；Edition 表达同一 Work 的不同来源版本。不要用同作者或相似标题自动建立永久关系。
+            Group 成员的 `sort_index` 就是用户看到的顺序；不要擅自重排、增删用户建立的分组或改它的封面，删除分组只允许删除关系。
             - 自动整理不得移动、改名、合并或删除媒体。物理操作必须由用户确认计划，并写入可恢复事务。
             - 完成后让 Rem 重扫，并报告实际修改、未匹配项目和冲突。
 
