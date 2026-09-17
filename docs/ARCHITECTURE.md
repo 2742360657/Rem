@@ -151,10 +151,18 @@ The scanner avoids repeated provider queries and byte reads, but `refreshFromDat
 
 ## Verification baseline
 
-For ordinary changes:
+For ordinary changes, pick the command that matches the current host — this repository is developed on both Windows and Linux:
+
+Windows (PowerShell):
 
 ```powershell
 .\gradlew.bat testDebugUnitTest lintDebug assembleDebug assembleDebugAndroidTest
+```
+
+Linux/macOS (the wrapper keeps its executable bit; `bash gradlew` is equivalent):
+
+```bash
+./gradlew testDebugUnitTest lintDebug assembleDebug assembleDebugAndroidTest
 ```
 
 Run AndroidJUnitRunner on a real device whenever SAF provider behavior, Schema conversion, media decoding, or navigation lifecycle changes. A successful emulator or empty-volume launch is not evidence of large removable-Library performance.

@@ -122,10 +122,19 @@ Before editing:
 
 Before handoff:
 
-1. Run focused tests, then normally:
+1. Run focused tests, then normally. This repository is developed on both Windows and Linux, so
+   detect the current host instead of assuming one platform:
+
+   Windows (PowerShell):
 
    ```powershell
    .\gradlew.bat testDebugUnitTest lintDebug assembleDebug assembleDebugAndroidTest
+   ```
+
+   Linux/macOS (the wrapper keeps its executable bit; `bash gradlew` is equivalent):
+
+   ```bash
+   ./gradlew testDebugUnitTest lintDebug assembleDebug assembleDebugAndroidTest
    ```
 
 2. Run device tests when SAF, provider behavior, migration, decoding, or navigation changed.

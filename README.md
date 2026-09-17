@@ -42,8 +42,16 @@ Library 接入后还会在根目录生成 `GALLERY_LIBRARY.md`，供本地 Agent
 
 ## 构建与检查
 
+Windows（PowerShell）：
+
 ```powershell
 .\gradlew.bat testDebugUnitTest lintDebug assembleDebug assembleDebugAndroidTest
+```
+
+Linux / macOS（`gradlew` 带执行位，可直接 `./gradlew`；`bash gradlew` 等效）：
+
+```bash
+./gradlew testDebugUnitTest lintDebug assembleDebug assembleDebugAndroidTest
 ```
 
 Debug 包使用 `com.susnowy.rem.debug`，可以与 Release 包并存。涉及 SAF、Schema 转换、媒体解码或导航生命周期时，还应运行真机 AndroidJUnitRunner。
