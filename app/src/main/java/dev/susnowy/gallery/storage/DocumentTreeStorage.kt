@@ -188,7 +188,7 @@ class DocumentTreeStorage(
     }
 
     override fun openInput(document: LibraryDocument): InputStream =
-        resolver.openInputStream(document.resolveUri())
+        StorageMetrics.measure { resolver.openInputStream(document.resolveUri()) }
             ?: throw FileNotFoundException(document.key)
 
     override fun openOutput(document: LibraryDocument, truncate: Boolean): OutputStream =
@@ -373,7 +373,7 @@ class DocumentTreeStorage(
             directory.documentId,
         )
         val listed = mutableListOf<StorageNode>()
-        val cursor = resolver.query(childrenUri, PROJECTION, null, null, null)
+        val cursor = StorageMetrics.measure { resolver.query(childrenUri, PROJECTION, null, null, null) }
             ?: throw FileNotFoundException(
                 "文件提供方未返回目录 ${directory.relativePath.ifEmpty { "Library 根目录" }}",
             )
@@ -398,7 +398,7 @@ class DocumentTreeStorage(
         documentId: String,
         relativePath: (actualName: String) -> String,
     ): StorageNode? =
-        resolver.query(uri, PROJECTION, null, null, null)?.use { cursor ->
+        StorageMetrics.measure { resolver.query(uri, PROJECTION, null, null, null) }?.use { cursor ->
             if (!cursor.moveToFirst()) return@use null
             val name = cursor.string(DocumentsContract.Document.COLUMN_DISPLAY_NAME) ?: ""
             cursor.toNode(relativePath(name), name, documentId, uri)

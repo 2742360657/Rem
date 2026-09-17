@@ -78,6 +78,7 @@ import dev.susnowy.gallery.scanner.ScanResult
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import dev.susnowy.gallery.storage.DocumentTreeStorage
+import dev.susnowy.gallery.storage.StorageMetrics
 import java.io.File
 import java.io.FileNotFoundException
 import java.security.MessageDigest
@@ -285,6 +286,7 @@ class GalleryRepository(context: Context) {
             val catalog = portableStore.loadCatalog(libraryId)
             val state = portableStore.loadState(libraryId)
             val inbox = PortableInboxStore(storage).load(libraryId)
+            val inventoryStartedAt = System.currentTimeMillis()
             val result = scanner.scan(
                 storage,
                 database.scanSnapshot(libraryId),
@@ -298,10 +300,11 @@ class GalleryRepository(context: Context) {
                     RemLog.info(
                         SCAN_TAG,
                         "清点进度：目录=${progress.directoriesRead}，条目=${progress.entriesRead}，" +
-                            "候选=${progress.candidatesFound}",
+                            "候选=${progress.candidatesFound}，${StorageMetrics.summary()}",
                     )
                 }
             }
+            val inventoryMillis = System.currentTimeMillis() - inventoryStartedAt
             val existing = database.media(libraryId)
             val existingByPath = existing.associateBy(MediaItem::relativePath)
             val metadataById = catalog.items.associateBy { it.id }
@@ -479,7 +482,8 @@ class GalleryRepository(context: Context) {
             val pending = database.pendingEnrichmentCount(libraryId)
             RemLog.info(
                 SCAN_TAG,
-                "快速索引已提交：媒体=${result.candidates.size}，待补全=$pending，其他=${result.discoveries.size}",
+                "快速索引已提交：媒体=${result.candidates.size}，待补全=$pending，" +
+                    "其他=${result.discoveries.size}，清点耗时=${inventoryMillis} ms，${StorageMetrics.summary()}",
             )
             if (pending > 0) enrichPending(libraryId, storage)
             result
@@ -539,7 +543,10 @@ class GalleryRepository(context: Context) {
                 if (failed == 0) "" else "（失败 $failed）"
         }
         refreshFromDatabase()
-        RemLog.info(SCAN_TAG, "媒体信息补全结束：完成=$completed，失败=$failed，总计=$initial")
+        RemLog.info(
+            SCAN_TAG,
+            "媒体信息补全结束：完成=$completed，失败=$failed，总计=$initial，${StorageMetrics.summary()}",
+        )
         if (failed > 0) _events.tryEmit("有 $failed 项媒体信息暂时无法补全；下次扫描会重试")
         return completed
     }
