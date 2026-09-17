@@ -1939,8 +1939,10 @@ private fun SettingsScreen(state: GalleryUiState, viewModel: GalleryViewModel) {
         mutableStateOf(state.trashRetentionDays.takeIf { it > 0 }?.toString().orEmpty())
     }
     val duplicateGroups by viewModel.duplicateGroups.collectAsStateWithLifecycle()
+    val offlinePreviewStats by viewModel.offlinePreviewStats.collectAsStateWithLifecycle()
     val context = androidx.compose.ui.platform.LocalContext.current
     var diagnosticsText by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(Unit) { viewModel.refreshOfflinePreviewStats() }
     LazyColumn(contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
         item {
             ListItem(
@@ -1999,6 +2001,19 @@ private fun SettingsScreen(state: GalleryUiState, viewModel: GalleryViewModel) {
                     }
                 }
             }
+        }
+        item {
+            Text("离线小预览", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "已保存 ${offlinePreviewStats.files} 张 · ${offlinePreviewStats.bytes.formatBytes()}。" +
+                    "浏览缩略图时按需生成，Library 拔出后仍可用于辨认内容；不含原图，也不写入移动介质。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            TextButton(
+                onClick = viewModel::clearOfflinePreviews,
+                enabled = offlinePreviewStats.files > 0,
+            ) { Text("清除离线预览") }
         }
         item {
             Text("诊断日志", style = MaterialTheme.typography.titleMedium)

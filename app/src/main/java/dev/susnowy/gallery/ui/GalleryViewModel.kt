@@ -15,6 +15,7 @@ import dev.susnowy.gallery.importer.SystemMediaEntry
 import dev.susnowy.gallery.importer.WorkImportKind
 import dev.susnowy.gallery.media.ImagePage
 import dev.susnowy.gallery.media.MediaContentService
+import dev.susnowy.gallery.media.OfflinePreviewStats
 import dev.susnowy.gallery.logging.RemLog
 import dev.susnowy.gallery.model.LibraryRegistration
 import dev.susnowy.gallery.model.DiscoveredEntry
@@ -106,6 +107,8 @@ class GalleryViewModel(
     val organizationPlan: StateFlow<OrganizationPlan?> = _organizationPlan
     private val _duplicateGroups = MutableStateFlow<List<List<MediaItem>>>(emptyList())
     val duplicateGroups: StateFlow<List<List<MediaItem>>> = _duplicateGroups
+    private val _offlinePreviewStats = MutableStateFlow(OfflinePreviewStats(files = 0, bytes = 0))
+    val offlinePreviewStats: StateFlow<OfflinePreviewStats> = _offlinePreviewStats
     private var longOperationJob: Job? = null
     private var systemMediaJob: Job? = null
 
@@ -176,6 +179,9 @@ class GalleryViewModel(
             delay(1_500)
             runCatching { repository.cleanupExpired(retentionDays.value) }
                 .onSuccess { if (it > 0) message.value = "已安全清理 $it 个到期回收站项目" }
+        }
+        viewModelScope.launch {
+            _offlinePreviewStats.value = repository.offlinePreviewStats()
         }
     }
 
@@ -412,6 +418,29 @@ class GalleryViewModel(
 
     suspend fun progress(item: MediaItem): PlaybackProgress? = repository.progress(item.id)
 
+    suspend fun offlinePreview(item: MediaItem): java.io.File? {
+        return repository.offlinePreview(item)
+    }
+
+    fun refreshOfflinePreviewStats() {
+        viewModelScope.launch {
+            runCatching { repository.offlinePreviewStats() }
+                .onSuccess { _offlinePreviewStats.value = it }
+                .onFailure(::showError)
+        }
+    }
+
+    fun clearOfflinePreviews() {
+        viewModelScope.launch {
+            runCatching { repository.clearOfflinePreviews() }
+                .onSuccess { removed ->
+                    _offlinePreviewStats.value = OfflinePreviewStats(files = 0, bytes = 0)
+                    message.value = "已清除 ${removed.files} 张离线预览（${removed.bytes.formatBytes()}）"
+                }
+                .onFailure(::showError)
+        }
+    }
+
     fun saveProgress(item: MediaItem, page: Int = 0, positionMs: Long = 0, finished: Boolean = false) {
         viewModelScope.launch {
             runCatching {
@@ -642,6 +671,13 @@ class GalleryViewModel(
 
     private fun String.splitValues(): List<String> =
         split(',', '，', ';', '；').map(String::trim).filter(String::isNotEmpty).distinct()
+
+    private fun Long.formatBytes(): String = when {
+        this >= 1_073_741_824 -> "%.1f GB".format(this / 1_073_741_824.0)
+        this >= 1_048_576 -> "%.1f MB".format(this / 1_048_576.0)
+        this >= 1_024 -> "%.1f KB".format(this / 1_024.0)
+        else -> "$this B"
+    }
 
     private data class SettingsStatus(
         val operation: String?,

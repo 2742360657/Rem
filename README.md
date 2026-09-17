@@ -23,6 +23,8 @@ Rem 是一个 Android 本地优先媒体库，当前版本为 **0.0.3**。用户
 图片显示支持 GIF、Animated WebP（Android 9+）、SVG，以及系统可解码的
 HEIF/AVIF/DNG 等格式。缩略图固定按显示尺寸解码；超大静态图会先探测尺寸并安全降采样，避免整张原图直接解码造成内存溢出。
 
+浏览到的媒体卡片会按需保存最长边 512 px 的本机离线小预览，移动 Library 拔出后仍可辨认已有内容。预览不写入移动介质，限制为 256 MiB / 20,000 张，并可从设置中安全清除。
+
 详细设计见 `Gallery_Project_Guide.md`，使用方法见 `docs/USER_GUIDE.md`，架构约束见 `docs/ARCHITECTURE.md`，版本变化见 `CHANGELOG.md`，开发过程中的问题与解决措施见 `docs/DEV_LOG.md`。
 
 ```powershell

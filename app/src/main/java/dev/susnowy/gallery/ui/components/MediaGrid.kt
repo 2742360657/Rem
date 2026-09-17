@@ -12,7 +12,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -47,7 +46,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -427,23 +425,21 @@ fun MediaThumbnail(
     contentScale: ContentScale = ContentScale.Crop,
 ) {
     val context = LocalContext.current
+    val offlinePreview by produceState<java.io.File?>(
+        initialValue = null,
+        item.id,
+        item.modifiedAt,
+        item.coverPath,
+    ) {
+        value = runCatching { viewModel.offlinePreview(item) }.getOrNull()
+    }
     val thumbnail by produceState<String?>(initialValue = directPreview(item), item.id, item.coverPath) {
         if (value == null && item.coverPath != null) {
             value = runCatching { viewModel.resolvePath(item, item.coverPath) }.getOrNull()
         }
     }
-    val archiveBitmap by produceState<android.graphics.Bitmap?>(
-        initialValue = null,
-        item.id,
-        item.modifiedAt,
-    ) {
-        if (thumbnail == null && item.kind == MediaKind.IMAGE_SET && item.sourceKind == SourceKind.ARCHIVE) {
-            val firstEntry = runCatching { viewModel.pages(item).firstOrNull()?.archiveEntry }.getOrNull()
-            value = firstEntry?.let { viewModel.archiveBitmap(item, it, 640, 640) }
-        }
-    }
-    val thumbnailRequest = remember(context, thumbnail) {
-        thumbnail?.let {
+    val thumbnailRequest = remember(context, offlinePreview, thumbnail) {
+        (offlinePreview ?: thumbnail)?.let {
             ImageRequest.Builder(context)
                 .data(it)
                 .size(640, 640)
@@ -453,14 +449,8 @@ fun MediaThumbnail(
     }
     Box(modifier = modifier, contentAlignment = Alignment.Center) {
         when {
-            thumbnail != null -> AsyncImage(
+            thumbnailRequest != null -> AsyncImage(
                 model = thumbnailRequest,
-                contentDescription = item.displayTitle,
-                contentScale = contentScale,
-                modifier = Modifier.fillMaxSize(),
-            )
-            archiveBitmap != null -> Image(
-                bitmap = archiveBitmap!!.asImageBitmap(),
                 contentDescription = item.displayTitle,
                 contentScale = contentScale,
                 modifier = Modifier.fillMaxSize(),

@@ -18,6 +18,8 @@ import dev.susnowy.gallery.logging.RemLog
 import dev.susnowy.gallery.media.ImagePage
 import dev.susnowy.gallery.media.ImageSetOrderResult
 import dev.susnowy.gallery.media.ImageSetOrderService
+import dev.susnowy.gallery.media.OfflinePreviewStats
+import dev.susnowy.gallery.media.OfflinePreviewStore
 import dev.susnowy.gallery.metadata.PortableMetadataStore
 import dev.susnowy.gallery.metadata.FieldSource
 import dev.susnowy.gallery.metadata.MetadataField
@@ -63,6 +65,7 @@ class GalleryRepository(context: Context) {
     private val systemMediaCatalog = SystemMediaCatalog(appContext)
     private val derivation = DerivationService()
     private val imageSetOrder = ImageSetOrderService()
+    private val offlinePreviews = OfflinePreviewStore(appContext)
     private val progressWriteMutex = Mutex()
 
     /** Serializes attach: a repeated folder-selection tap must not initialize twice. */
@@ -622,6 +625,13 @@ class GalleryRepository(context: Context) {
     }
 
     suspend fun progress(itemId: String): PlaybackProgress? = onIo { database.progress(itemId) }
+
+    suspend fun offlinePreview(item: MediaItem): java.io.File? =
+        offlinePreviews.getOrCreate(item, storageFor(requireLibrary(item.libraryId)))
+
+    suspend fun offlinePreviewStats(): OfflinePreviewStats = offlinePreviews.stats()
+
+    suspend fun clearOfflinePreviews(): OfflinePreviewStats = offlinePreviews.clear()
 
     suspend fun previewOrganization(
         libraryId: String,

@@ -27,6 +27,7 @@ The current product priority is the ingestion and logical-content model, especia
 - Account credentials, cookies, and tokens never enter the Library, logs, fixtures, or Git.
 - Keep SAF round-trips proportional to the tree. Prefer one projected directory query, reuse locators and unchanged scan results, and hash large content only on demand.
 - Never write a newer unsupported portable Schema. Back up portable metadata before migration or a high-risk batch operation.
+- Rem is still pre-release. Do not accumulate compatibility shims for formats that were never shipped as a stable contract; prefer the cleanest current model. A deliberate test-phase Schema replacement may rebuild the device index and migrate or reset test metadata after backup, but it must never alter the user's media bytes. Document the new current format and keep refusing unknown newer formats.
 - Small preview/cover derivatives are permitted. Keep device-private offline previews bounded and clearable; if a cover is intentionally made portable under `.gallery/`, distinguish it from disposable thumbnails and never treat either as the original media.
 
 ## Product vocabulary to converge on
@@ -92,6 +93,7 @@ The sample proves that the Library contains app-generated metadata, manually arr
 - Works can be browsed as a series shelf or flat item grid. The shelf groups legacy same-title references for display, keeps unassigned works visible, and orders entries by manual sort index then season/episode or volume/chapter. The editor preserves and edits every existing series position field.
 - Large scans now publish a byte-free inventory first, then checkpoint hashes, archive inspection, ComicInfo, and capture metadata in a device-local v6 queue. Completed batches resume after process restart; the queue is disposable and never becomes portable truth.
 - A directory-backed image set and its direct child videos can be shown as one derived 图片 / 视频 group. Mixed leaves outside explicit work roots default to `classified`; an existing manual domain remains authoritative. This presentation neither moves files nor creates a portable relationship.
+- Visible cards lazily retain a device-private 512 px JPEG preview under `noBackupFilesDir`, bounded to 256 MiB / 20,000 files with LRU-style trimming and a Settings clear action. These previews keep an offline Library recognizable but are disposable and never enter `.gallery`.
 
 ## Preferred implementation path
 
