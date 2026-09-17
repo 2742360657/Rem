@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -91,9 +92,6 @@ fun EditionCompareDialog(
                     report != null -> ComparisonReportBody(
                         report = report,
                         message = state.message,
-                        confirmMerge = confirmMerge,
-                        onConfirmMergeChange = { confirmMerge = it },
-                        onMerge = { viewModel.createMergedEdition(left, report) },
                     )
                     else -> {
                         state.message?.let {
@@ -110,8 +108,9 @@ fun EditionCompareDialog(
         },
         confirmButton = {
             val selected = target
-            if (!state.running && report == null) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            when {
+                state.running -> TextButton(onClick = viewModel::cancelComparison) { Text("取消比较") }
+                report == null -> Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(
                         enabled = selected != null,
                         onClick = { selected?.let { viewModel.startComparison(left, it, deep = false) } },
@@ -121,7 +120,19 @@ fun EditionCompareDialog(
                         onClick = { selected?.let { viewModel.startComparison(left, it, deep = true) } },
                     ) { Text("深度比较") }
                 }
-            } else {
+                else -> Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    // The primary action lives in the dialog's button row: inside the scrollable
+                    // report it could be pushed out of reach by a long page list.
+                    Button(onClick = { confirmMerge = true }) { Text("生成虚拟合并版本") }
+                    TextButton(onClick = {
+                        viewModel.clearComparison()
+                        onDismiss()
+                    }) { Text("关闭") }
+                }
+            }
+        },
+        dismissButton = {
+            if (state.running) {
                 TextButton(onClick = {
                     viewModel.clearComparison()
                     onDismiss()
@@ -129,15 +140,32 @@ fun EditionCompareDialog(
             }
         },
     )
+
+    if (confirmMerge && report != null) {
+        AlertDialog(
+            onDismissRequest = { confirmMerge = false },
+            title = { Text("生成虚拟合并版本？") },
+            text = {
+                Text(
+                    "会在「${left.displayTitle}」上新增一个按合并顺序排列的版本并设为默认：" +
+                        "阅读时按合并顺序读页。两个来源的原有版本与文件都保持不变。",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmMerge = false
+                    viewModel.createMergedEdition(left, report)
+                }) { Text("确认生成") }
+            },
+            dismissButton = { TextButton(onClick = { confirmMerge = false }) { Text("取消") } },
+        )
+    }
 }
 
 @Composable
 private fun ComparisonReportBody(
     report: EditionComparisonReport,
     message: String?,
-    confirmMerge: Boolean,
-    onConfirmMergeChange: (Boolean) -> Unit,
-    onMerge: () -> Unit,
 ) {
     Column(Modifier.fillMaxWidth()) {
         Text(report.summary, style = MaterialTheme.typography.bodyMedium)
@@ -170,7 +198,7 @@ private fun ComparisonReportBody(
             )
         }
         HorizontalDivider(Modifier.padding(vertical = 8.dp))
-        LazyColumn(modifier = Modifier.fillMaxWidth()) {
+        LazyColumn(modifier = Modifier.fillMaxWidth().heightIn(max = 320.dp)) {
             val left = report.left.pages
             val right = report.right.pages
             itemsIndexed(report.matches, key = { _, match -> "m-${match.leftIndex}" }) { _, match ->
@@ -218,23 +246,6 @@ private fun ComparisonReportBody(
                     },
                 )
             }
-        }
-        HorizontalDivider(Modifier.padding(vertical = 8.dp))
-        if (confirmMerge) {
-            Text(
-                "生成合并版本会在左侧作品上新增一个“页计划”版本并设为默认：阅读时按合并顺序读页，" +
-                    "两个来源的原有版本与文件都保持不变。",
-                style = MaterialTheme.typography.bodySmall,
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                TextButton(onClick = { onConfirmMergeChange(false) }) { Text("取消") }
-                Button(onClick = {
-                    onConfirmMergeChange(false)
-                    onMerge()
-                }) { Text("确认生成") }
-            }
-        } else {
-            OutlinedButton(onClick = { onConfirmMergeChange(true) }) { Text("生成虚拟合并版本") }
         }
     }
 }

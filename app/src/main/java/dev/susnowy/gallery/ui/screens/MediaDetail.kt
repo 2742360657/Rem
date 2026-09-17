@@ -156,6 +156,7 @@ fun MediaDetail(
         MixedMediaGroupDetail(
             primary = item,
             members = mixedMembers,
+            libraryWorks = libraryWorks,
             viewModel = viewModel,
             onBack = onBack,
         )
@@ -317,15 +318,19 @@ fun MediaDetail(
 private fun MixedMediaGroupDetail(
     primary: MediaItem,
     members: List<MediaItem>,
+    libraryWorks: List<MediaItem>,
     viewModel: GalleryViewModel,
     onBack: () -> Unit,
 ) {
     var openedId by rememberSaveable(primary.id) { mutableStateOf<String?>(null) }
     val opened = members.firstOrNull { it.id == openedId }
     if (opened != null) {
+        // The Library list has to travel with the item: without it the detail screen cannot
+        // offer "compare versions", because it would have no other source to pick from.
         MediaDetail(
             item = opened,
             browsingItems = listOf(opened),
+            libraryWorks = libraryWorks,
             viewModel = viewModel,
             onBack = { openedId = null },
         )

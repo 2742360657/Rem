@@ -112,7 +112,7 @@ A second, always-available test target is the phone's own storage (`/storage/emu
 - Real E-drive scanning and mass video-preview behavior have not been validated with the latest build.
 - A few decoder formats can display through Coil but cannot generate the BitmapFactory-based offline JPEG.
 - The archive cache has no UI entry yet (size/clear), and the real-device feel of page-by-page archive reading after the change is still unverified.
-- Group editors, the Series editor and Edition comparison have not been walked through on a device yet; only saving a derived Group has (which is how the missing `@Serializable` on the device-index projection types was found — device-only defects of that kind are caught by `ProjectionSerializationTest` now).
+- The Series editor and the batch selection toolbars have not been walked through on a device yet. Group editing, deep comparison, virtual merge and reading the merged plan have been (2026-09-17), which is how the missing `@Serializable` on the device-index projection types, the empty comparison candidate list and the unreachable merge button were found.
 
 ## Next implementation order
 
