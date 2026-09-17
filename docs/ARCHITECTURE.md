@@ -173,6 +173,12 @@ An unchanged file reuses completed enrichment only when size and modified time s
 - `ui.components.TargetPickerDialog` is the shared single-select picker for a Group or Series target; `ui.components.EditionCompareDialog` moved here from the screens package so components do not depend on screens.
 - `model.MembershipRules` holds the pure append/skip rules behind those actions (order preserved, duplicates dropped, Works in another Series reported rather than moved), so what a batch action writes is unit-tested.
 
+## Selection and batch actions
+
+- `ui.components.SelectableMediaGrid` wraps a grid with selection mode and the Library's batch actions (add to Group, add to Series, favourite, append metadata, trash). The image/video and works views both use it, so batch behaviour cannot drift between screens; the album screen keeps its own toolbar because it also offers image-set derivation.
+- The grid owns only ids: every action is one repository call (one portable write), and long-press still opens the per-card panel while selection mode is off. Back exits selection before it leaves the screen.
+- `ui.components.BatchMetadataDialog` is the single append-only metadata editor shared by all selection toolbars.
+
 ## Media and cache budgets
 
 - directory/archive pages are loaded lazily;

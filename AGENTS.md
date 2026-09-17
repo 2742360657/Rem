@@ -100,7 +100,8 @@ A second, always-available test target is the phone's own storage (`/storage/emu
 - portable Inbox decisions in `.gallery/state/inbox.json` (accept, classify, ignore, handle, undo), mirrored into a disposable device index;
 - editable Groups: explicit save of a derived mixed folder with a stable id, plus create/rename/member/order/cover/delete operations written through `catalog.json` and projected into a disposable `groups` table (database v8);
 - batch Series editing: atomic `upsertSeries`/`deleteSeries`, rename, batch add/remove, reorder (`sort_index`) and numbering reset, with `field_sources.series = manual` stamped on every touched Work so recognition cannot re-assign it; projected into a disposable `series` table (database v9);
-- card context actions for "add to Group", "add to Series" and Edition comparison, backed by the pure `MembershipRules` (order preserved, duplicates dropped, Works in another Series reported instead of moved).
+- card context actions for "add to Group", "add to Series" and Edition comparison, backed by the pure `MembershipRules` (order preserved, duplicates dropped, Works in another Series reported instead of moved);
+- `SelectableMediaGrid` gives the image/video and works lists the same selection mode and batch actions (add to Group/Series, favourite, append metadata, trash), with `BatchMetadataDialog` shared instead of duplicated.
 
 ## Known gaps
 
@@ -115,7 +116,7 @@ A second, always-available test target is the phone's own storage (`/storage/emu
 
 1. Test the current build against the actual removable Library (device + real E-drive), then decide whether inventory checkpoints and database paging are required.
 2. Do the same for the new editors and comparison on a real device (merged-plan reading cost, deep comparison timing, cancellation).
-3. Continue interaction polish: batch selection toolbars outside the album screen, density options, and contextual tools.
+3. Continue interaction polish: density options, back behaviour, and further contextual tools.
 
 Do not start a broad UI rewrite before portable semantics are usable.
 
