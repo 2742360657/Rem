@@ -52,8 +52,9 @@ data class SourceManifest(
 /**
  * Builds a page manifest for one source.
  *
- * Cost is deliberately bounded and observable, because removable media on a phone can run at
- * roughly 20 MB/s:
+ * Cost is deliberately bounded and observable. High sequential throughput (roughly 360 MB/s
+ * was observed for a large video copy) does not remove the cost of SAF round-trips, many small
+ * entries, hashing and archive work:
  *
  * - a directory costs one listing, plus one read per page only when hashes are requested;
  * - an archive costs exactly **one sequential pass** — the reader cannot seek inside a ZIP,
