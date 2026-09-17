@@ -428,9 +428,18 @@ class PortableMetadataStore(
         }
         require(group.title.isNotBlank()) { "Group 标题不能为空" }
         val now = Instant.now().toString()
+        val title = group.title.trim()
         val replaced = group.copy(
-            title = group.title.trim(),
+            title = title,
             members = group.members.distinctBy(PortableGroupMember::workId),
+            // A group's own editable fields keep their provenance: an existing value an agent
+            // set stays automatic, while a title the user changed becomes manual.
+            fieldSources = existing?.fieldSources.orEmpty() + group.fieldSources +
+                if (existing != null && existing.title != title) {
+                    mapOf(MANUAL_TITLE_FIELD to FieldSource.MANUAL)
+                } else {
+                    emptyMap()
+                },
             revision = (existing?.revision ?: 0) + 1,
             updatedAt = now,
         )
@@ -456,6 +465,82 @@ class PortableMetadataStore(
             revision = catalog.revision + 1,
             updatedAt = now,
             groups = catalog.groups.filterNot { it.id == groupId },
+        )
+        validate(updated)
+        writeSafely(CATALOG_PATH, json.encodeToString(updated), "application/json")
+        return true
+    }
+
+    /**
+     * Creates or replaces one Series in a single catalog write.
+     *
+     * Series membership is a user decision: when the app reorders or renames a series it also
+     * stamps `field_sources.series = manual` on every touched Work, so a later scan cannot
+     * pull that Work back out through filename or folder recognition.
+     */
+    fun upsertSeries(
+        libraryId: String,
+        series: PortableSeries,
+        expectedRevision: Long? = null,
+        markSeriesManualFor: Set<String> = emptySet(),
+    ): PortableSeries {
+        val catalog = loadCatalog(libraryId)
+        val existing = catalog.series.firstOrNull { it.id == series.id }
+        if (expectedRevision != null && existing != null && existing.revision != expectedRevision) {
+            throw RevisionConflictException(
+                "${existing.title} 已被其他设备修改（磁盘 ${existing.revision}，本机 $expectedRevision）",
+            )
+        }
+        require(series.title.isNotBlank()) { "Series 标题不能为空" }
+        require(series.members.isNotEmpty()) { "Series 至少需要一个成员" }
+        val now = Instant.now().toString()
+        val replaced = series.copy(
+            title = series.title.trim(),
+            members = series.members.distinctBy(PortableSeriesMember::workId)
+                .sortedWith(seriesMemberOrder()),
+            revision = (existing?.revision ?: 0) + 1,
+            updatedAt = now,
+        )
+        val updated = catalog.copy(
+            schemaVersion = CURRENT_SCHEMA_VERSION,
+            revision = catalog.revision + 1,
+            updatedAt = now,
+            works = if (markSeriesManualFor.isEmpty()) {
+                catalog.works
+            } else {
+                catalog.works.map { work ->
+                    if (work.id in markSeriesManualFor) {
+                        work.copy(
+                            fieldSources = work.fieldSources + (MetadataField.SERIES to FieldSource.MANUAL),
+                            revision = work.revision + 1,
+                            updatedAt = now,
+                        )
+                    } else {
+                        work
+                    }
+                }
+            },
+            series = (catalog.series.filterNot { it.id == series.id } + replaced)
+                .sortedBy(PortableSeries::id),
+        )
+        validate(updated)
+        writeSafely(CATALOG_PATH, json.encodeToString(updated), "application/json")
+        return replaced
+    }
+
+    /**
+     * Removes a Series entity. Its Works stay exactly as they are and simply stop having a
+     * series assignment; media, Editions and Assets are untouched.
+     */
+    fun deleteSeries(libraryId: String, seriesId: String): Boolean {
+        val catalog = loadCatalog(libraryId)
+        if (catalog.series.none { it.id == seriesId }) return false
+        val now = Instant.now().toString()
+        val updated = catalog.copy(
+            schemaVersion = CURRENT_SCHEMA_VERSION,
+            revision = catalog.revision + 1,
+            updatedAt = now,
+            series = catalog.series.filterNot { it.id == seriesId },
         )
         validate(updated)
         writeSafely(CATALOG_PATH, json.encodeToString(updated), "application/json")
@@ -712,6 +797,9 @@ class PortableMetadataStore(
     companion object {
         const val CATALOG_PATH = ".gallery/items/catalog.json"
         const val STATE_PATH = ".gallery/state/state.json"
+
+        /** Field name used when the user renames a Group from the shelf editor. */
+        const val MANUAL_TITLE_FIELD = "title"
 
         private fun stableId(kind: String, libraryId: String, workId: String): String =
             UUID.nameUUIDFromBytes("$kind:$libraryId:$workId".toByteArray(StandardCharsets.UTF_8)).toString()

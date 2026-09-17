@@ -22,6 +22,7 @@ import dev.susnowy.gallery.model.DiscoveredEntry
 import dev.susnowy.gallery.model.InboxDisposition
 import dev.susnowy.gallery.model.MediaGroup
 import dev.susnowy.gallery.model.MediaItem
+import dev.susnowy.gallery.model.MediaSeries
 import dev.susnowy.gallery.model.MediaDomain
 import dev.susnowy.gallery.model.MediaKind
 import dev.susnowy.gallery.model.PlaybackProgress
@@ -67,7 +68,9 @@ data class GalleryUiState(
     val discoveries: List<DiscoveredEntry> = emptyList(),
     val allMedia: List<MediaItem> = emptyList(),
     val groups: List<MediaGroup> = emptyList(),
+    val series: List<MediaSeries> = emptyList(),
     val selectedGroupId: String? = null,
+    val selectedSeriesId: String? = null,
     val screen: AppScreen = AppScreen.PHOTOS,
     val selectedItemId: String? = null,
     val detailItemIds: List<String> = emptyList(),
@@ -86,6 +89,8 @@ data class GalleryUiState(
         get() = allMedia.firstOrNull { it.id == selectedItemId }
     val selectedGroup: MediaGroup?
         get() = groups.firstOrNull { it.id == selectedGroupId }
+    val selectedSeries: MediaSeries?
+        get() = series.firstOrNull { it.id == selectedSeriesId }
 }
 
 class GalleryViewModel(
@@ -103,6 +108,7 @@ class GalleryViewModel(
     )
     private val selectedItemId = MutableStateFlow(savedStateHandle.get<String>(SELECTED_ITEM_KEY))
     private val selectedGroupId = MutableStateFlow<String?>(null)
+    private val selectedSeriesId = MutableStateFlow<String?>(null)
     private val detailItemIds = MutableStateFlow<List<String>>(emptyList())
     private val searchQuery = MutableStateFlow(savedStateHandle.get<String>(SEARCH_QUERY_KEY).orEmpty())
     private val message = MutableStateFlow<String?>(null)
@@ -122,17 +128,24 @@ class GalleryViewModel(
 
     val uiState: StateFlow<GalleryUiState> = combine(
         repository.libraries,
-        combine(repository.media, repository.discoveries, repository.groups) { media, discoveries, groups ->
-            IndexedContent(media, discoveries, groups)
+        combine(
+            repository.media,
+            repository.discoveries,
+            repository.groups,
+            repository.series,
+        ) { media, discoveries, groups, series ->
+            IndexedContent(media, discoveries, groups, series)
         },
         combine(
             screen,
             selectedItemId,
             searchQuery,
             detailItemIds,
-            selectedGroupId,
-        ) { currentScreen, selected, query, detailIds, groupId ->
-            NavigationStatus(currentScreen, selected, query, detailIds, groupId)
+            combine(selectedGroupId, selectedSeriesId) { groupId, seriesId ->
+                ShelfSelection(groupId, seriesId)
+            },
+        ) { currentScreen, selected, query, detailIds, shelf ->
+            NavigationStatus(currentScreen, selected, query, detailIds, shelf.groupId, shelf.seriesId)
         },
         combine(
             repository.operation,
@@ -161,7 +174,11 @@ class GalleryViewModel(
             groups = indexed.groups.filter {
                 resolvedActiveId == null || it.libraryId == resolvedActiveId
             },
+            series = indexed.series.filter {
+                resolvedActiveId == null || it.libraryId == resolvedActiveId
+            },
             selectedGroupId = navigation.selectedGroupId,
+            selectedSeriesId = navigation.selectedSeriesId,
             screen = navigation.screen,
             selectedItemId = navigation.selectedItemId,
             detailItemIds = navigation.detailItemIds,
@@ -294,6 +311,61 @@ class GalleryViewModel(
 
     fun closeGroup() {
         selectedGroupId.value = null
+    }
+
+    fun openSeries(seriesId: String) {
+        selectedSeriesId.value = seriesId
+    }
+
+    fun closeSeries() {
+        selectedSeriesId.value = null
+    }
+
+    /** Renames, reorders or re-numbers a Series in one atomic portable write. */
+    fun saveSeries(
+        series: MediaSeries,
+        title: String = series.title,
+        memberIds: List<String> = series.memberIds,
+        clearPositions: Boolean = false,
+    ) {
+        if (memberIds.isEmpty()) {
+            message.value = "系列至少需要一个成员；如果不想要这个系列，请直接删除它"
+            return
+        }
+        if (title.isBlank()) {
+            message.value = "系列标题不能为空"
+            return
+        }
+        viewModelScope.launch {
+            runCatching {
+                repository.saveSeries(
+                    libraryId = series.libraryId,
+                    seriesId = series.id,
+                    title = title,
+                    memberIds = memberIds,
+                    clearPositions = clearPositions,
+                    expectedRevision = series.revision,
+                )
+            }.onSuccess { message.value = "系列已保存" }
+                .onFailure(::showError)
+        }
+    }
+
+    /**
+     * Deletes the Series entity only. Its Works and all media stay exactly as they are and
+     * simply stop being numbered inside that series.
+     */
+    fun deleteSeries(series: MediaSeries) {
+        viewModelScope.launch {
+            runCatching { repository.deleteSeries(series.libraryId, series.id) }
+                .onSuccess { removed ->
+                    if (removed) {
+                        if (selectedSeriesId.value == series.id) closeSeries()
+                        message.value = "已删除系列；作品与媒体都没有变化"
+                    }
+                }
+                .onFailure(::showError)
+        }
     }
 
     /** Creates a Group from an explicit member list, used by "新建分组". */
@@ -843,12 +915,16 @@ class GalleryViewModel(
         val searchQuery: String,
         val detailItemIds: List<String>,
         val selectedGroupId: String?,
+        val selectedSeriesId: String?,
     )
+
+    private data class ShelfSelection(val groupId: String?, val seriesId: String?)
 
     private data class IndexedContent(
         val media: List<MediaItem>,
         val discoveries: List<DiscoveredEntry>,
         val groups: List<MediaGroup>,
+        val series: List<MediaSeries>,
     )
 
     private data class SystemGalleryStatus(

@@ -82,6 +82,7 @@ import dev.susnowy.gallery.importer.WorkImportKind
 import dev.susnowy.gallery.logging.RemLog
 import dev.susnowy.gallery.model.MediaGroup
 import dev.susnowy.gallery.model.MediaItem
+import dev.susnowy.gallery.model.MediaSeries
 import dev.susnowy.gallery.model.InboxDisposition
 import dev.susnowy.gallery.model.MediaDomain
 import dev.susnowy.gallery.model.MediaKind
@@ -139,7 +140,7 @@ fun GalleryScreenContent(
     val accepted = visible.filterNot(MediaItem::inInbox)
     when (state.screen) {
         AppScreen.MEDIA -> ClassifiedLibraryScreen(accepted, state.groups, viewModel)
-        AppScreen.WORKS -> WorksLibraryScreen(accepted, viewModel)
+        AppScreen.WORKS -> WorksLibraryScreen(accepted, state.series, viewModel)
         AppScreen.LIBRARIES -> LibrariesScreen(state, viewModel, onChooseFolder)
         AppScreen.INBOX -> InboxScreen(
             content = InboxContent(
@@ -642,7 +643,11 @@ private enum class WorkSort(val label: String) { RECENT("最近加入"), TITLE("
 private enum class WorkPresentation { SERIES, WORKS }
 
 @Composable
-private fun WorksLibraryScreen(items: List<MediaItem>, viewModel: GalleryViewModel) {
+private fun WorksLibraryScreen(
+    items: List<MediaItem>,
+    series: List<MediaSeries>,
+    viewModel: GalleryViewModel,
+) {
     val works = remember(items) { items.filter { it.domain == MediaDomain.WORKS } }
     var type by rememberSaveable { mutableStateOf(WorkType.COMICS) }
     var facet by rememberSaveable { mutableStateOf(WorkFacet.ALL) }
@@ -771,13 +776,19 @@ private fun WorksLibraryScreen(items: List<MediaItem>, viewModel: GalleryViewMod
                 IconButton(onClick = { selectedSeriesKey = null }) {
                     Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回系列书架")
                 }
-                Column {
+                Column(Modifier.weight(1f)) {
                     Text(selectedSeries.title, style = MaterialTheme.typography.titleMedium)
                     Text(
                         "${selectedSeries.items.size} 部作品 · 按系列顺序",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                }
+                val editable = series.firstOrNull {
+                    it.title.equals(selectedSeries.title, ignoreCase = true)
+                }
+                if (editable != null) {
+                    TextButton(onClick = { viewModel.openSeries(editable.id) }) { Text("编辑系列") }
                 }
             }
         }

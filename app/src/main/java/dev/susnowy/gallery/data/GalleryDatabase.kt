@@ -16,6 +16,8 @@ import dev.susnowy.gallery.model.LibraryRegistration
 import dev.susnowy.gallery.model.MediaGroup
 import dev.susnowy.gallery.model.MediaGroupMember
 import dev.susnowy.gallery.model.MediaItem
+import dev.susnowy.gallery.model.MediaSeries
+import dev.susnowy.gallery.model.MediaSeriesMember
 import dev.susnowy.gallery.model.MediaDomain
 import dev.susnowy.gallery.model.MediaKind
 import dev.susnowy.gallery.model.PermissionState
@@ -109,7 +111,26 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
         db.execSQL("CREATE INDEX media_trash ON media(trashed, deleted_at)")
         createDiscoveriesTable(db)
         createGroupsTable(db)
+        createSeriesTable(db)
         createScanEnrichmentTable(db)
+    }
+
+    /** Disposable projection of portable Series, mirroring the Groups projection. */
+    private fun createSeriesTable(db: SQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS series (
+                id TEXT PRIMARY KEY NOT NULL,
+                library_id TEXT NOT NULL,
+                title TEXT NOT NULL,
+                aliases_json TEXT NOT NULL,
+                revision INTEGER NOT NULL,
+                members_json TEXT NOT NULL,
+                FOREIGN KEY(library_id) REFERENCES libraries(library_id) ON DELETE CASCADE
+            )
+            """.trimIndent(),
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS series_library ON series(library_id, title)")
     }
 
     /**
@@ -218,10 +239,14 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
         if (oldVersion < 8) {
             createGroupsTable(db)
         }
+        if (oldVersion < 9) {
+            createSeriesTable(db)
+        }
         if (oldVersion > newVersion) {
             db.execSQL("DROP TABLE IF EXISTS progress")
             db.execSQL("DROP TABLE IF EXISTS discoveries")
             db.execSQL("DROP TABLE IF EXISTS groups")
+            db.execSQL("DROP TABLE IF EXISTS series")
             db.execSQL("DROP TABLE IF EXISTS scan_enrichment")
             db.execSQL("DROP TABLE IF EXISTS media")
             db.execSQL("DROP TABLE IF EXISTS libraries")
@@ -674,6 +699,141 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
         }
     }
 
+    /**
+     * Replaces the Series projection of one Library from the portable catalog, dropping
+     * series the catalog no longer contains.
+     */
+    @Synchronized
+    fun replaceSeries(libraryId: String, series: List<MediaSeries>) {
+        require(series.all { it.libraryId == libraryId }) { "不能跨 Library 写入系列索引" }
+        val database = writableDatabase
+        database.transaction {
+            val keep = series.mapTo(mutableSetOf(), MediaSeries::id)
+            query(
+                "series",
+                arrayOf("id"),
+                "library_id = ?",
+                arrayOf(libraryId),
+                null,
+                null,
+                null,
+            ).use { cursor ->
+                while (cursor.moveToNext()) {
+                    val id = cursor.string("id")
+                    if (id !in keep) delete("series", "id = ?", arrayOf(id))
+                }
+            }
+            series.forEach { row -> upsertSeriesRow(row, database) }
+        }
+    }
+
+    @Synchronized
+    fun upsertSeriesRow(series: MediaSeries) {
+        upsertSeriesRow(series, writableDatabase)
+    }
+
+    private fun upsertSeriesRow(series: MediaSeries, database: SQLiteDatabase) {
+        database.insertWithOnConflict(
+            "series",
+            null,
+            ContentValues().apply {
+                put("id", series.id)
+                put("library_id", series.libraryId)
+                put("title", series.title)
+                put("aliases_json", json.encodeToString(series.aliases))
+                put("revision", series.revision)
+                put("members_json", json.encodeToString(series.membersInOrder()))
+            },
+            SQLiteDatabase.CONFLICT_REPLACE,
+        )
+    }
+
+    @Synchronized
+    fun deleteSeriesRow(seriesId: String) {
+        writableDatabase.delete("series", "id = ?", arrayOf(seriesId))
+    }
+
+    @Synchronized
+    fun series(libraryId: String? = null): List<MediaSeries> {
+        val selection = libraryId?.let { "library_id = ?" }
+        val args = if (libraryId == null) null else arrayOf(libraryId)
+        return readableDatabase.query(
+            "series",
+            null,
+            selection,
+            args,
+            null,
+            null,
+            "title COLLATE NOCASE",
+        ).use { cursor -> cursor.mapRows(::seriesFromCursor) }
+    }
+
+    /**
+     * Mirrors a Series edit into the media rows the UI reads.
+     *
+     * A Work's `series_json` comes from the Series entity, so a batch reorder or membership
+     * change has to be written onto every touched Work, including clearing the assignment
+     * for Works that left the series. [manualWorkIds] also records `field_sources.series =
+     * manual`, which is what keeps filename recognition from re-assigning them.
+     */
+    @Synchronized
+    fun applySeriesAssignment(
+        libraryId: String,
+        assignments: Map<String, SeriesRef?>,
+        manualWorkIds: Set<String>,
+    ) {
+        if (assignments.isEmpty()) return
+        val database = writableDatabase
+        database.transaction {
+            assignments.forEach { (workId, reference) ->
+                val sources = if (workId in manualWorkIds) {
+                    query(
+                        "media",
+                        arrayOf("field_sources_json"),
+                        "library_id = ? AND id = ?",
+                        arrayOf(libraryId, workId),
+                        null,
+                        null,
+                        null,
+                        "1",
+                    ).use { cursor ->
+                        if (!cursor.moveToFirst()) {
+                            null
+                        } else {
+                            val current = runCatching {
+                                json.decodeFromString<Map<String, String>>(
+                                    cursor.string("field_sources_json"),
+                                )
+                            }.getOrDefault(emptyMap())
+                            current + (MANUAL_SERIES_FIELD to MANUAL_FIELD_SOURCE)
+                        }
+                    }
+                } else {
+                    null
+                }
+                val values = ContentValues().apply {
+                    reference?.let { put("series_json", json.encodeToString(it)) }
+                        ?: putNull("series_json")
+                    sources?.let { put("field_sources_json", json.encodeToString(it)) }
+                }
+                update("media", values, "library_id = ? AND id = ?", arrayOf(libraryId, workId))
+            }
+        }
+    }
+
+    private fun seriesFromCursor(cursor: Cursor) = MediaSeries(
+        id = cursor.string("id"),
+        libraryId = cursor.string("library_id"),
+        title = cursor.string("title"),
+        aliases = runCatching {
+            json.decodeFromString<List<String>>(cursor.string("aliases_json"))
+        }.getOrDefault(emptyList()),
+        members = runCatching {
+            json.decodeFromString<List<MediaSeriesMember>>(cursor.string("members_json"))
+        }.getOrDefault(emptyList()),
+        revision = cursor.long("revision"),
+    )
+
     /** Writes one projected Group row; the portable catalog remains the source of truth. */
     @Synchronized
     fun upsertGroup(group: MediaGroup) {
@@ -758,6 +918,7 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
         writableDatabase.delete("media", "library_id = ?", arrayOf(libraryId))
         writableDatabase.delete("discoveries", "library_id = ?", arrayOf(libraryId))
         writableDatabase.delete("groups", "library_id = ?", arrayOf(libraryId))
+        writableDatabase.delete("series", "library_id = ?", arrayOf(libraryId))
         writableDatabase.delete("scan_enrichment", "library_id = ?", arrayOf(libraryId))
     }
 
@@ -1004,7 +1165,9 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
 
     companion object {
         private const val DATABASE_NAME = "gallery-index.db"
-        private const val DATABASE_VERSION = 8
+        private const val DATABASE_VERSION = 9
+        private const val MANUAL_SERIES_FIELD = "series"
+        private const val MANUAL_FIELD_SOURCE = "manual"
         private const val ENRICHMENT_PENDING = "PENDING"
         private const val ENRICHMENT_COMPLETE = "COMPLETE"
         private const val ENRICHMENT_FAILED = "FAILED"

@@ -57,6 +57,7 @@ import dev.susnowy.gallery.model.derivedGroupId
 import dev.susnowy.gallery.ui.GalleryViewModel
 import dev.susnowy.gallery.ui.MixedMediaPresentation
 import dev.susnowy.gallery.ui.components.MediaThumbnail
+import dev.susnowy.gallery.ui.components.WorkPickerDialog
 
 /**
  * The "分组" tab: portable Groups first, then derived mixed folders that can be saved as one.
@@ -184,9 +185,8 @@ private fun NewGroupDialogs(
     onNamingChange: (List<String>?) -> Unit,
 ) {
     if (picking) {
-        GroupMemberPicker(
+        WorkPickerDialog(
             candidates = candidates,
-            viewModel = viewModel,
             onDismiss = { onPickingChange(false) },
             onConfirm = { picked ->
                 onPickingChange(false)
@@ -468,9 +468,8 @@ fun GroupDetail(
     }
 
     if (showPicker) {
-        GroupMemberPicker(
+        WorkPickerDialog(
             candidates = items.filter { it.id !in memberIds },
-            viewModel = viewModel,
             onDismiss = { showPicker = false },
             onConfirm = { picked ->
                 memberIds = memberIds + picked
@@ -529,84 +528,6 @@ private fun GroupRenameDialog(
                 enabled = title.isNotBlank(),
                 onClick = { onConfirm(title.trim()) },
             ) { Text("保存") }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
-    )
-}
-
-@Composable
-private fun GroupMemberPicker(
-    candidates: List<MediaItem>,
-    viewModel: GalleryViewModel,
-    onDismiss: () -> Unit,
-    onConfirm: (List<String>) -> Unit,
-) {
-    var query by remember { mutableStateOf("") }
-    var picked by remember { mutableStateOf(emptyList<String>()) }
-    val shown = remember(candidates, query) {
-        val trimmed = query.trim()
-        if (trimmed.isEmpty()) {
-            candidates
-        } else {
-            candidates.filter { item ->
-                item.displayTitle.contains(trimmed, ignoreCase = true) ||
-                    item.relativePath.contains(trimmed, ignoreCase = true)
-            }
-        }
-    }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("添加成员") },
-        text = {
-            Column {
-                OutlinedTextField(
-                    value = query,
-                    onValueChange = { query = it },
-                    label = { Text("搜索标题或路径") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Text(
-                    "已选 ${picked.size} 项；确认后仍需点“保存”才会写入 Library。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(vertical = 6.dp),
-                )
-                LazyColumn(modifier = Modifier.fillMaxWidth()) {
-                    itemsIndexed(shown, key = { _, item -> item.id }) { _, item ->
-                        ListItem(
-                            headlineContent = {
-                                Text(item.displayTitle, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            },
-                            supportingContent = {
-                                Text(
-                                    item.relativePath,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    style = MaterialTheme.typography.bodySmall,
-                                )
-                            },
-                            leadingContent = {
-                                Checkbox(
-                                    checked = item.id in picked,
-                                    onCheckedChange = { checked ->
-                                        picked = if (checked) picked + item.id else picked - item.id
-                                    },
-                                )
-                            },
-                            modifier = Modifier.clickable {
-                                picked = if (item.id in picked) picked - item.id else picked + item.id
-                            },
-                        )
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(
-                enabled = picked.isNotEmpty(),
-                onClick = { onConfirm(picked) },
-            ) { Text("添加 ${picked.size} 项") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
     )

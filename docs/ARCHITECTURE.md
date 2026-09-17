@@ -114,6 +114,14 @@ A Group is "Works browsed together". It is edited only through explicit user act
 
 Derived folder groups stay presentation-only inference until saved; after that the folder is no longer listed as a candidate and the Group is the user's.
 
+## Series
+
+- `PortableMetadataStore.upsertSeries` replaces one Series in a single catalog write (`revision` conflict checked, members deduplicated and ordered by `sort_index`), and `deleteSeries` removes the entity only.
+- Membership edits stamp `field_sources.series = manual` on every touched Work inside the same write. The scanner prefers a manual series decision, so a reorder or removal cannot be undone by folder-name recognition on the next scan — including for Works that just left the series, which keep a manual "no series" decision.
+- `GalleryRepository.saveSeries` maps list position to `sort_index`, preserves season/episode/volume/chapter unless the user clears them, then rewrites `series_json` on all touched media rows (`applySeriesAssignment`), clearing the assignment for Works that left.
+- Database v9 projects Series into a `series` table (`members_json`, disposable), rebuilt from the catalog after attach and scan; `MediaSeries` is what the editor edits.
+- UI: `漫画 / 阅读 → 系列书架 → 编辑系列` (`SeriesEditor`) does rename, batch add/remove, up/down and move-to-index reordering and numbering reset, committed by one explicit save. The picker is the shared `WorkPickerDialog`.
+
 ## Library initialization and writes
 
 Initialization claims a provider-exclusive root lease before creating `.gallery/`. The lease carries a timestamp and expires after 15 minutes. `library.json` is the completion marker and is committed last.

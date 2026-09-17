@@ -17,10 +17,9 @@ Rem is an Android, local-first library for large image, comic, photo-set, and vi
 Current priorities:
 
 1. a clean portable logical model;
-2. first-class Series editing;
-3. non-destructive Edition comparison and merge;
-4. real-device testing with the large E-drive Library;
-5. interaction polish inspired by EhViewer and MT Manager.
+2. non-destructive Edition comparison and merge;
+3. real-device testing with the large E-drive Library;
+4. interaction polish inspired by EhViewer and MT Manager.
 
 The project is pre-release. Prefer the cleanest current design over compatibility layers for formats that were never stable. Schema v4 is current; v3 has one explicit backup-first conversion path only. Do not add support for older experiments unless the user explicitly asks.
 
@@ -99,11 +98,12 @@ A second, always-available test target is the phone's own storage (`/storage/emu
 - bounded device-private offline previews;
 - normalized Schema v4 plus idempotent v3-to-v4 conversion after snapshots;
 - portable Inbox decisions in `.gallery/state/inbox.json` (accept, classify, ignore, handle, undo), mirrored into a disposable device index;
-- editable Groups: explicit save of a derived mixed folder with a stable id, plus create/rename/member/order/cover/delete operations written through `catalog.json` and projected into a disposable `groups` table (database v8).
+- editable Groups: explicit save of a derived mixed folder with a stable id, plus create/rename/member/order/cover/delete operations written through `catalog.json` and projected into a disposable `groups` table (database v8);
+- batch Series editing: atomic `upsertSeries`/`deleteSeries`, rename, batch add/remove, reorder (`sort_index`) and numbering reset, with `field_sources.series = manual` stamped on every touched Work so recognition cannot re-assign it; projected into a disposable `series` table (database v9).
 
 ## Known gaps
 
-- Series entities exist portably, but batch member editing and drag reordering are unfinished.
+- Gesture-based drag reordering is not implemented; Group and Series editors use up/down and "move to index", which also stays usable for series with hundreds of members.
 - Edition comparison, page-level hashes, virtual merge, and recoverable cleanup UI are unfinished.
 - Initial inventory is still one atomic traversal; only enrichment is resumable.
 - `refreshFromDatabase()` still materializes the full media table.
@@ -112,10 +112,9 @@ A second, always-available test target is the phone's own storage (`/storage/emu
 
 ## Next implementation order
 
-1. Add atomic Series member editing, renaming and reordering.
-2. Add cheap-first Edition comparison (page counts and entry sizes before any byte hashing) and virtual merge as a new Edition on the confirmed Work.
-3. Test the current build against the actual removable Library, then decide whether inventory checkpoints and database paging are required.
-4. Polish density, selection, long-press actions, contextual tools, and back behavior.
+1. Add cheap-first Edition comparison (page counts and entry sizes before any byte hashing) and virtual merge as a new Edition on the confirmed Work.
+2. Test the current build against the actual removable Library, then decide whether inventory checkpoints and database paging are required.
+3. Polish density, selection, long-press actions, contextual tools, and back behavior (including real drag reordering for Group and Series).
 
 Do not start a broad UI rewrite before portable semantics are usable.
 

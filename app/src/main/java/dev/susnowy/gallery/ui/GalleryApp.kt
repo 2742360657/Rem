@@ -75,6 +75,7 @@ import dev.susnowy.gallery.model.visibleInLibrary
 import dev.susnowy.gallery.ui.screens.EmptyLibraryScreen
 import dev.susnowy.gallery.ui.screens.GalleryScreenContent
 import dev.susnowy.gallery.ui.screens.GroupDetail
+import dev.susnowy.gallery.ui.screens.SeriesEditor
 import dev.susnowy.gallery.ui.screens.MediaDetail
 import dev.susnowy.gallery.ui.theme.GalleryTheme
 import kotlinx.coroutines.launch
@@ -167,6 +168,19 @@ fun GalleryApp(viewModel: GalleryViewModel = viewModel()) {
                 browsingItems = browsingItems,
                 viewModel = viewModel,
                 onBack = viewModel::closeDetail,
+            )
+            return@GalleryTheme
+        }
+
+        val selectedSeries = state.selectedSeries
+        if (selectedSeries != null) {
+            SeriesEditor(
+                series = selectedSeries,
+                works = state.allMedia.filter {
+                    !it.trashed && !it.inInbox && it.libraryId == selectedSeries.libraryId
+                },
+                viewModel = viewModel,
+                onBack = viewModel::closeSeries,
             )
             return@GalleryTheme
         }

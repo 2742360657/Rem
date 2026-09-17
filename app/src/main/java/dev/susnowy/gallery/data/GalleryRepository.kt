@@ -32,6 +32,11 @@ import dev.susnowy.gallery.model.LibraryRegistration
 import dev.susnowy.gallery.model.DiscoveredEntry
 import dev.susnowy.gallery.model.MediaDomain
 import dev.susnowy.gallery.model.MediaItem
+import dev.susnowy.gallery.model.MediaSeries
+import dev.susnowy.gallery.model.PortableSeries
+import dev.susnowy.gallery.model.PortableSeriesMember
+import dev.susnowy.gallery.model.SeriesRef
+import dev.susnowy.gallery.model.toMediaSeries
 import dev.susnowy.gallery.model.PermissionState
 import dev.susnowy.gallery.model.PlaybackProgress
 import dev.susnowy.gallery.model.GroupMemberRole
@@ -102,6 +107,9 @@ class GalleryRepository(context: Context) {
     private val _groups = MutableStateFlow<List<MediaGroup>>(emptyList())
     val groups: StateFlow<List<MediaGroup>> = _groups.asStateFlow()
 
+    private val _series = MutableStateFlow<List<MediaSeries>>(emptyList())
+    val series: StateFlow<List<MediaSeries>> = _series.asStateFlow()
+
     private val _operation = MutableStateFlow<String?>(null)
     val operation: StateFlow<String?> = _operation.asStateFlow()
 
@@ -144,8 +152,9 @@ class GalleryRepository(context: Context) {
                 runCatching {
                     val catalog = PortableMetadataStore(storage).loadCatalog(migrated.libraryId)
                     syncGroups(migrated.libraryId, catalog.groups)
+                    syncSeries(migrated.libraryId, catalog.series)
                 }.onFailure { error ->
-                    RemLog.failure("GalleryRepository", "分组索引回填失败", error)
+                    RemLog.failure("GalleryRepository", "分组/系列索引回填失败", error)
                 }
                 refreshFromDatabase()
                 registration
@@ -431,6 +440,7 @@ class GalleryRepository(context: Context) {
                 ),
             )
             syncGroups(libraryId, catalog.groups)
+            syncSeries(libraryId, catalog.series)
             refreshFromDatabase()
             val pending = database.pendingEnrichmentCount(libraryId)
             RemLog.info(
@@ -812,6 +822,112 @@ class GalleryRepository(context: Context) {
         }
     }
 
+    /**
+     * Renames, reorders and re-numbers one Series in a single portable write.
+     *
+     * Membership and order are the relationship itself, so nothing here moves media. Every
+     * touched Work (including the ones that left the series) is stamped `series = manual`,
+     * which is what stops the scanner from re-assigning it from a folder name later.
+     */
+    suspend fun saveSeries(
+        libraryId: String,
+        seriesId: String,
+        title: String,
+        memberIds: List<String>,
+        clearPositions: Boolean = false,
+        expectedRevision: Long? = null,
+    ): MediaSeries = runOperation("正在保存系列…") {
+        onIo {
+            val ordered = memberIds.distinct()
+            require(ordered.isNotEmpty()) { "系列至少需要一个成员" }
+            require(title.isNotBlank()) { "系列标题不能为空" }
+            val storage = storageFor(requireLibrary(libraryId))
+            val store = PortableMetadataStore(storage)
+            val existing = store.loadCatalog(libraryId).series.firstOrNull { it.id == seriesId }
+            val previousIds = existing?.members.orEmpty().mapTo(mutableSetOf(), PortableSeriesMember::workId)
+            val portable = PortableSeries(
+                id = seriesId,
+                title = title.trim(),
+                aliases = existing?.aliases.orEmpty(),
+                members = ordered.mapIndexed { index, workId ->
+                    val current = existing?.members?.firstOrNull { it.workId == workId }
+                    PortableSeriesMember(
+                        workId = workId,
+                        sortIndex = index.toDouble(),
+                        season = if (clearPositions) null else current?.season,
+                        episode = if (clearPositions) null else current?.episode,
+                        volume = if (clearPositions) null else current?.volume,
+                        chapter = if (clearPositions) null else current?.chapter,
+                    )
+                },
+                fieldSources = existing?.fieldSources.orEmpty(),
+                revision = existing?.revision ?: 1,
+                updatedAt = java.time.Instant.now().toString(),
+            )
+            val touched = previousIds + ordered
+            val saved = store.upsertSeries(
+                libraryId = libraryId,
+                series = portable,
+                expectedRevision = expectedRevision ?: existing?.revision,
+                markSeriesManualFor = touched,
+            )
+            applySeriesProjection(libraryId, saved, touched)
+            database.upsertSeriesRow(saved.toMediaSeries(libraryId))
+            refreshFromDatabase()
+            saved.toMediaSeries(libraryId)
+        }
+    }
+
+    /**
+     * Deletes a Series entity. Its Works keep their metadata and simply lose the assignment.
+     */
+    suspend fun deleteSeries(libraryId: String, seriesId: String): Boolean =
+        runOperation("正在删除系列…") {
+            onIo {
+                val storage = storageFor(requireLibrary(libraryId))
+                val store = PortableMetadataStore(storage)
+                val existing = store.loadCatalog(libraryId).series.firstOrNull { it.id == seriesId }
+                val removed = store.deleteSeries(libraryId, seriesId)
+                if (removed) {
+                    val touched = existing?.members.orEmpty().mapTo(mutableSetOf(), PortableSeriesMember::workId)
+                    database.applySeriesAssignment(libraryId, touched.associateWith { null }, touched)
+                    database.deleteSeriesRow(seriesId)
+                    refreshFromDatabase()
+                }
+                removed
+            }
+        }
+
+    /** Rewrites the media rows of every Work touched by a series edit. */
+    private fun applySeriesProjection(
+        libraryId: String,
+        series: PortableSeries,
+        touched: Set<String>,
+    ) {
+        val ordered = series.members.sortedWith(
+            compareBy<PortableSeriesMember> { it.sortIndex ?: Double.MAX_VALUE }
+                .thenBy(PortableSeriesMember::workId),
+        )
+        val assignments = touched.associateWith { workId ->
+            val index = ordered.indexOfFirst { it.workId == workId }
+            if (index < 0) {
+                null
+            } else {
+                val member = ordered[index]
+                SeriesRef(
+                    id = series.id,
+                    title = series.title,
+                    sortIndex = member.sortIndex,
+                    season = member.season,
+                    episode = member.episode,
+                    volume = member.volume,
+                    chapter = member.chapter,
+                )
+            }
+        }
+        database.applySeriesAssignment(libraryId, assignments, touched)
+    }
+
     private fun mediaDecision(
         item: MediaItem,
         disposition: InboxDisposition,
@@ -1104,6 +1220,7 @@ class GalleryRepository(context: Context) {
         _media.value = database.media()
         _discoveries.value = database.discoveries()
         _groups.value = database.groups()
+        _series.value = database.series()
     }
 
     /**
@@ -1115,6 +1232,11 @@ class GalleryRepository(context: Context) {
      */
     private fun syncGroups(libraryId: String, groups: List<PortableGroup>) {
         database.replaceGroups(libraryId, groups.map { it.toMediaGroup(libraryId) })
+    }
+
+    /** Mirrors the portable Series of one Library into the disposable index. */
+    private fun syncSeries(libraryId: String, series: List<PortableSeries>) {
+        database.replaceSeries(libraryId, series.map { it.toMediaSeries(libraryId) })
     }
 
     private fun MediaItem.withPortableMetadata(portable: PortableItemMetadata): MediaItem = copy(
