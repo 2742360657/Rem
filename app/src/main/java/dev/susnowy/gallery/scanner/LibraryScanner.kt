@@ -9,9 +9,11 @@ import dev.susnowy.gallery.model.MediaKind
 import dev.susnowy.gallery.model.SourceKind
 import dev.susnowy.gallery.metadata.ComicInfoReader
 import dev.susnowy.gallery.metadata.DownloadedSourceRecognizer
+import dev.susnowy.gallery.metadata.FieldSource
 import dev.susnowy.gallery.metadata.FilenameMetadataParser
 import dev.susnowy.gallery.metadata.RecognizedMetadata
 import dev.susnowy.gallery.metadata.mergeRecognizedMetadata
+import dev.susnowy.gallery.metadata.withFieldSource
 import dev.susnowy.gallery.storage.DocumentTreeStorage
 import dev.susnowy.gallery.storage.StorageEntry
 import java.util.Locale
@@ -217,9 +219,12 @@ class LibraryScanner {
                 val unchanged = prior[path]?.canBeReused(totalSize, modifiedAt) == true
                 val parentName = path.substringBeforeLast('/', "").substringAfterLast('/').takeIf(String::isNotBlank)
                 val inferredMetadata = mergeRecognizedMetadata(
-                    DownloadedSourceRecognizer.fromDirectory(path, files.map(StorageEntry::name)),
-                    FilenameMetadataParser.parse(path.substringAfterLast('/'), parentName),
+                    DownloadedSourceRecognizer.fromDirectory(path, files.map(StorageEntry::name))
+                        ?.withFieldSource(FieldSource.FILENAME),
+                    FilenameMetadataParser.parse(path.substringAfterLast('/'), parentName)
+                        .withFieldSource(FieldSource.FILENAME),
                 ) ?: FilenameMetadataParser.parse(path.substringAfterLast('/'), parentName)
+                    .withFieldSource(FieldSource.FILENAME)
                 val comicInfoEntry = files.firstOrNull {
                     it.name.equals("ComicInfo.xml", ignoreCase = true)
                 }
@@ -234,7 +239,7 @@ class LibraryScanner {
                             warnings += "ComicInfo $source 无法读取：${error.message.orEmpty()}"
                             RemLog.warn(TAG, "ComicInfo 无法读取：$source", error)
                             null
-                        }
+                        }?.withFieldSource(FieldSource.COMIC_INFO)
                     mergeRecognizedMetadata(
                         localComicInfo,
                         inferredMetadata,
@@ -259,6 +264,7 @@ class LibraryScanner {
                 // directory as one readable image set, but never make those video files vanish.
                 videos.forEach { video ->
                     val parsed = FilenameMetadataParser.parseVideo(video.name, path.substringAfterLast('/'))
+                        .withFieldSource(FieldSource.FILENAME)
                     output += video.toCandidate(
                         kind = MediaKind.VIDEO,
                         domain = MediaDomain.WORKS,
@@ -299,12 +305,13 @@ class LibraryScanner {
                     contentHash = contentHash(storage, image, prior, statistics),
                     sizeOverride = image.size + (motion?.size ?: 0),
                     recognizedMetadata = if (inPhotos) null else mergeRecognizedMetadata(
-                        DownloadedSourceRecognizer.fromFile(image.relativePath),
+                        DownloadedSourceRecognizer.fromFile(image.relativePath)
+                            ?.withFieldSource(FieldSource.FILENAME),
                         FilenameMetadataParser.parse(
                             image.name,
                             image.relativePath.substringBeforeLast('/', "").substringAfterLast('/')
                                 .takeIf(String::isNotBlank),
-                        ),
+                        ).withFieldSource(FieldSource.FILENAME),
                     ),
                 )
             }
@@ -324,7 +331,9 @@ class LibraryScanner {
                     latitude = captured?.latitude,
                     longitude = captured?.longitude,
                     contentHash = contentHash(storage, video, prior, statistics),
-                    recognizedMetadata = if (inPhotos) null else FilenameMetadataParser.parseVideo(video.name, parentName),
+                    recognizedMetadata = if (inPhotos) null else FilenameMetadataParser
+                        .parseVideo(video.name, parentName)
+                        .withFieldSource(FieldSource.FILENAME),
                 )
             }
         }
@@ -358,12 +367,13 @@ class LibraryScanner {
                 // Existing local/portable metadata remains authoritative when the archive
                 // is unchanged, so reopening it only to parse ComicInfo would be redundant.
                 recognizedMetadata = if (inspection == null) null else mergeRecognizedMetadata(
-                    inspection.metadata,
-                    DownloadedSourceRecognizer.fromFile(archive.relativePath),
+                    inspection.metadata?.withFieldSource(FieldSource.COMIC_INFO),
+                    DownloadedSourceRecognizer.fromFile(archive.relativePath)
+                        ?.withFieldSource(FieldSource.FILENAME),
                     FilenameMetadataParser.parse(
                         archive.name,
                         archive.relativePath.substringBeforeLast('/', "").substringAfterLast('/').takeIf(String::isNotBlank),
-                    ),
+                    ).withFieldSource(FieldSource.FILENAME),
                 ),
             )
         }

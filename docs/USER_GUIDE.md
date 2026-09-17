@@ -4,10 +4,10 @@
 
 1. 点击“选择文件夹”，通过 Android 系统目录选择器选择一个空目录或已有媒体目录。
 2. Rem 会创建 `.gallery/`、`GALLERY_LIBRARY.md`、`.nomedia` 和 Schema v3；原媒体内容不会被改写。`.nomedia` 只阻止系统相册重复收录 Library 副本，不影响 Rem 扫描。旧 Library 会在接入或扫描时先备份元数据，再做兼容升级。
-3. 扫描可识别 `JM/<数字 ID>/`、EhViewer 的 `<gid>-<title>/.ehviewer` 和 Pixiv 的 `<illust_id>_pN` / `_ugoira…`。识别只读取目录与文件名，不需要站点账号。
-4. 扫描完成后，新发现内容进入 Inbox。`Photos/` 始终按相册媒体扫描，`Images/`、`Videos/` 是按真实目录浏览的普通分类媒体；`ImageSets/` 中的多图目录或 ZIP/CBZ 会成为漫画候选，动漫与影视视频推荐放在 `Anime/`、`Movies/`、`Series/` 或 `Works/`。旧 Library 的普通多图叶子目录仍会兼容识别为 ImageSet。
-5. 在详情页编辑标题、作者、标签、Collection 和 Series。保存后这些信息写入 Library，而不是只留在手机数据库中。
-6. 人工修改过的元数据字段会在便携目录中标记为 `manual`，以后增加自动识别或在线元数据刷新时不得覆盖这些字段。
+3. 扫描可识别 `JM/<数字 ID>/`、`JM/<数字 ID>.zip`、EhViewer 的 `<gid>-<title>/.ehviewer`、`eh/<gid>-<title>/`、Pixiv 的 `<illust_id>_pN` / `_ugoira…`，以及“系列目录/编号标题.cbz”。识别只读取目录与文件名，不需要站点账号，结果只是待确认建议。
+4. 扫描完成后，新发现内容只进入 Inbox，不会同时混入正式的相册、图片 / 视频或漫画 / 动漫页面。可以长按单项选择“接受识别建议”，也可以点击“选择”后批量接受；若建议不准确，打开编辑器修改再保存。
+5. 直接接受会保留 `filename` / `comic_info` 等自动来源，Agent 以后仍可安全更新；只有用户实际改过的字段才标记为 `manual`。`Photos/` 始终按相册媒体扫描，`Images/`、`Videos/` 是按真实目录浏览的普通分类媒体；`ImageSets/` 中的多图目录或 ZIP/CBZ 会成为漫画候选，动漫与影视视频推荐放在 `Anime/`、`Movies/`、`Series/` 或 `Works/`。旧 Library 的普通多图叶子目录仍会兼容识别为 ImageSet。
+6. 在详情页编辑标题、作者、标签、Collection 和 Series。保存后这些信息写入 Library，而不是只留在手机数据库中。
 7. 当前版本不在 App 内抓取站点。以后需要同步 JM、EhViewer/E-Hentai 或 Pixiv 的标题、作者和标签时，可让 Agent 先阅读 Library 根目录的 `GALLERY_LIBRARY.md` 再按来源 ID 辅助整理；Agent 只能更新未标记为 `manual` 的字段。标签采用整组字段锁定，人工改过标签后 Agent 不得擅自追加或改写。
 
 ## 阅读与播放

@@ -18,6 +18,24 @@ data class RecognizedMetadata(
     val tags: List<String> = emptyList(),
     val language: String? = null,
     val sourceUrl: String? = null,
+    /** Portable field name -> automatic source used for the proposed value. */
+    val fieldSources: Map<String, String> = emptyMap(),
+)
+
+/**
+ * Attaches provenance to every non-empty editable value in a recognition result.
+ * Recognition remains a proposal while the item is in Inbox; accepting it persists
+ * these automatic sources without turning them into manual locks.
+ */
+fun RecognizedMetadata.withFieldSource(source: String): RecognizedMetadata = copy(
+    fieldSources = fieldSources + buildMap {
+        if (title != null) put(MetadataField.DISPLAY_TITLE, source)
+        if (authors.isNotEmpty()) put(MetadataField.AUTHORS, source)
+        if (tags.isNotEmpty() || language != null) put(MetadataField.TAGS, source)
+        if (series != null || sortIndex != null || volume != null || season != null || episode != null) {
+            put(MetadataField.SERIES, source)
+        }
+    },
 )
 
 object FilenameMetadataParser {
@@ -27,6 +45,10 @@ object FilenameMetadataParser {
     private val seasonEpisode = Regex("[Ss](\\d{1,2})[Ee](\\d+(?:\\.\\d+)?)", RegexOption.IGNORE_CASE)
     private val episodeWithParent = Regex("^(?:EP?|Episode|第)?\\s*(\\d+(?:\\.\\d+)?)(?:\\s*集)?(?:\\s*[-–—]\\s*(.*))?$", RegexOption.IGNORE_CASE)
     private val chapterWithParent = Regex("^(?:ch(?:apter)?|vol(?:ume)?|第)\\.?\\s*(\\d+(?:\\.\\d+)?)(?:\\s*[话話章卷])?(?:\\s*[-–—]\\s*(.*))?$", RegexOption.IGNORE_CASE)
+    private val downloadedArchiveChapter = Regex(
+        "^(\\d+(?:\\.\\d+)?)[，,、.\\s_-]+(.+?)(?:_[0-9a-f]{6,})?$",
+        RegexOption.IGNORE_CASE,
+    )
     private val releaseFacts = Regex("""\s*[\[【(（]\s*\d+\s*[PpVv](?:\s*[-+、,]\s*\d+\s*[PpVv])?(?:\s*[-–—]\s*[\d.]+\s*(?:[KMGTP]i?[Bb]?|[KMGTP]))?\s*[\]】)）]\s*$""")
     private val qualitySuffix = Regex("""(?:\s*[\[(【][^\])】]*(?:2160p|1080p|720p|HEVC|AVC|x26[45]|[0-9A-F]{8})[^\])】]*[\])】])+$""", RegexOption.IGNORE_CASE)
     private val leadingReleaseId = Regex("^\\d{3,}[._ -]+")
@@ -45,6 +67,15 @@ object FilenameMetadataParser {
                 series = parentAuthor,
                 sortIndex = number,
             )
+        }
+        if (extension in setOf("zip", "cbz") && parentAuthor != null) {
+            downloadedArchiveChapter.matchEntire(trimmedName)?.let { match ->
+                return RecognizedMetadata(
+                    title = match.groupValues[2].trim(),
+                    series = parentAuthor,
+                    sortIndex = match.groupValues[1].toDoubleOrNull(),
+                )
+            }
         }
         val releaseMatch = numberedRelease.matchEntire(trimmedName)
         if (releaseMatch != null && releaseMatch.groupValues[0].contains(Regex("\\bNO\\.", RegexOption.IGNORE_CASE))) {

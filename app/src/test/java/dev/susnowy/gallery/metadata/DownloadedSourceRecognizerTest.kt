@@ -41,6 +41,25 @@ class DownloadedSourceRecognizerTest {
     }
 
     @Test
+    fun recognizesEhRootAliasWithoutMarkerAsInboxSuggestion() {
+        val metadata = DownloadedSourceRecognizer.fromDirectory(
+            "eh/123456-A Gallery Title",
+            listOf("1.jpg", "2.jpg"),
+        )!!
+
+        assertEquals("A Gallery Title", metadata.title)
+        assertEquals(listOf("source:ehviewer", "eh:gid:123456"), metadata.tags)
+    }
+
+    @Test
+    fun recognizesNumericArchiveBelowJmRoot() {
+        val metadata = DownloadedSourceRecognizer.fromFile("JM/1456782.zip")!!
+
+        assertEquals("JM1456782", metadata.title)
+        assertEquals(listOf("source:jm", "jm:album:1456782"), metadata.tags)
+    }
+
+    @Test
     fun recognizesPixivPagesAndUgoira() {
         val page = DownloadedSourceRecognizer.fromFile("Pixiv/12345678_p03.png")!!
         val animation = DownloadedSourceRecognizer.fromFile(
@@ -65,5 +84,27 @@ class DownloadedSourceRecognizerTest {
                 listOf("12345678_p0.jpg", "87654321_p0.jpg"),
             ),
         )
+    }
+
+    @Test
+    fun mergedRecognitionKeepsTheSourceOfEachChosenField() {
+        val comicInfo = RecognizedMetadata(
+            title = "标准标题",
+            tags = listOf("彩色"),
+        ).withFieldSource(FieldSource.COMIC_INFO)
+        val filename = RecognizedMetadata(
+            title = "文件名标题",
+            authors = listOf("作者"),
+            series = "系列",
+        ).withFieldSource(FieldSource.FILENAME)
+
+        val merged = mergeRecognizedMetadata(comicInfo, filename)!!
+
+        assertEquals("标准标题", merged.title)
+        assertEquals(listOf("作者"), merged.authors)
+        assertEquals(FieldSource.COMIC_INFO, merged.fieldSources[MetadataField.DISPLAY_TITLE])
+        assertEquals(FieldSource.COMIC_INFO, merged.fieldSources[MetadataField.TAGS])
+        assertEquals(FieldSource.FILENAME, merged.fieldSources[MetadataField.AUTHORS])
+        assertEquals(FieldSource.FILENAME, merged.fieldSources[MetadataField.SERIES])
     }
 }

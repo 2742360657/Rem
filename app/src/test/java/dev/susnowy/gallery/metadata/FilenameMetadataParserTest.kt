@@ -67,4 +67,16 @@ class FilenameMetadataParserTest {
         assertEquals(12.0, metadata.sortIndex)
         assertEquals("Finale", metadata.title)
     }
+
+    @Test
+    fun usesDownloaderParentFolderForNumberedCbz() {
+        val metadata = FilenameMetadataParser.parse(
+            "01，缘起_8fcff0.cbz",
+            "王牌御史",
+        )
+
+        assertEquals("王牌御史", metadata.series)
+        assertEquals(1.0, metadata.sortIndex)
+        assertEquals("缘起", metadata.title)
+    }
 }

@@ -51,16 +51,16 @@ object MetadataField {
  * providers can fill in the rest without ever overwriting a manual choice.
  */
 fun MediaItem.withManualEdits(previous: MediaItem?): Map<String, String> {
-    val manual = fieldSources.filterValues { it == FieldSource.MANUAL }.toMutableMap()
-    if (previous == null) return manual
-    if (previous.domain != domain) manual[MetadataField.DOMAIN] = FieldSource.MANUAL
-    if (previous.displayTitle != displayTitle) manual[MetadataField.DISPLAY_TITLE] = FieldSource.MANUAL
-    if (previous.originalTitle != originalTitle) manual[MetadataField.ORIGINAL_TITLE] = FieldSource.MANUAL
-    if (previous.authors != authors) manual[MetadataField.AUTHORS] = FieldSource.MANUAL
-    if (previous.tags != tags) manual[MetadataField.TAGS] = FieldSource.MANUAL
-    if (previous.collections != collections) manual[MetadataField.COLLECTIONS] = FieldSource.MANUAL
-    if (previous.series != series) manual[MetadataField.SERIES] = FieldSource.MANUAL
-    if (previous.coverPath != coverPath) manual[MetadataField.COVER_PATH] = FieldSource.MANUAL
-    if (previous.favorite != favorite) manual[MetadataField.FAVORITE] = FieldSource.MANUAL
-    return manual
+    val sources = fieldSources.toMutableMap()
+    if (previous == null) return sources
+    if (previous.domain != domain) sources[MetadataField.DOMAIN] = FieldSource.MANUAL
+    if (previous.displayTitle != displayTitle) sources[MetadataField.DISPLAY_TITLE] = FieldSource.MANUAL
+    if (previous.originalTitle != originalTitle) sources[MetadataField.ORIGINAL_TITLE] = FieldSource.MANUAL
+    if (previous.authors != authors) sources[MetadataField.AUTHORS] = FieldSource.MANUAL
+    if (previous.tags != tags) sources[MetadataField.TAGS] = FieldSource.MANUAL
+    if (previous.collections != collections) sources[MetadataField.COLLECTIONS] = FieldSource.MANUAL
+    if (previous.series != series) sources[MetadataField.SERIES] = FieldSource.MANUAL
+    if (previous.coverPath != coverPath) sources[MetadataField.COVER_PATH] = FieldSource.MANUAL
+    if (previous.favorite != favorite) sources[MetadataField.FAVORITE] = FieldSource.MANUAL
+    return sources
 }

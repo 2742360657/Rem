@@ -77,11 +77,16 @@ The sample proves that the Library contains app-generated metadata, manually arr
 - `IMAGE_SET` currently implies `WORKS`, while directories below `Images/` are deliberately prevented from becoming image sets. This blocks photo-set grouping in 图片 / 视频.
 - `SeriesRef` is embedded in each item. There is no portable series membership document, no explicit group membership, and no edition relationship.
 - Unknown extensions are ignored instead of becoming reviewable discovery records. Sidecars and unsupported user files therefore need separate handling.
-- Generic downloaded CBZ names such as `01，标题_hash.cbz` do not reliably inherit the parent series. Numeric ZIP files below `JM/` also lose ancestor evidence because archive recognition currently looks only at the file name.
-- The EhViewer root alias check recognizes `EhViewer` but not the sample's `eh` root unless a marker is present.
 - Automatic hashes stop above 64 MiB, and directory fingerprints describe structure rather than byte-identical pages. Current duplicate detection cannot merge two image-set editions page by page.
 - Inbox acceptance is represented indirectly by the presence of portable item metadata. Any new review-state design must remain portable and survive index rebuilds.
 - The current Works screen is a flat item grid with facet filtering. Series is a sort/filter property, not a first-class series presentation.
+
+## Implemented foundation
+
+- New recognized media stays exclusively in Inbox until the user edits it or explicitly accepts the suggestion.
+- Inbox supports single-item and multi-select acceptance. Acceptance persists automatic provenance; only changed fields become `manual`.
+- ComicInfo and filename/path recognizers now retain field provenance through merge.
+- The sample's `eh/` alias, numeric archives below a JM-like root, and numbered CBZ files below a series folder are recognized as Inbox suggestions.
 
 ## Preferred implementation path
 

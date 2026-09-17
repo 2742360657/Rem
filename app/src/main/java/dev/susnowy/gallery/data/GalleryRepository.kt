@@ -230,9 +230,22 @@ class GalleryRepository(context: Context) {
                 val id = metadata?.id ?: local?.id ?: UUID.randomUUID().toString()
                 val trashEntry = state.trash.firstOrNull { it.itemId == id }
                 val recognized = candidate.recognizedMetadata
-                val fieldSources = metadata?.fieldSources ?: local?.fieldSources.orEmpty()
+                val storedFieldSources = metadata?.fieldSources ?: local?.fieldSources.orEmpty()
                 fun isManual(field: String): Boolean =
-                    FieldSource.isManual(fieldSources[field])
+                    FieldSource.isManual(storedFieldSources[field])
+                val fieldSources = storedFieldSources.toMutableMap().apply {
+                    recognized?.fieldSources.orEmpty().forEach { (field, source) ->
+                        if (!isManual(field)) put(field, source)
+                    }
+                    if (metadata == null && local == null) {
+                        putIfAbsent(MetadataField.DOMAIN, FieldSource.FILENAME)
+                        putIfAbsent(MetadataField.DISPLAY_TITLE, FieldSource.FILENAME)
+                        putIfAbsent(MetadataField.ORIGINAL_TITLE, FieldSource.FILENAME)
+                        if (candidate.coverPath != null) {
+                            putIfAbsent(MetadataField.COVER_PATH, FieldSource.FILENAME)
+                        }
+                    }
+                }
                 val recognizedSeries = recognized?.series?.let { title ->
                     dev.susnowy.gallery.model.SeriesRef(
                         id = UUID.nameUUIDFromBytes("$libraryId:$title".encodeToByteArray()).toString(),
@@ -348,6 +361,32 @@ class GalleryRepository(context: Context) {
             saved
         }
     }
+
+    /**
+     * Persists the scanner's current proposal without marking any field as manually edited.
+     * This is the explicit boundary between Inbox and the normal library views.
+     */
+    suspend fun acceptSuggestions(libraryId: String, itemIds: Collection<String>): Int =
+        runOperation("正在接受识别建议…") {
+            onIo {
+                val items = itemIds.distinct().mapNotNull(database::mediaItem)
+                    .filter(MediaItem::inInbox)
+                require(items.all { it.libraryId == libraryId }) { "不能跨 Library 接受识别建议" }
+                if (items.isEmpty()) return@onIo 0
+                val storage = storageFor(requireLibrary(libraryId))
+                val portable = PortableMetadataStore(storage).saveItems(items).associateBy { it.id }
+                items.forEach { item ->
+                    database.upsertMedia(
+                        item.copy(
+                            revision = portable.getValue(item.id).revision,
+                            inInbox = false,
+                        ),
+                    )
+                }
+                refreshFromDatabase()
+                items.size
+            }
+        }
 
     suspend fun updateMediaBatch(
         libraryId: String,

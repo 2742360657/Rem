@@ -283,6 +283,20 @@ class GalleryViewModel(
         }
     }
 
+    fun acceptSuggestions(items: Collection<MediaItem>) {
+        val grouped = items.filter(MediaItem::inInbox).groupBy(MediaItem::libraryId)
+        if (grouped.isEmpty()) return
+        viewModelScope.launch {
+            runCatching {
+                grouped.entries.sumOf { (libraryId, libraryItems) ->
+                    repository.acceptSuggestions(libraryId, libraryItems.map(MediaItem::id))
+                }
+            }.onSuccess { count ->
+                message.value = "已接受 $count 项识别建议；自动字段仍可由 Agent 更新"
+            }.onFailure(::showError)
+        }
+    }
+
     fun addBatchMetadata(
         itemIds: Collection<String>,
         authors: String,

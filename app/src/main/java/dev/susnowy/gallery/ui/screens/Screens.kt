@@ -130,17 +130,14 @@ fun GalleryScreenContent(
     onOpenAppSettings: () -> Unit,
 ) {
     val visible = state.media.filterNot(MediaItem::trashed)
+    val accepted = visible.filterNot(MediaItem::inInbox)
     when (state.screen) {
-        AppScreen.MEDIA -> ClassifiedLibraryScreen(visible, viewModel)
-        AppScreen.WORKS -> WorksLibraryScreen(visible, viewModel)
+        AppScreen.MEDIA -> ClassifiedLibraryScreen(accepted, viewModel)
+        AppScreen.WORKS -> WorksLibraryScreen(accepted, viewModel)
         AppScreen.LIBRARIES -> LibrariesScreen(state, viewModel, onChooseFolder)
-        AppScreen.INBOX -> MediaCollectionScreen(
-            items = visible.filter(MediaItem::inInbox),
-            viewModel = viewModel,
-            emptyText = "扫描到的新内容会出现在这里",
-        )
+        AppScreen.INBOX -> InboxScreen(visible.filter(MediaItem::inInbox), viewModel)
         AppScreen.PHOTOS -> PhotosScreen(
-            items = visible.filter { it.kind in PHOTO_KINDS }.sortedByDescending { it.capturedAt ?: it.modifiedAt },
+            items = accepted.filter { it.kind in PHOTO_KINDS }.sortedByDescending { it.capturedAt ?: it.modifiedAt },
             viewModel = viewModel,
         )
         AppScreen.SYSTEM_GALLERY -> SystemGalleryScreen(
@@ -150,26 +147,26 @@ fun GalleryScreenContent(
             onFallbackPicker = onFallbackMediaPicker,
             onOpenAppSettings = onOpenAppSettings,
         )
-        AppScreen.IMAGES -> ImagesScreen(visible.filter { it.kind == MediaKind.IMAGE }, viewModel)
+        AppScreen.IMAGES -> ImagesScreen(accepted.filter { it.kind == MediaKind.IMAGE }, viewModel)
         AppScreen.IMAGE_SETS -> RememberingClassifiedMediaScreen(
-            items = visible.filter { it.kind == MediaKind.IMAGE_SET },
+            items = accepted.filter { it.kind == MediaKind.IMAGE_SET },
             viewModel = viewModel,
             rootDirectory = "ImageSets",
             emptyText = "包含多张图片的叶子目录和 ZIP/CBZ 会显示在这里",
         )
         AppScreen.VIDEOS -> RememberingClassifiedMediaScreen(
-            items = visible.filter { it.kind == MediaKind.VIDEO },
+            items = accepted.filter { it.kind == MediaKind.VIDEO },
             viewModel = viewModel,
             rootDirectory = "Videos",
             emptyText = "Library 中的作品视频会显示在这里",
         )
-        AppScreen.SERIES -> FacetScreen(visible, Facet.SERIES, viewModel)
-        AppScreen.COLLECTIONS -> FacetScreen(visible, Facet.COLLECTION, viewModel)
-        AppScreen.AUTHORS -> FacetScreen(visible, Facet.AUTHOR, viewModel)
-        AppScreen.TAGS -> FacetScreen(visible, Facet.TAG, viewModel)
+        AppScreen.SERIES -> FacetScreen(accepted, Facet.SERIES, viewModel)
+        AppScreen.COLLECTIONS -> FacetScreen(accepted, Facet.COLLECTION, viewModel)
+        AppScreen.AUTHORS -> FacetScreen(accepted, Facet.AUTHOR, viewModel)
+        AppScreen.TAGS -> FacetScreen(accepted, Facet.TAG, viewModel)
         AppScreen.SEARCH -> SearchScreen(
             items = state.allMedia.filter { item ->
-                !item.trashed && state.libraries.any {
+                !item.trashed && !item.inInbox && state.libraries.any {
                     it.libraryId == item.libraryId && it.permissionState == PermissionState.AVAILABLE
                 }
             },
@@ -553,6 +550,71 @@ private fun MediaCollectionScreen(
         }
     } else {
         MediaGrid(items = items, viewModel = viewModel, onOpen = { viewModel.open(it, items) })
+    }
+}
+
+@Composable
+private fun InboxScreen(items: List<MediaItem>, viewModel: GalleryViewModel) {
+    var selectionMode by rememberSaveable { mutableStateOf(false) }
+    var selected by remember { mutableStateOf(emptySet<String>()) }
+    LaunchedEffect(items.map(MediaItem::id)) {
+        selected = selected.intersect(items.mapTo(mutableSetOf(), MediaItem::id))
+        if (items.isEmpty()) selectionMode = false
+    }
+    if (items.isEmpty()) {
+        MediaCollectionScreen(
+            items = emptyList(),
+            viewModel = viewModel,
+            emptyText = "没有待处理内容",
+        )
+        return
+    }
+    Column(Modifier.fillMaxSize()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("${items.size} 项待处理", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "扫描结果只是建议；编辑会保存人工值，直接接受仍保留自动来源。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (selectionMode) {
+                TextButton(onClick = {
+                    selected = if (selected.size == items.size) emptySet() else items.mapTo(mutableSetOf(), MediaItem::id)
+                }) {
+                    Text(if (selected.size == items.size) "取消全选" else "全选")
+                }
+                Button(
+                    enabled = selected.isNotEmpty(),
+                    onClick = {
+                        viewModel.acceptSuggestions(items.filter { it.id in selected })
+                        selected = emptySet()
+                        selectionMode = false
+                    },
+                ) { Text("接受 ${selected.size}") }
+            } else {
+                TextButton(onClick = { selectionMode = true }) { Text("选择") }
+            }
+        }
+        MediaGrid(
+            items = items,
+            viewModel = viewModel,
+            onOpen = { viewModel.open(it, items) },
+            modifier = Modifier.weight(1f),
+            selectionEnabled = true,
+            selectionMode = selectionMode,
+            selectedIds = selected,
+            onSelectionToggle = { item ->
+                selected = if (item.id in selected) selected - item.id else selected + item.id
+            },
+        )
     }
 }
 

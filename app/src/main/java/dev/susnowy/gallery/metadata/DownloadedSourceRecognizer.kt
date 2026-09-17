@@ -15,6 +15,7 @@ object DownloadedSourceRecognizer {
     )
     private val numericDirectory = Regex("^\\d{3,}$")
     private val jmRoots = setOf("jm", "jmcomic", "禁漫", "禁漫天堂")
+    private val ehViewerRoots = setOf("eh", "ehviewer", "e-hentai", "exhentai")
     private val pixivRoots = setOf("pixiv", "pixivutil", "pixivutil2")
 
     fun fromDirectory(relativePath: String, fileNames: Collection<String>): RecognizedMetadata? {
@@ -23,7 +24,7 @@ object DownloadedSourceRecognizer {
         val directoryName = segments.last()
 
         val hasEhViewerMarker = fileNames.any { it.equals(".ehviewer", ignoreCase = true) }
-        val underEhViewerRoot = segments.any { it.equals("EhViewer", ignoreCase = true) }
+        val underEhViewerRoot = segments.any { it.lowercase() in ehViewerRoots }
         ehViewerDirectory.matchEntire(directoryName)?.takeIf { hasEhViewerMarker || underEhViewerRoot }
             ?.let { match ->
                 val gid = match.groupValues[1]
@@ -101,6 +102,17 @@ object DownloadedSourceRecognizer {
                 tags = listOf("source:jm", "jm:album:$id"),
             )
         }
+        jmFileReference(relativePath.pathSegments())?.let { reference ->
+            return RecognizedMetadata(
+                title = "JM${reference.albumId}",
+                sortIndex = reference.photoId?.toDoubleOrNull(),
+                tags = buildList {
+                    add("source:jm")
+                    add("jm:album:${reference.albumId}")
+                    reference.photoId?.let { add("jm:photo:$it") }
+                },
+            )
+        }
         return null
     }
 
@@ -129,6 +141,18 @@ object DownloadedSourceRecognizer {
         return null
     }
 
+    private fun jmFileReference(segments: List<String>): JmReference? {
+        val rootIndex = segments.indexOfFirst { it.lowercase() in jmRoots }
+        if (rootIndex < 0) return null
+        val numericParts = segments.drop(rootIndex + 1).mapIndexedNotNull { index, segment ->
+            val candidate = if (index == segments.lastIndex - rootIndex - 1) {
+                segment.substringBeforeLast('.', segment)
+            } else segment
+            candidate.takeIf(numericDirectory::matches)
+        }
+        return numericParts.firstOrNull()?.let { JmReference(it, numericParts.getOrNull(1)) }
+    }
+
     private fun String.removeJmPrefix(id: String): String = replace(
         Regex("^\\s*(?:\\[?JM\\s*)?$id(?:\\]|）|\\)|[ _.-]+)?", RegexOption.IGNORE_CASE),
         "",
@@ -147,16 +171,39 @@ fun mergeRecognizedMetadata(vararg values: RecognizedMetadata?): RecognizedMetad
     fun <T> firstValue(selector: (RecognizedMetadata) -> T?): T? = available.firstNotNullOfOrNull(selector)
     fun firstList(selector: (RecognizedMetadata) -> List<String>): List<String> =
         available.firstNotNullOfOrNull { selector(it).takeIf(List<String>::isNotEmpty) }.orEmpty()
+    fun sourceFor(field: String, predicate: (RecognizedMetadata) -> Boolean): String? =
+        available.firstOrNull(predicate)?.fieldSources?.get(field)
+    val title = firstValue(RecognizedMetadata::title)
+    val series = firstValue(RecognizedMetadata::series)
+    val sortIndex = firstValue(RecognizedMetadata::sortIndex)
+    val volume = firstValue(RecognizedMetadata::volume)
+    val season = firstValue(RecognizedMetadata::season)
+    val episode = firstValue(RecognizedMetadata::episode)
+    val authors = firstList(RecognizedMetadata::authors)
+    val tags = available.flatMap(RecognizedMetadata::tags).distinct()
+    val language = firstValue(RecognizedMetadata::language)
     return RecognizedMetadata(
-        title = firstValue(RecognizedMetadata::title),
-        series = firstValue(RecognizedMetadata::series),
-        sortIndex = firstValue(RecognizedMetadata::sortIndex),
-        volume = firstValue(RecognizedMetadata::volume),
-        season = firstValue(RecognizedMetadata::season),
-        episode = firstValue(RecognizedMetadata::episode),
-        authors = firstList(RecognizedMetadata::authors),
-        tags = available.flatMap(RecognizedMetadata::tags).distinct(),
-        language = firstValue(RecognizedMetadata::language),
+        title = title,
+        series = series,
+        sortIndex = sortIndex,
+        volume = volume,
+        season = season,
+        episode = episode,
+        authors = authors,
+        tags = tags,
+        language = language,
         sourceUrl = firstValue(RecognizedMetadata::sourceUrl),
+        fieldSources = buildMap {
+            sourceFor(MetadataField.DISPLAY_TITLE) { it.title != null }
+                ?.let { put(MetadataField.DISPLAY_TITLE, it) }
+            sourceFor(MetadataField.AUTHORS) { it.authors.isNotEmpty() }
+                ?.let { put(MetadataField.AUTHORS, it) }
+            sourceFor(MetadataField.TAGS) { it.tags.isNotEmpty() || it.language != null }
+                ?.let { put(MetadataField.TAGS, it) }
+            sourceFor(MetadataField.SERIES) {
+                it.series != null || it.sortIndex != null || it.volume != null ||
+                    it.season != null || it.episode != null
+            }?.let { put(MetadataField.SERIES, it) }
+        },
     )
 }

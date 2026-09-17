@@ -152,6 +152,18 @@ fun MediaGrid(
                 Icon(Icons.Rounded.OpenInFull, contentDescription = null)
                 Text(if (item.kind == MediaKind.IMAGE_SET) " 查看作品详情" else " 打开")
             }
+            if (item.inInbox) {
+                FilledTonalButton(
+                    onClick = {
+                        viewModel.acceptSuggestions(listOf(item))
+                        actionItem = null
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Icon(Icons.Rounded.CheckCircle, contentDescription = null)
+                    Text(" 接受识别建议")
+                }
+            }
             FilledTonalButton(
                 onClick = {
                     actionItem = null
