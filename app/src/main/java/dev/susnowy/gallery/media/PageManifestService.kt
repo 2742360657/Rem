@@ -5,6 +5,7 @@ import dev.susnowy.gallery.model.MediaItem
 import dev.susnowy.gallery.model.SourceKind
 import dev.susnowy.gallery.scanner.MediaClassifier
 import dev.susnowy.gallery.storage.DocumentTreeStorage
+import java.io.InputStream
 import java.security.MessageDigest
 import java.util.zip.ZipInputStream
 import kotlin.coroutines.coroutineContext
@@ -140,38 +141,9 @@ class PageManifestService(
             name = item.relativePath.substringAfterLast('/'),
             isDirectory = false,
         )
-        val pages = mutableListOf<PageEntry>()
-        storage.openInput(document).buffered().use { input ->
-            ZipInputStream(input).use { zip ->
-                while (true) {
-                    coroutineContext.ensureActive()
-                    val entry = zip.nextEntry ?: break
-                    if (!entry.isDirectory && MediaClassifier.isImage(entry.name, null)) {
-                        val digest = if (hashPages) MessageDigest.getInstance("SHA-256") else null
-                        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-                        var size = 0L
-                        while (true) {
-                            coroutineContext.ensureActive()
-                            val count = zip.read(buffer)
-                            if (count < 0) break
-                            size += count
-                            counter.bytes += count
-                            digest?.update(buffer, 0, count)
-                        }
-                        pages += PageEntry(
-                            containerPath = item.relativePath,
-                            entryPath = entry.name,
-                            name = entry.name.substringAfterLast('/'),
-                            sizeBytes = size,
-                            sha256 = digest?.digest()?.toHex(),
-                        )
-                        onProgress(pages.size, counter.bytes)
-                    }
-                    zip.closeEntry()
-                }
-            }
+        return storage.openInput(document).buffered().use { input ->
+            readArchivePages(item.relativePath, input, hashPages, counter, onProgress)
         }
-        return pages.sortedWith { left, right -> MediaClassifier.naturalCompare(left.name, right.name) }
     }
 
     private suspend fun singlePage(
@@ -214,7 +186,53 @@ class PageManifestService(
 
     private fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it) }
 
-    private class ByteCounter(var bytes: Long = 0L)
+    internal class ByteCounter(var bytes: Long = 0L)
+}
+
+/**
+ * Reads every image entry of one archive in a single sequential pass.
+ *
+ * Kept as a standalone function over an [InputStream] so it can be tested without a device:
+ * the streaming reader cannot seek, so this pass is the only cheap way to enumerate and hash
+ * pages, and it must never be repeated per page.
+ */
+internal suspend fun readArchivePages(
+    containerPath: String,
+    input: InputStream,
+    hashPages: Boolean,
+    counter: PageManifestService.ByteCounter = PageManifestService.ByteCounter(),
+    onProgress: (pages: Int, bytesRead: Long) -> Unit = { _, _ -> },
+): List<PageEntry> {
+    val pages = mutableListOf<PageEntry>()
+    ZipInputStream(input).use { zip ->
+        while (true) {
+            coroutineContext.ensureActive()
+            val entry = zip.nextEntry ?: break
+            if (!entry.isDirectory && MediaClassifier.isImage(entry.name, null)) {
+                val digest = if (hashPages) MessageDigest.getInstance("SHA-256") else null
+                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                var size = 0L
+                while (true) {
+                    coroutineContext.ensureActive()
+                    val count = zip.read(buffer)
+                    if (count < 0) break
+                    size += count
+                    counter.bytes += count
+                    digest?.update(buffer, 0, count)
+                }
+                pages += PageEntry(
+                    containerPath = containerPath,
+                    entryPath = entry.name,
+                    name = entry.name.substringAfterLast('/'),
+                    sizeBytes = size,
+                    sha256 = digest?.digest()?.joinToString("") { "%02x".format(it) },
+                )
+                onProgress(pages.size, counter.bytes)
+            }
+            zip.closeEntry()
+        }
+    }
+    return pages.sortedWith { left, right -> MediaClassifier.naturalCompare(left.name, right.name) }
 }
 
 /**

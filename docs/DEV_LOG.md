@@ -45,7 +45,8 @@
 
 ### 验证
 
-- 界面与阅读器改动后：`testDebugUnitTest` **160 项通过，0 失败，0 跳过**（新增 3 项页计划用例：跨容器页各自携带正确的阅读路径、顺序按 `sort_index` 而非存储顺序、整容器成员与未知 Asset 一律返回 null 让调用方回退）；`lintDebug` **0 errors、31 warnings**；`assembleDebug`、`assembleDebugAndroidTest` 成功。
+- 界面与阅读器改动后：`testDebugUnitTest` **163 项通过，0 失败，0 跳过**（新增 6 项：3 项页计划用例——跨容器页各自携带正确的阅读路径、顺序按 `sort_index` 而非存储顺序、整容器成员与未知 Asset 一律返回 null 让调用方回退；3 项压缩包单遍读取用例——只把图片条目计入页清单并按自然序排列、未启用哈希时仍从同一次读取得到每页字节数、嵌套条目的 `entry_path` 保留完整路径而显示名取基名，并用“读取字节数等于各页负载之和”锁定只读一遍）；`lintDebug` **0 errors、31 warnings**；`assembleDebug`、`assembleDebugAndroidTest` 成功。
+- 压缩包读取被抽成对 `InputStream` 的独立函数，因此这条最容易出错的 I/O 路径现在有无需真机的回归测试。
 - 仍未真机验证：合并版本的阅读性能（每页解析 + 计划里的跨容器读取）、深度比较在真实 CBZ 上的耗时与取消响应、以及 692 成员系列与合并计划同时存在时的界面表现。
 
 ### 剩余风险
