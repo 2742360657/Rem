@@ -167,6 +167,12 @@ An unchanged file reuses completed enrichment only when size and modified time s
 - `MediaContentService.decodeArchivePage` takes an explicit archive path, so a merged plan's pages can come from different archives; the reader passes the page's own container at every decode site.
 - UI: `EditionCompareDialog` (from the image-set detail screen) picks a second source, runs a quick or deep comparison with progress and cancellation, renders the report, and writes the merged Edition after an explicit confirmation.
 
+## Card actions and shared dialogs
+
+- `ui.components.MediaGrid` owns the long-press action panel. A card can open the item, accept a suggestion, edit, favourite, derive a copy, move to trash, and now also "add to Group", "add to Series" and open the Edition comparison. The grid collects the UI state once (not per card) so the pickers can list the Library's Groups and Series.
+- `ui.components.TargetPickerDialog` is the shared single-select picker for a Group or Series target; `ui.components.EditionCompareDialog` moved here from the screens package so components do not depend on screens.
+- `model.MembershipRules` holds the pure append/skip rules behind those actions (order preserved, duplicates dropped, Works in another Series reported rather than moved), so what a batch action writes is unit-tested.
+
 ## Media and cache budgets
 
 - directory/archive pages are loaded lazily;
