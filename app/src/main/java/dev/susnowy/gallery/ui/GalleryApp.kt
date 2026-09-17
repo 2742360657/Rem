@@ -169,6 +169,8 @@ fun GalleryApp(viewModel: GalleryViewModel = viewModel()) {
                 libraryWorks = state.allMedia.filter {
                     it.libraryId == selected.libraryId && it.visibleInLibrary
                 },
+                readerQueue = state.readerQueue,
+                autoAdvanceChapters = state.autoAdvanceChapters,
                 viewModel = viewModel,
                 onBack = viewModel::closeDetail,
             )

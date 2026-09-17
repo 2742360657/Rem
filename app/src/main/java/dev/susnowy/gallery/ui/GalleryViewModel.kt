@@ -77,10 +77,16 @@ data class GalleryUiState(
     val screen: AppScreen = AppScreen.PHOTOS,
     val selectedItemId: String? = null,
     val detailItemIds: List<String> = emptyList(),
+    /**
+     * Ordered Works the open reader belongs to. Opening a Work from a Series keeps the chapter
+     * list here, which is how "next chapter" knows where to go.
+     */
+    val readerQueueIds: List<String> = emptyList(),
     val searchQuery: String = "",
     val operation: String? = null,
     val message: String? = null,
     val autoScan: Boolean = true,
+    val autoAdvanceChapters: Boolean = true,
     val trashRetentionDays: Int = 30,
     val systemMedia: List<SystemMediaEntry> = emptyList(),
     val systemMediaAccess: SystemMediaAccess = SystemMediaAccess.NONE,
@@ -94,6 +100,15 @@ data class GalleryUiState(
         get() = groups.firstOrNull { it.id == selectedGroupId }
     val selectedSeries: MediaSeries?
         get() = series.firstOrNull { it.id == selectedSeriesId }
+
+    /** The reader's chapter context, resolved against the current index and order preserved. */
+    val readerQueue: List<MediaItem>
+        get() = if (readerQueueIds.isEmpty()) {
+            emptyList()
+        } else {
+            val byId = allMedia.associateBy(MediaItem::id)
+            readerQueueIds.mapNotNull(byId::get).filter { !it.trashed }
+        }
 }
 
 class GalleryViewModel(
@@ -112,9 +127,16 @@ class GalleryViewModel(
     private val selectedGroupId = MutableStateFlow<String?>(null)
     private val selectedSeriesId = MutableStateFlow<String?>(null)
     private val detailItemIds = MutableStateFlow<List<String>>(emptyList())
+    private val readerQueueIds = MutableStateFlow<List<String>>(emptyList())
     private val searchQuery = MutableStateFlow(savedStateHandle.get<String>(SEARCH_QUERY_KEY).orEmpty())
     private val message = MutableStateFlow<String?>(null)
     private val autoScan = MutableStateFlow(preferences.getBoolean("auto_scan", true))
+    private val autoAdvanceChapters = MutableStateFlow(
+        preferences.getBoolean(AUTO_ADVANCE_CHAPTERS_KEY, true),
+    )
+
+    /** Current value of the device-local "read on into the next chapter" preference. */
+    val autoAdvanceChaptersEnabled: Boolean get() = autoAdvanceChapters.value
     private val retentionDays = MutableStateFlow(preferences.getInt("trash_retention_days", 30))
     private val systemMedia = MutableStateFlow<List<SystemMediaEntry>>(emptyList())
     private val systemMediaAccess = MutableStateFlow(repository.systemMediaAccess())
@@ -148,22 +170,39 @@ class GalleryViewModel(
             selectedItemId,
             searchQuery,
             detailItemIds,
-            combine(selectedGroupId, selectedSeriesId) { groupId, seriesId ->
-                ShelfSelection(groupId, seriesId)
+            combine(
+                selectedGroupId,
+                selectedSeriesId,
+                readerQueueIds,
+            ) { groupId, seriesId, queueIds ->
+                ShelfSelection(groupId, seriesId, queueIds)
             },
         ) { currentScreen, selected, query, detailIds, shelf ->
-            NavigationStatus(currentScreen, selected, query, detailIds, shelf.groupId, shelf.seriesId)
+            NavigationStatus(
+                currentScreen,
+                selected,
+                query,
+                detailIds,
+                shelf.groupId,
+                shelf.seriesId,
+                shelf.queueIds,
+            )
         },
         combine(
             repository.operation,
             message,
             autoScan,
             retentionDays,
-            combine(systemMedia, systemMediaAccess, systemMediaLoading) { media, access, loading ->
-                SystemGalleryStatus(media, access, loading)
+            combine(
+                autoAdvanceChapters,
+                systemMedia,
+                systemMediaAccess,
+                systemMediaLoading,
+            ) { autoAdvance, media, access, loading ->
+                ReadingStatus(autoAdvance, SystemGalleryStatus(media, access, loading))
             },
-        ) { operation, currentMessage, scan, days, gallery ->
-            SettingsStatus(operation, currentMessage, scan, days, gallery)
+        ) { operation, currentMessage, scan, days, reading ->
+            SettingsStatus(operation, currentMessage, scan, days, reading.autoAdvance, reading.gallery)
         },
         activeLibraryId,
     ) { libraries, indexed, navigation, status, activeId ->
@@ -189,10 +228,12 @@ class GalleryViewModel(
             screen = navigation.screen,
             selectedItemId = navigation.selectedItemId,
             detailItemIds = navigation.detailItemIds,
+            readerQueueIds = navigation.readerQueueIds,
             searchQuery = navigation.searchQuery,
             operation = status.operation,
             message = status.message,
             autoScan = status.autoScan,
+            autoAdvanceChapters = status.autoAdvanceChapters,
             trashRetentionDays = status.retentionDays,
             systemMedia = status.systemGallery.media,
             systemMediaAccess = status.systemGallery.access,
@@ -293,15 +334,26 @@ class GalleryViewModel(
 
     fun open(item: MediaItem, browsingItems: List<MediaItem> = listOf(item)) {
         setActiveLibrary(item.libraryId)
-        detailItemIds.value = browsingItems
+        val browsingIds = browsingItems
             .asSequence()
             .filter { it.libraryId == item.libraryId && !it.trashed }
             .map(MediaItem::id)
             .distinct()
             .toList()
-            .takeIf { item.id in it }
-            ?: listOf(item.id)
+        detailItemIds.value = browsingIds.takeIf { item.id in it } ?: listOf(item.id)
+        // The reader's chapter context is the whole ordered list the reader opened from, so
+        // "next chapter" means the same thing whether the Work was opened from a shelf or from
+        // the series chapter list.
+        readerQueueIds.value = browsingIds
         setSelectedItem(item.id)
+    }
+
+    /**
+     * Opens one chapter of a Series while keeping the chapter list as the reader's context.
+     * Used both by the chapter list and by the end-of-chapter hand-over.
+     */
+    fun openChapter(item: MediaItem, ordered: List<MediaItem>) {
+        open(item, ordered.ifEmpty { listOf(item) })
     }
 
     fun selectDetailItem(item: MediaItem) {
@@ -311,6 +363,7 @@ class GalleryViewModel(
     fun closeDetail() {
         setSelectedItem(null)
         detailItemIds.value = emptyList()
+        readerQueueIds.value = emptyList()
     }
 
     fun openGroup(groupId: String) {
@@ -733,6 +786,10 @@ class GalleryViewModel(
 
     suspend fun progress(item: MediaItem): PlaybackProgress? = repository.progress(item.id)
 
+    /** Reading state of a whole series chapter list, read in one query. */
+    suspend fun progressFor(items: List<MediaItem>): Map<String, PlaybackProgress> =
+        if (items.isEmpty()) emptyMap() else repository.progressFor(items.map(MediaItem::id))
+
     suspend fun offlinePreview(item: MediaItem): java.io.File? {
         return repository.offlinePreview(item)
     }
@@ -794,6 +851,17 @@ class GalleryViewModel(
     fun setAutoScan(enabled: Boolean) {
         autoScan.value = enabled
         preferences.edit { putBoolean("auto_scan", enabled) }
+    }
+
+    /**
+     * Whether reaching the end of a chapter continues into the next one.
+     *
+     * A display/reading preference, deliberately device-local: it says how this reader likes to
+     * read, it is not a Library decision, and it never changes which chapter was read.
+     */
+    fun setAutoAdvanceChapters(enabled: Boolean) {
+        autoAdvanceChapters.value = enabled
+        preferences.edit { putBoolean(AUTO_ADVANCE_CHAPTERS_KEY, enabled) }
     }
 
     fun setRetentionDays(days: Int) {
@@ -1018,7 +1086,13 @@ class GalleryViewModel(
         val message: String?,
         val autoScan: Boolean,
         val retentionDays: Int,
+        val autoAdvanceChapters: Boolean,
         val systemGallery: SystemGalleryStatus,
+    )
+
+    private data class ReadingStatus(
+        val autoAdvance: Boolean,
+        val gallery: SystemGalleryStatus,
     )
 
     private data class NavigationStatus(
@@ -1028,9 +1102,14 @@ class GalleryViewModel(
         val detailItemIds: List<String>,
         val selectedGroupId: String?,
         val selectedSeriesId: String?,
+        val readerQueueIds: List<String>,
     )
 
-    private data class ShelfSelection(val groupId: String?, val seriesId: String?)
+    private data class ShelfSelection(
+        val groupId: String?,
+        val seriesId: String?,
+        val queueIds: List<String>,
+    )
 
     data class ComparisonState(
         val running: Boolean = false,
@@ -1057,5 +1136,6 @@ class GalleryViewModel(
         const val SCREEN_KEY = "screen"
         const val SELECTED_ITEM_KEY = "selected_item_id"
         const val SEARCH_QUERY_KEY = "search_query"
+        const val AUTO_ADVANCE_CHAPTERS_KEY = "auto_advance_chapters"
     }
 }

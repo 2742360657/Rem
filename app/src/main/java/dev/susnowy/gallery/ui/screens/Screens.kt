@@ -731,6 +731,44 @@ private fun WorksLibraryScreen(
         sort = WorkSort.RECENT
         selectedSeriesKey = null
     }
+    if (selectedSeries != null) {
+        // A series is one entry point: the chapter list replaces the work grid (and its filter
+        // bar) and brings its own toolbar.
+        val editableSeries = series.firstOrNull {
+            it.title.equals(selectedSeries.title, ignoreCase = true)
+        }
+        SeriesChapterList(
+            title = selectedSeries.title,
+            chapters = selectedSeries.items,
+            series = editableSeries,
+            viewModel = viewModel,
+            onBack = { selectedSeriesKey = null },
+            onOpenChapter = { chapter, ordered -> viewModel.openChapter(chapter, ordered) },
+            onEditSeries = { editableSeries?.let { viewModel.openSeries(it.id) } },
+        )
+        RightSidePanel(
+            visible = showTools,
+            title = "搜索、索引与排序",
+            onDismiss = { showTools = false },
+        ) {
+            WorkSearchPanel(
+                query = query,
+                onQueryChange = { query = it },
+                facet = facet,
+                onFacetChange = {
+                    facet = it
+                    selectedFacet = null
+                },
+                facetValues = facetValues,
+                selectedFacet = selectedFacet,
+                onSelectedFacetChange = { selectedFacet = it },
+                sort = sort,
+                onSortChange = { sort = it },
+                onClear = ::clearSearch,
+            )
+        }
+        return
+    }
     Column(Modifier.fillMaxSize()) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -755,48 +793,23 @@ private fun WorksLibraryScreen(
                 Icon(Icons.Rounded.Search, contentDescription = "搜索与筛选")
             }
         }
-        if (selectedSeries == null) {
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
-            ) {
-                FilterChip(
-                    selected = presentation == WorkPresentation.SERIES,
-                    onClick = { presentation = WorkPresentation.SERIES },
-                    label = { Text("系列 ${seriesShelves.count { !it.isUnassigned }}") },
-                )
-                FilterChip(
-                    selected = presentation == WorkPresentation.WORKS,
-                    onClick = {
-                        presentation = WorkPresentation.WORKS
-                        selectedSeriesKey = null
-                    },
-                    label = { Text("全部作品 ${shown.size}") },
-                )
-            }
-        } else {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
-            ) {
-                IconButton(onClick = { selectedSeriesKey = null }) {
-                    Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回系列书架")
-                }
-                Column(Modifier.weight(1f)) {
-                    Text(selectedSeries.title, style = MaterialTheme.typography.titleMedium)
-                    Text(
-                        "${selectedSeries.items.size} 部作品 · 按系列顺序",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                val editable = series.firstOrNull {
-                    it.title.equals(selectedSeries.title, ignoreCase = true)
-                }
-                if (editable != null) {
-                    TextButton(onClick = { viewModel.openSeries(editable.id) }) { Text("编辑系列") }
-                }
-            }
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
+        ) {
+            FilterChip(
+                selected = presentation == WorkPresentation.SERIES,
+                onClick = { presentation = WorkPresentation.SERIES },
+                label = { Text("系列 ${seriesShelves.count { !it.isUnassigned }}") },
+            )
+            FilterChip(
+                selected = presentation == WorkPresentation.WORKS,
+                onClick = {
+                    presentation = WorkPresentation.WORKS
+                    selectedSeriesKey = null
+                },
+                label = { Text("全部作品 ${shown.size}") },
+            )
         }
         if (query.isNotBlank() || selectedFacet != null || facet != WorkFacet.ALL || sort != WorkSort.RECENT) {
             Text(
@@ -807,12 +820,6 @@ private fun WorksLibraryScreen(
             )
         }
         when {
-            selectedSeries != null -> MediaGrid(
-                selectedSeries.items,
-                viewModel,
-                { viewModel.open(it, selectedSeries.items) },
-                Modifier.weight(1f),
-            )
             presentation == WorkPresentation.SERIES -> SeriesShelfGrid(
                 shelves = seriesShelves,
                 viewModel = viewModel,
@@ -833,67 +840,95 @@ private fun WorksLibraryScreen(
         title = "搜索、索引与排序",
         onDismiss = { showTools = false },
     ) {
-        Text(
-            "筛选仅影响当前作品页，不会修改文件或元数据。",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        WorkSearchPanel(
+            query = query,
+            onQueryChange = { query = it },
+            facet = facet,
+            onFacetChange = {
+                facet = it
+                selectedFacet = null
+            },
+            facetValues = facetValues,
+            selectedFacet = selectedFacet,
+            onSelectedFacetChange = { selectedFacet = it },
+            sort = sort,
+            onSortChange = { sort = it },
+            onClear = ::clearSearch,
         )
-        OutlinedTextField(
-            value = query,
-            onValueChange = { query = it },
-            leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
-            label = { Text("标题、作者、标签或系列") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        Text("索引", style = MaterialTheme.typography.titleSmall)
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(WorkFacet.entries) { value ->
-                FilterChip(
-                    selected = facet == value,
-                    onClick = {
-                        facet = value
-                        selectedFacet = null
-                    },
-                    label = { Text(value.label) },
-                )
-            }
-        }
-        if (facetValues.isNotEmpty()) {
-            Text("${facet.label}值", style = MaterialTheme.typography.titleSmall)
+    }
+}
+
+/** Search, facet and sort controls shared by the series shelf and the full work list. */
+@Composable
+private fun WorkSearchPanel(
+    query: String,
+    onQueryChange: (String) -> Unit,
+    facet: WorkFacet,
+    onFacetChange: (WorkFacet) -> Unit,
+    facetValues: List<String>,
+    selectedFacet: String?,
+    onSelectedFacetChange: (String?) -> Unit,
+    sort: WorkSort,
+    onSortChange: (WorkSort) -> Unit,
+    onClear: () -> Unit,
+) {
+    Text(
+        "筛选仅影响当前作品页，不会修改文件或元数据。",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    OutlinedTextField(
+        value = query,
+        onValueChange = onQueryChange,
+        leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
+        label = { Text("标题、作者、标签或系列") },
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth(),
+    )
+    Text("索引", style = MaterialTheme.typography.titleSmall)
+    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        items(WorkFacet.entries) { value ->
             FilterChip(
-                selected = selectedFacet == null,
-                onClick = { selectedFacet = null },
-                label = { Text("全部") },
-            )
-            facetValues.take(MAX_CONTEXT_FACETS).forEach { value ->
-                FilterChip(
-                    selected = selectedFacet == value,
-                    onClick = { selectedFacet = value },
-                    label = { Text(value, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            }
-            if (facetValues.size > MAX_CONTEXT_FACETS) {
-                Text(
-                    "索引较多，仅显示前 $MAX_CONTEXT_FACETS 项；可直接在上方搜索。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-        Text("排序", style = MaterialTheme.typography.titleSmall)
-        WorkSort.entries.forEach { value ->
-            FilterChip(
-                selected = sort == value,
-                onClick = { sort = value },
+                selected = facet == value,
+                onClick = { onFacetChange(value) },
                 label = { Text(value.label) },
+            )
+        }
+    }
+    if (facetValues.isNotEmpty()) {
+        Text("${facet.label}值", style = MaterialTheme.typography.titleSmall)
+        FilterChip(
+            selected = selectedFacet == null,
+            onClick = { onSelectedFacetChange(null) },
+            label = { Text("全部") },
+        )
+        facetValues.take(MAX_CONTEXT_FACETS).forEach { value ->
+            FilterChip(
+                selected = selectedFacet == value,
+                onClick = { onSelectedFacetChange(value) },
+                label = { Text(value, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 modifier = Modifier.fillMaxWidth(),
             )
         }
-        OutlinedButton(onClick = ::clearSearch, modifier = Modifier.fillMaxWidth()) {
-            Text("清除搜索与筛选")
+        if (facetValues.size > MAX_CONTEXT_FACETS) {
+            Text(
+                "索引较多，仅显示前 $MAX_CONTEXT_FACETS 项；可直接在上方搜索。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
+    }
+    Text("排序", style = MaterialTheme.typography.titleSmall)
+    WorkSort.entries.forEach { value ->
+        FilterChip(
+            selected = sort == value,
+            onClick = { onSortChange(value) },
+            label = { Text(value.label) },
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
+    OutlinedButton(onClick = onClear, modifier = Modifier.fillMaxWidth()) {
+        Text("清除搜索与筛选")
     }
 }
 
