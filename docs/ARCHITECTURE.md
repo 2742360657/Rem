@@ -8,7 +8,7 @@ The public product name is Rem and its release application ID is `com.susnowy.re
 
 1. Media bytes remain in the user-selected Storage Access Framework tree.
 2. Portable truth lives under `.gallery/` in that tree. It contains the versioned Library identity, catalog overrides, progress, logical trash, imports, backups, and recoverable file transactions.
-3. `gallery-index.db` is a device-local SQLite index. It stores SAF URIs, query-friendly media projections, and rebuildable discovery records for unsupported files or ambiguous directories. It can be rebuilt from the Library; a discovery row is evidence that a path exists, not a portable classification decision.
+3. `gallery-index.db` is a device-local SQLite index. It stores SAF URIs, query-friendly media projections, rebuildable discovery records for unsupported files or ambiguous directories, and the disposable `scan_enrichment` resume queue. It can be rebuilt from the Library; neither a discovery row nor an enrichment checkpoint is portable truth.
 4. Every item has a portable `domain`: `album`, `classified`, or `works`. Compose exposes these as exactly three primary destinations; file type and product surface are not conflated.
 5. Compose screens consume repository state. Thumbnail and decoder data never enters the portable Library.
 
@@ -45,11 +45,18 @@ bytes — dominates scan time. Three rules keep that count proportional to the t
 - Documents carry their provider locator, and readers prefer it, so a read never
   re-resolves a path it was already handed.
 
-A rescan compares size and modified time against the indexed record and reuses the
-recorded fingerprint, capture metadata, and archive page count. Only a changed file is
-opened; changed ZIP/CBZ files are traversed once for both page count and ComicInfo. Directory
-fingerprints include page modification times. A size or timestamp difference always
-re-reads because keeping a stale fingerprint would silently mis-merge metadata.
+Scanning has two phases. The inventory phase recursively lists the tree, classifies paths,
+and commits a usable media/discovery index without opening media payloads. Byte-level work
+(small-file hashes, ZIP/CBZ manifests and ComicInfo, and album capture metadata) is queued in
+`scan_enrichment` and committed in small batches. The queue is local and rebuildable; after a
+process restart the app continues its remaining rows without repeating completed byte reads.
+
+A rescan compares size and modified time against an indexed row whose enrichment checkpoint
+is complete and reuses its fingerprint, capture metadata, and archive page count. Only a
+changed or unfinished file is opened; changed ZIP/CBZ files are traversed for page count and
+ComicInfo. Directory fingerprints include page modification times. A size or timestamp
+difference always re-reads because keeping a stale fingerprint would silently mis-merge
+metadata.
 
 ## Safety invariants
 
@@ -76,6 +83,7 @@ re-reads because keeping a stale fingerprint would silently mis-merge metadata.
 - A portable document is only committed once it is addressable under exactly the requested path. A provider that publishes a qualified copy instead of replacing the target gets that duplicate removed and the previous revision restored.
 - Diagnostics are written to the app's private files directory, never into the Library, and are reduced before writing: complete messages and exception summaries have content URIs and host filesystem paths stripped. Export waits for queued writes and grants read-only FileProvider URIs through the system share sheet.
 - A scan reports directory, entry, and candidate counts while it runs. A failed directory query marks the scan incomplete and protects that subtree's previous local rows; temporary provider failure is not treated as media deletion.
+- The inventory commit and every enrichment batch update media rows and local resume state atomically. Killing the process during enrichment can repeat at most the uncommitted batch; it cannot turn a partial deep scan into a completed checkpoint. The initial tree inventory itself is still one atomic pass and may repeat if killed before its first commit.
 - Unsupported user-visible files and structurally ambiguous directories remain in a separate local discovery index and appear under Inbox. Known internal files and registered sidecars are ignored. Discovery alone never creates portable metadata or claims that Android can decode the path.
 
 ## Build and verification

@@ -80,6 +80,7 @@ The sample proves that the Library contains app-generated metadata, manually arr
 - Automatic hashes stop above 64 MiB, and directory fingerprints describe structure rather than byte-identical pages. Current duplicate detection cannot merge two image-set editions page by page.
 - Inbox acceptance is represented indirectly by the presence of portable item metadata. Any new review-state design must remain portable and survive index rebuilds.
 - The Works screen now has a derived series shelf, but Series is still stored inline on every item. There is no portable first-class series document, alias/rename transaction, or atomic multi-member reordering operation yet.
+- The deep-enrichment queue is resumable, but the initial read-only tree inventory is still one atomic pass. If real-device timing shows that inventory alone is too slow, checkpoint by top-level subtree without treating unvisited paths as deleted.
 
 ## Implemented foundation
 
@@ -89,6 +90,7 @@ The sample proves that the Library contains app-generated metadata, manually arr
 - The sample's `eh/` alias, numeric archives below a JM-like root, and numbered CBZ files below a series folder are recognized as Inbox suggestions.
 - Unsupported user-visible files and ambiguous directory structures are indexed separately and shown under Inbox's “其他待判断”. Known Rem internals and sidecars are filtered explicitly. These discovery rows do not enter the portable catalog.
 - Works can be browsed as a series shelf or flat item grid. The shelf groups legacy same-title references for display, keeps unassigned works visible, and orders entries by manual sort index then season/episode or volume/chapter. The editor preserves and edits every existing series position field.
+- Large scans now publish a byte-free inventory first, then checkpoint hashes, archive inspection, ComicInfo, and capture metadata in a device-local v6 queue. Completed batches resume after process restart; the queue is disposable and never becomes portable truth.
 
 ## Preferred implementation path
 

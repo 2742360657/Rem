@@ -5,6 +5,7 @@ import androidx.exifinterface.media.ExifInterface
 import dev.susnowy.gallery.library.LibraryDocument
 import dev.susnowy.gallery.logging.RemLog
 import dev.susnowy.gallery.model.MediaDomain
+import dev.susnowy.gallery.model.MediaItem
 import dev.susnowy.gallery.model.MediaKind
 import dev.susnowy.gallery.model.SourceKind
 import dev.susnowy.gallery.model.DiscoveryReason
@@ -44,6 +45,25 @@ data class ScanCandidate(
     val pageCount: Int? = null,
     val coverPath: String? = null,
     val secondaryPath: String? = null,
+    val recognizedMetadata: RecognizedMetadata? = null,
+    /** True when the inventory pass deliberately deferred byte-level inspection. */
+    val needsEnrichment: Boolean = false,
+)
+
+enum class ScanDepth {
+    /** Lists the tree and builds a usable index without opening media payloads. */
+    INVENTORY,
+    /** Reads hashes, archive manifests, ComicInfo, and capture metadata. */
+    FULL,
+}
+
+data class ScanEnrichment(
+    val relativePath: String,
+    val contentHash: String? = null,
+    val capturedAt: Long? = null,
+    val latitude: Double? = null,
+    val longitude: Double? = null,
+    val pageCount: Int? = null,
     val recognizedMetadata: RecognizedMetadata? = null,
 )
 
@@ -94,6 +114,8 @@ data class ScannedFile(
     val latitude: Double? = null,
     val longitude: Double? = null,
     val pageCount: Int? = null,
+    /** False while byte-level inspection is queued in the disposable local index. */
+    val enriched: Boolean = true,
 )
 
 /** Prior results keyed by relative path; empty for a first scan or a full rescan. */
@@ -108,8 +130,11 @@ typealias ScanSnapshot = Map<String, ScannedFile>
 internal fun ScannedFile.canBeReused(size: Long, modifiedAt: Long): Boolean =
     this.size == size && this.modifiedAt == modifiedAt
 
+internal fun ScannedFile.canReuseEnrichment(size: Long, modifiedAt: Long): Boolean =
+    enriched && canBeReused(size, modifiedAt)
+
 internal fun ScannedFile.reusableArchivePageCount(size: Long, modifiedAt: Long): Int? =
-    pageCount?.takeIf { canBeReused(size, modifiedAt) }
+    pageCount?.takeIf { canReuseEnrichment(size, modifiedAt) }
 
 private class ScanStatistics {
     private val readPaths = mutableSetOf<String>()
@@ -141,6 +166,7 @@ class LibraryScanner {
     suspend fun scan(
         storage: DocumentTreeStorage,
         prior: ScanSnapshot = emptyMap(),
+        depth: ScanDepth = ScanDepth.FULL,
         onProgress: (ScanProgress) -> Unit = {},
     ): ScanResult = withContext(Dispatchers.IO) {
         val candidates = mutableListOf<ScanCandidate>()
@@ -158,6 +184,7 @@ class LibraryScanner {
             warnings,
             unreadableDirectories,
             prior,
+            depth,
             statistics,
             onProgress,
         )
@@ -193,6 +220,7 @@ class LibraryScanner {
         warnings: MutableList<String>,
         unreadableDirectories: MutableList<String>,
         prior: ScanSnapshot,
+        depth: ScanDepth,
         statistics: ScanStatistics,
         onProgress: (ScanProgress) -> Unit,
     ) {
@@ -248,7 +276,7 @@ class LibraryScanner {
                     directory.lastModified,
                     files.maxOfOrNull(StorageEntry::lastModified) ?: 0,
                 )
-                val unchanged = prior[path]?.canBeReused(totalSize, modifiedAt) == true
+                val unchanged = prior[path]?.canReuseEnrichment(totalSize, modifiedAt) == true
                 val parentName = path.substringBeforeLast('/', "").substringAfterLast('/').takeIf(String::isNotBlank)
                 val inferredMetadata = mergeRecognizedMetadata(
                     DownloadedSourceRecognizer.fromDirectory(path, files.map(StorageEntry::name))
@@ -262,6 +290,8 @@ class LibraryScanner {
                 }
                 val directoryMetadata = if (unchanged) {
                     comicInfoEntry?.let { statistics.contentReused(it.relativePath) }
+                    null
+                } else if (depth == ScanDepth.INVENTORY) {
                     null
                 } else {
                     comicInfoEntry?.let { statistics.contentRead(it.relativePath) }
@@ -291,22 +321,25 @@ class LibraryScanner {
                     coverPath = sortedPages.firstOrNull()?.relativePath,
                     contentHash = directoryFingerprint(files),
                     recognizedMetadata = directoryMetadata,
+                    needsEnrichment = comicInfoEntry != null && !unchanged && depth == ScanDepth.INVENTORY,
                 )
                 // Downloaded image sets often contain one or more bonus videos. Keep the
                 // directory as one readable image set, but never make those video files vanish.
                 videos.forEach { video ->
                     val parsed = FilenameMetadataParser.parseVideo(video.name, path.substringAfterLast('/'))
                         .withFieldSource(FieldSource.FILENAME)
+                    val hash = contentHash(storage, video, prior, depth, statistics)
                     output += video.toCandidate(
                         kind = MediaKind.VIDEO,
                         domain = MediaDomain.WORKS,
                         sourceKind = SourceKind.FILE,
-                        contentHash = contentHash(storage, video, prior, statistics),
+                        contentHash = hash.value,
                         recognizedMetadata = parsed.copy(
                             authors = parsed.authors.ifEmpty { (directoryMetadata ?: inferredMetadata).authors },
                             tags = parsed.tags.ifEmpty { (directoryMetadata ?: inferredMetadata).tags },
                             series = parsed.series ?: (directoryMetadata ?: inferredMetadata).series,
                         ),
+                        needsEnrichment = hash.deferred,
                     )
                 }
             }
@@ -326,7 +359,12 @@ class LibraryScanner {
             }
             val pairedVideoPaths = mutableSetOf<String>()
             images.forEach { image ->
-                val captured = if (inPhotos) capturedMetadata(storage, image, prior, statistics) else null
+                val captured = if (inPhotos) {
+                    capturedMetadata(storage, image, prior, depth, statistics)
+                } else {
+                    DeferredValue<CapturedMetadata>()
+                }
+                val hash = contentHash(storage, image, prior, depth, statistics)
                 val motion = if (inPhotos) videos.firstOrNull {
                     it.name.substringBeforeLast('.').equals(
                         image.name.substringBeforeLast('.'),
@@ -341,10 +379,10 @@ class LibraryScanner {
                     domain = if (inPhotos) MediaDomain.ALBUM else MediaDomain.CLASSIFIED,
                     sourceKind = if (inPhotos) SourceKind.SYSTEM_IMPORT else SourceKind.FILE,
                     secondaryPath = motion?.relativePath,
-                    capturedAt = captured?.capturedAt,
-                    latitude = captured?.latitude,
-                    longitude = captured?.longitude,
-                    contentHash = contentHash(storage, image, prior, statistics),
+                    capturedAt = captured.value?.capturedAt,
+                    latitude = captured.value?.latitude,
+                    longitude = captured.value?.longitude,
+                    contentHash = hash.value,
                     sizeOverride = image.size + (motion?.size ?: 0),
                     recognizedMetadata = if (inPhotos) null else mergeRecognizedMetadata(
                         DownloadedSourceRecognizer.fromFile(image.relativePath)
@@ -355,12 +393,18 @@ class LibraryScanner {
                                 .takeIf(String::isNotBlank),
                         ).withFieldSource(FieldSource.FILENAME),
                     ),
+                    needsEnrichment = captured.deferred || hash.deferred,
                 )
             }
             videos.filterNot { it.relativePath in pairedVideoPaths }.forEach { video ->
                 val parentName = video.relativePath.substringBeforeLast('/', "").substringAfterLast('/')
                     .takeIf(String::isNotBlank)
-                val captured = if (inPhotos) capturedMetadata(storage, video, prior, statistics) else null
+                val captured = if (inPhotos) {
+                    capturedMetadata(storage, video, prior, depth, statistics)
+                } else {
+                    DeferredValue<CapturedMetadata>()
+                }
+                val hash = contentHash(storage, video, prior, depth, statistics)
                 output += video.toCandidate(
                     kind = if (inPhotos) MediaKind.PHOTO_VIDEO else MediaKind.VIDEO,
                     domain = when {
@@ -369,13 +413,14 @@ class LibraryScanner {
                         else -> MediaDomain.CLASSIFIED
                     },
                     sourceKind = if (inPhotos) SourceKind.SYSTEM_IMPORT else SourceKind.FILE,
-                    capturedAt = captured?.capturedAt,
-                    latitude = captured?.latitude,
-                    longitude = captured?.longitude,
-                    contentHash = contentHash(storage, video, prior, statistics),
+                    capturedAt = captured.value?.capturedAt,
+                    latitude = captured.value?.latitude,
+                    longitude = captured.value?.longitude,
+                    contentHash = hash.value,
                     recognizedMetadata = if (inPhotos) null else FilenameMetadataParser
                         .parseVideo(video.name, parentName)
                         .withFieldSource(FieldSource.FILENAME),
+                    needsEnrichment = captured.deferred || hash.deferred,
                 )
             }
         }
@@ -383,7 +428,10 @@ class LibraryScanner {
         archives.forEach { archive ->
             val reusedPageCount = prior[archive.relativePath]
                 ?.reusableArchivePageCount(archive.size, archive.lastModified)
-            val inspection = if (reusedPageCount == null) {
+            val inspectionDeferred = reusedPageCount == null && depth == ScanDepth.INVENTORY
+            val inspection = if (inspectionDeferred) {
+                null
+            } else if (reusedPageCount == null) {
                 statistics.contentRead(archive.relativePath)
                 runCatching {
                     comicInfo.inspectArchive(
@@ -400,12 +448,13 @@ class LibraryScanner {
                 statistics.contentReused(archive.relativePath)
                 null
             }
+            val hash = contentHash(storage, archive, prior, depth, statistics)
             output += archive.toCandidate(
                 kind = MediaKind.IMAGE_SET,
                 domain = MediaDomain.WORKS,
                 sourceKind = SourceKind.ARCHIVE,
-                pageCount = reusedPageCount ?: inspection?.pageCount ?: 0,
-                contentHash = contentHash(storage, archive, prior, statistics),
+                pageCount = if (inspectionDeferred) null else reusedPageCount ?: inspection?.pageCount ?: 0,
+                contentHash = hash.value,
                 // Existing local/portable metadata remains authoritative when the archive
                 // is unchanged, so reopening it only to parse ComicInfo would be redundant.
                 recognizedMetadata = if (inspection == null) null else mergeRecognizedMetadata(
@@ -417,6 +466,7 @@ class LibraryScanner {
                         archive.relativePath.substringBeforeLast('/', "").substringAfterLast('/').takeIf(String::isNotBlank),
                     ).withFieldSource(FieldSource.FILENAME),
                 ),
+                needsEnrichment = inspectionDeferred || hash.deferred,
             )
         }
 
@@ -430,6 +480,7 @@ class LibraryScanner {
                 warnings,
                 unreadableDirectories,
                 prior,
+                depth,
                 statistics,
                 onProgress,
             )
@@ -445,16 +496,18 @@ class LibraryScanner {
         storage: DocumentTreeStorage,
         entry: StorageEntry,
         prior: ScanSnapshot,
+        depth: ScanDepth,
         statistics: ScanStatistics,
-    ): String? {
-        if (entry.size <= 0 || entry.size > HASH_SIZE_LIMIT) return null
+    ): DeferredValue<String> {
+        if (entry.size <= 0 || entry.size > HASH_SIZE_LIMIT) return DeferredValue()
         val recorded = prior[entry.relativePath]
-        if (recorded != null && recorded.canBeReused(entry.size, entry.lastModified) &&
+        if (recorded != null && recorded.canReuseEnrichment(entry.size, entry.lastModified) &&
             recorded.contentHash != null
         ) {
             statistics.contentReused(entry.relativePath)
-            return recorded.contentHash
+            return DeferredValue(recorded.contentHash)
         }
+        if (depth == ScanDepth.INVENTORY) return DeferredValue(deferred = true)
         statistics.contentRead(entry.relativePath)
         val document = LibraryDocument(entry.relativePath, entry.name, false, locator = entry.uri)
         val digest = MessageDigest.getInstance("SHA-256")
@@ -466,7 +519,7 @@ class LibraryScanner {
                 digest.update(buffer, 0, count)
             }
         }
-        return digest.digest().toHex()
+        return DeferredValue(digest.digest().toHex())
     }
 
     private fun StorageEntry.toCandidate(
@@ -481,6 +534,7 @@ class LibraryScanner {
         recognizedMetadata: RecognizedMetadata? = null,
         contentHash: String? = null,
         sizeOverride: Long? = null,
+        needsEnrichment: Boolean = false,
     ) = ScanCandidate(
         relativePath = relativePath,
         uri = uri,
@@ -498,6 +552,7 @@ class LibraryScanner {
         secondaryPath = secondaryPath,
         recognizedMetadata = recognizedMetadata,
         contentHash = contentHash,
+        needsEnrichment = needsEnrichment,
     )
 
     /**
@@ -509,16 +564,104 @@ class LibraryScanner {
         storage: DocumentTreeStorage,
         entry: StorageEntry,
         prior: ScanSnapshot,
+        depth: ScanDepth,
         statistics: ScanStatistics,
-    ): CapturedMetadata? {
+    ): DeferredValue<CapturedMetadata> {
         val recorded = prior[entry.relativePath]
-        if (recorded != null && recorded.canBeReused(entry.size, entry.lastModified)) {
+        if (recorded != null && recorded.canReuseEnrichment(entry.size, entry.lastModified)) {
             statistics.contentReused(entry.relativePath)
-            return CapturedMetadata(recorded.capturedAt, recorded.latitude, recorded.longitude)
+            return DeferredValue(CapturedMetadata(recorded.capturedAt, recorded.latitude, recorded.longitude))
         }
+        if (depth == ScanDepth.INVENTORY) return DeferredValue(deferred = true)
         statistics.contentRead(entry.relativePath)
-        return readCapturedMetadata(storage, entry)
+        return DeferredValue(readCapturedMetadata(storage, entry))
     }
+
+    /**
+     * Completes one inventory row. Callers commit small batches so a killed process can
+     * continue from the remaining local queue without rescanning already enriched bytes.
+     */
+    suspend fun enrich(storage: DocumentTreeStorage, item: MediaItem): ScanEnrichment =
+        withContext(Dispatchers.IO) {
+            val statistics = ScanStatistics()
+            if (item.sourceKind == SourceKind.DIRECTORY) {
+                val files = storage.list(item.relativePath).filterNot(StorageEntry::isDirectory)
+                val directory = storage.entry(item.relativePath)
+                    ?: throw java.io.FileNotFoundException(item.relativePath)
+                val totalSize = files.sumOf(StorageEntry::size)
+                val modifiedAt = maxOf(
+                    directory.lastModified,
+                    files.maxOfOrNull(StorageEntry::lastModified) ?: 0,
+                )
+                check(totalSize == item.size && modifiedAt == item.modifiedAt) {
+                    "目录在扫描后发生变化，请重新扫描"
+                }
+                val parentName = item.relativePath.substringBeforeLast('/', "")
+                    .substringAfterLast('/').takeIf(String::isNotBlank)
+                val inferred = mergeRecognizedMetadata(
+                    DownloadedSourceRecognizer.fromDirectory(item.relativePath, files.map(StorageEntry::name))
+                        ?.withFieldSource(FieldSource.FILENAME),
+                    FilenameMetadataParser.parse(item.relativePath.substringAfterLast('/'), parentName)
+                        .withFieldSource(FieldSource.FILENAME),
+                )
+                val local = comicInfo.fromDirectory(storage, item.relativePath)
+                    ?.withFieldSource(FieldSource.COMIC_INFO)
+                return@withContext ScanEnrichment(
+                    relativePath = item.relativePath,
+                    contentHash = directoryFingerprint(files),
+                    pageCount = files.count { MediaClassifier.isImage(it.name, it.mimeType) },
+                    recognizedMetadata = mergeRecognizedMetadata(local, inferred),
+                )
+            }
+
+            val entry = storage.entry(item.relativePath)
+                ?: throw java.io.FileNotFoundException(item.relativePath)
+            check(entry.lastModified == item.modifiedAt) { "文件在扫描后发生变化，请重新扫描" }
+            if (item.kind != MediaKind.LIVE_PHOTO) {
+                check(entry.size == item.size) { "文件在扫描后发生变化，请重新扫描" }
+            }
+            val hash = contentHash(storage, entry, emptyMap(), ScanDepth.FULL, statistics).value
+            if (item.sourceKind == SourceKind.ARCHIVE) {
+                val inspection = comicInfo.inspectArchive(
+                    storage = storage,
+                    archivePath = item.relativePath,
+                    locator = entry.uri,
+                    isPage = { name -> MediaClassifier.isImage(name, null) },
+                )
+                val parentName = item.relativePath.substringBeforeLast('/', "")
+                    .substringAfterLast('/').takeIf(String::isNotBlank)
+                return@withContext ScanEnrichment(
+                    relativePath = item.relativePath,
+                    contentHash = hash,
+                    pageCount = inspection.pageCount,
+                    recognizedMetadata = mergeRecognizedMetadata(
+                        inspection.metadata?.withFieldSource(FieldSource.COMIC_INFO),
+                        DownloadedSourceRecognizer.fromFile(item.relativePath)
+                            ?.withFieldSource(FieldSource.FILENAME),
+                        FilenameMetadataParser.parse(entry.name, parentName)
+                            .withFieldSource(FieldSource.FILENAME),
+                    ),
+                )
+            }
+            val captured = if (item.domain == MediaDomain.ALBUM) {
+                readCapturedMetadata(storage, entry)
+            } else {
+                null
+            }
+            ScanEnrichment(
+                relativePath = item.relativePath,
+                contentHash = hash,
+                capturedAt = captured?.capturedAt,
+                latitude = captured?.latitude,
+                longitude = captured?.longitude,
+                pageCount = item.pageCount,
+            )
+        }
+
+    private data class DeferredValue<T>(
+        val value: T? = null,
+        val deferred: Boolean = false,
+    )
 
     internal fun directoryFingerprint(files: List<StorageEntry>): String {
         val digest = MessageDigest.getInstance("SHA-256")

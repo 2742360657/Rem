@@ -19,12 +19,14 @@ class ScanSnapshotReuseTest {
         modifiedAt: Long = 1_700_000_000_000,
         contentHash: String? = "abc",
         pageCount: Int? = 42,
+        enriched: Boolean = true,
     ) = ScannedFile(
         relativePath = "Images/a.jpg",
         size = size,
         modifiedAt = modifiedAt,
         contentHash = contentHash,
         pageCount = pageCount,
+        enriched = enriched,
     )
 
     @Test
@@ -62,6 +64,15 @@ class ScanSnapshotReuseTest {
         assertEquals(42, recorded().reusableArchivePageCount(1_024, 1_700_000_000_000))
         assertNull(recorded().reusableArchivePageCount(2_048, 1_700_000_000_000))
         assertNull(recorded(pageCount = null).reusableArchivePageCount(1_024, 1_700_000_000_000))
+    }
+
+    @Test
+    fun unfinishedEnrichmentIsNeverReusedAsComplete() {
+        val pending = recorded(enriched = false)
+
+        assertTrue(pending.canBeReused(1_024, 1_700_000_000_000))
+        assertFalse(pending.canReuseEnrichment(1_024, 1_700_000_000_000))
+        assertNull(pending.reusableArchivePageCount(1_024, 1_700_000_000_000))
     }
 
     @Test

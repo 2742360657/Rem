@@ -100,6 +100,7 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
         db.execSQL("CREATE INDEX media_search_title ON media(display_title)")
         db.execSQL("CREATE INDEX media_trash ON media(trashed, deleted_at)")
         createDiscoveriesTable(db)
+        createScanEnrichmentTable(db)
     }
 
     private fun createDiscoveriesTable(db: SQLiteDatabase) {
@@ -121,6 +122,29 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
         )
     }
 
+    /** Local-only checkpoint queue; portable metadata never depends on this table. */
+    private fun createScanEnrichmentTable(db: SQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS scan_enrichment (
+                library_id TEXT NOT NULL,
+                relative_path TEXT NOT NULL,
+                size INTEGER NOT NULL,
+                modified_at INTEGER NOT NULL,
+                state TEXT NOT NULL,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                updated_at INTEGER NOT NULL,
+                PRIMARY KEY(library_id, relative_path),
+                FOREIGN KEY(library_id) REFERENCES libraries(library_id) ON DELETE CASCADE
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS scan_enrichment_pending " +
+                "ON scan_enrichment(library_id, state, relative_path)",
+        )
+    }
+
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         if (oldVersion < 2) {
             db.execSQL("ALTER TABLE media ADD COLUMN content_hash TEXT")
@@ -138,9 +162,23 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
         if (oldVersion < 5) {
             createDiscoveriesTable(db)
         }
+        if (oldVersion < 6) {
+            createScanEnrichmentTable(db)
+            // Rows produced by the old scanner were only committed after full inspection.
+            db.execSQL(
+                """
+                INSERT OR REPLACE INTO scan_enrichment(
+                    library_id, relative_path, size, modified_at, state, attempts, updated_at
+                )
+                SELECT library_id, relative_path, size, modified_at, 'COMPLETE', 0, modified_at
+                FROM media
+                """.trimIndent(),
+            )
+        }
         if (oldVersion > newVersion) {
             db.execSQL("DROP TABLE IF EXISTS progress")
             db.execSQL("DROP TABLE IF EXISTS discoveries")
+            db.execSQL("DROP TABLE IF EXISTS scan_enrichment")
             db.execSQL("DROP TABLE IF EXISTS media")
             db.execSQL("DROP TABLE IF EXISTS libraries")
             onCreate(db)
@@ -285,24 +323,20 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
      */
     @Synchronized
     fun scanSnapshot(libraryId: String): Map<String, ScannedFile> {
-        val columns = arrayOf(
-            "relative_path",
-            "size",
-            "modified_at",
-            "content_hash",
-            "captured_at",
-            "latitude",
-            "longitude",
-            "page_count",
-        )
-        return readableDatabase.query(
-            "media",
-            columns,
-            "library_id = ?",
+        return readableDatabase.rawQuery(
+            """
+            SELECT m.relative_path, m.size, m.modified_at, m.content_hash,
+                   m.captured_at, m.latitude, m.longitude, m.page_count,
+                   CASE WHEN e.state = 'COMPLETE'
+                              AND e.size = m.size
+                              AND e.modified_at = m.modified_at
+                        THEN 1 ELSE 0 END AS enriched
+            FROM media m
+            LEFT JOIN scan_enrichment e
+              ON e.library_id = m.library_id AND e.relative_path = m.relative_path
+            WHERE m.library_id = ?
+            """.trimIndent(),
             arrayOf(libraryId),
-            null,
-            null,
-            null,
         ).use { cursor ->
             buildMap(cursor.count) {
                 while (cursor.moveToNext()) {
@@ -318,6 +352,7 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
                             latitude = cursor.nullableDouble("latitude"),
                             longitude = cursor.nullableDouble("longitude"),
                             pageCount = cursor.nullableInt("page_count"),
+                            enriched = cursor.int("enriched") != 0,
                         ),
                     )
                 }
@@ -336,13 +371,31 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
      * table (including portable metadata JSON) a second time after the repository merge.
      */
     @Synchronized
-    fun replaceScannedMedia(libraryId: String, items: List<MediaItem>, foundPaths: Set<String>) {
+    fun replaceScannedMedia(
+        libraryId: String,
+        items: List<MediaItem>,
+        foundPaths: Set<String>,
+        pendingEnrichment: Set<String> = emptySet(),
+    ) {
         val database = writableDatabase
         database.beginTransaction()
         try {
-            items.forEach { item -> upsertMediaRow(database, item) }
+            val now = System.currentTimeMillis()
+            items.forEach { item ->
+                upsertMediaRow(database, item)
+                upsertEnrichmentState(
+                    database = database,
+                    item = item,
+                    state = if (item.relativePath in pendingEnrichment) {
+                        ENRICHMENT_PENDING
+                    } else {
+                        ENRICHMENT_COMPLETE
+                    },
+                    updatedAt = now,
+                )
+            }
             val missing = ContentValues().apply { put("needs_repair", 1) }
-            val missingIds = database.query(
+            val missingRows = database.query(
                 "media",
                 arrayOf("id", "relative_path"),
                 "library_id = ? AND trashed = 0",
@@ -354,13 +407,18 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
                 buildList(cursor.count) {
                     while (cursor.moveToNext()) {
                         if (cursor.string("relative_path") !in foundPaths) {
-                            add(cursor.string("id"))
+                            add(cursor.string("id") to cursor.string("relative_path"))
                         }
                     }
                 }
             }
-            missingIds.forEach { itemId ->
+            missingRows.forEach { (itemId, relativePath) ->
                 database.update("media", missing, "id = ?", arrayOf(itemId))
+                database.delete(
+                    "scan_enrichment",
+                    "library_id = ? AND relative_path = ?",
+                    arrayOf(libraryId, relativePath),
+                )
             }
             database.setTransactionSuccessful()
         } finally {
@@ -413,13 +471,105 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
 
     @Synchronized
     fun removeMedia(itemId: String) {
-        writableDatabase.delete("media", "id = ?", arrayOf(itemId))
+        val database = writableDatabase
+        database.transaction {
+            query(
+                "media",
+                arrayOf("library_id", "relative_path"),
+                "id = ?",
+                arrayOf(itemId),
+                null,
+                null,
+                null,
+                "1",
+            ).use { cursor ->
+                if (cursor.moveToFirst()) {
+                    delete(
+                        "scan_enrichment",
+                        "library_id = ? AND relative_path = ?",
+                        arrayOf(cursor.string("library_id"), cursor.string("relative_path")),
+                    )
+                }
+            }
+            delete("media", "id = ?", arrayOf(itemId))
+        }
     }
 
     @Synchronized
     fun clearMediaIndex(libraryId: String) {
         writableDatabase.delete("media", "library_id = ?", arrayOf(libraryId))
         writableDatabase.delete("discoveries", "library_id = ?", arrayOf(libraryId))
+        writableDatabase.delete("scan_enrichment", "library_id = ?", arrayOf(libraryId))
+    }
+
+    @Synchronized
+    fun pendingEnrichmentCount(libraryId: String): Int = readableDatabase.rawQuery(
+        "SELECT COUNT(*) FROM scan_enrichment WHERE library_id = ? AND state = ?",
+        arrayOf(libraryId, ENRICHMENT_PENDING),
+    ).use { cursor -> if (cursor.moveToFirst()) cursor.getInt(0) else 0 }
+
+    @Synchronized
+    fun pendingEnrichmentItems(libraryId: String, limit: Int): List<MediaItem> =
+        readableDatabase.rawQuery(
+            """
+            SELECT m.*
+            FROM media m
+            INNER JOIN scan_enrichment e
+              ON e.library_id = m.library_id AND e.relative_path = m.relative_path
+            WHERE m.library_id = ? AND e.state = ?
+            ORDER BY e.relative_path COLLATE NOCASE
+            LIMIT ?
+            """.trimIndent(),
+            arrayOf(libraryId, ENRICHMENT_PENDING, limit.toString()),
+        ).use { cursor -> cursor.mapRows(::mediaFromCursor) }
+
+    /** Commits a small completed batch together with its resume checkpoints. */
+    @Synchronized
+    fun applyEnrichmentBatch(libraryId: String, items: List<MediaItem>) {
+        require(items.all { it.libraryId == libraryId }) { "不能跨 Library 写入扫描补全结果" }
+        val database = writableDatabase
+        database.transaction {
+            val now = System.currentTimeMillis()
+            items.forEach { item ->
+                upsertMediaRow(this, item)
+                upsertEnrichmentState(this, item, ENRICHMENT_COMPLETE, now)
+            }
+        }
+    }
+
+    @Synchronized
+    fun markEnrichmentFailed(libraryId: String, relativePath: String) {
+        writableDatabase.execSQL(
+            """
+            UPDATE scan_enrichment
+               SET state = ?, attempts = attempts + 1, updated_at = ?
+             WHERE library_id = ? AND relative_path = ?
+            """.trimIndent(),
+            arrayOf<Any>(ENRICHMENT_FAILED, System.currentTimeMillis(), libraryId, relativePath),
+        )
+    }
+
+    private fun upsertEnrichmentState(
+        database: SQLiteDatabase,
+        item: MediaItem,
+        state: String,
+        updatedAt: Long,
+    ) {
+        val values = ContentValues().apply {
+            put("library_id", item.libraryId)
+            put("relative_path", item.relativePath)
+            put("size", item.size)
+            put("modified_at", item.modifiedAt)
+            put("state", state)
+            put("attempts", 0)
+            put("updated_at", updatedAt)
+        }
+        database.insertWithOnConflict(
+            "scan_enrichment",
+            null,
+            values,
+            SQLiteDatabase.CONFLICT_REPLACE,
+        )
     }
 
     @Synchronized
@@ -588,6 +738,9 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
 
     companion object {
         private const val DATABASE_NAME = "gallery-index.db"
-        private const val DATABASE_VERSION = 5
+        private const val DATABASE_VERSION = 6
+        private const val ENRICHMENT_PENDING = "PENDING"
+        private const val ENRICHMENT_COMPLETE = "COMPLETE"
+        private const val ENRICHMENT_FAILED = "FAILED"
     }
 }

@@ -14,6 +14,7 @@ import dev.susnowy.gallery.importer.WorkImportKind
 import dev.susnowy.gallery.library.InitializationInProgressException
 import dev.susnowy.gallery.library.PortableLibraryManager
 import dev.susnowy.gallery.library.LibraryDocument
+import dev.susnowy.gallery.logging.RemLog
 import dev.susnowy.gallery.media.ImagePage
 import dev.susnowy.gallery.media.ImageSetOrderResult
 import dev.susnowy.gallery.media.ImageSetOrderService
@@ -32,6 +33,8 @@ import dev.susnowy.gallery.organizer.OrganizationPlan
 import dev.susnowy.gallery.organizer.OrganizerService
 import dev.susnowy.gallery.organizer.OrganizerTemplate
 import dev.susnowy.gallery.scanner.LibraryScanner
+import dev.susnowy.gallery.scanner.ScanDepth
+import dev.susnowy.gallery.scanner.ScanEnrichment
 import dev.susnowy.gallery.scanner.ScanResult
 import dev.susnowy.gallery.storage.DocumentTreeStorage
 import java.io.FileNotFoundException
@@ -39,6 +42,7 @@ import java.security.MessageDigest
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -48,6 +52,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlin.coroutines.coroutineContext
 
 class GalleryRepository(context: Context) {
     private val appContext = context.applicationContext
@@ -201,9 +206,22 @@ class GalleryRepository(context: Context) {
             val portableStore = PortableMetadataStore(storage)
             val catalog = portableStore.loadCatalog(libraryId)
             val state = portableStore.loadState(libraryId)
-            val result = scanner.scan(storage, database.scanSnapshot(libraryId)) { progress ->
+            val result = scanner.scan(
+                storage,
+                database.scanSnapshot(libraryId),
+                ScanDepth.INVENTORY,
+            ) { progress ->
                 _operation.value = "正在扫描：已读取 ${progress.directoriesRead} 个目录、" +
                     "${progress.entriesRead} 个条目，识别 ${progress.candidatesFound} 项"
+                if (progress.directoriesRead == 1 ||
+                    progress.directoriesRead % SCAN_LOG_DIRECTORY_INTERVAL == 0
+                ) {
+                    RemLog.info(
+                        SCAN_TAG,
+                        "清点进度：目录=${progress.directoriesRead}，条目=${progress.entriesRead}，" +
+                            "候选=${progress.candidatesFound}",
+                    )
+                }
             }
             val existing = database.media(libraryId)
             val existingByPath = existing.associateBy(MediaItem::relativePath)
@@ -321,7 +339,14 @@ class GalleryRepository(context: Context) {
             }
             // One transaction for the whole scan: committing per row would flush the WAL
             // once per candidate, which dominates indexing time on a large Library.
-            database.replaceScannedMedia(libraryId, scanned, foundPaths)
+            database.replaceScannedMedia(
+                libraryId = libraryId,
+                items = scanned,
+                foundPaths = foundPaths,
+                pendingEnrichment = result.candidates.asSequence()
+                    .filter { it.needsEnrichment }
+                    .mapTo(mutableSetOf()) { it.relativePath },
+            )
             val discovered = result.discoveries.map { candidate ->
                 DiscoveredEntry(
                     libraryId = libraryId,
@@ -359,6 +384,12 @@ class GalleryRepository(context: Context) {
                 ),
             )
             refreshFromDatabase()
+            val pending = database.pendingEnrichmentCount(libraryId)
+            RemLog.info(
+                SCAN_TAG,
+                "快速索引已提交：媒体=${result.candidates.size}，待补全=$pending，其他=${result.discoveries.size}",
+            )
+            if (pending > 0) enrichPending(libraryId, storage)
             result
         }
         }
@@ -370,6 +401,101 @@ class GalleryRepository(context: Context) {
             refreshFromDatabase()
         }
         scan(libraryId)
+    }
+
+    /** Continues only the local byte-inspection queue; portable metadata is untouched. */
+    suspend fun resumePendingEnrichment(libraryId: String): Int = runOperation("正在继续补全媒体信息…") {
+        scanMutex.withLock {
+            onIo {
+                val pending = database.pendingEnrichmentCount(libraryId)
+                if (pending == 0) return@onIo 0
+                val registration = requireLibrary(libraryId)
+                val storage = storageFor(registration)
+                if (!storage.isAvailable) return@onIo 0
+                val identity = (PortableLibraryManager(storage).inspect() as? LibraryInspection.Valid)?.library
+                require(identity?.libraryId == libraryId) { "Library 身份与本机登记不一致，已拒绝续扫" }
+                enrichPending(libraryId, storage)
+            }
+        }
+    }
+
+    private suspend fun enrichPending(libraryId: String, storage: DocumentTreeStorage): Int {
+        val initial = database.pendingEnrichmentCount(libraryId)
+        if (initial == 0) return 0
+        var completed = 0
+        var failed = 0
+        while (true) {
+            val batch = database.pendingEnrichmentItems(libraryId, ENRICHMENT_BATCH_SIZE)
+            if (batch.isEmpty()) break
+            val enriched = mutableListOf<MediaItem>()
+            batch.forEach { item ->
+                coroutineContext.ensureActive()
+                runCatching { scanner.enrich(storage, item) }
+                    .onSuccess { result -> enriched += item.withEnrichment(result) }
+                    .onFailure { error ->
+                        if (error is CancellationException) throw error
+                        failed++
+                        database.markEnrichmentFailed(libraryId, item.relativePath)
+                        RemLog.warn(SCAN_TAG, "媒体信息补全失败：${item.relativePath}", error)
+                    }
+            }
+            if (enriched.isNotEmpty()) {
+                database.applyEnrichmentBatch(libraryId, enriched)
+                completed += enriched.size
+            }
+            _operation.value = "快速索引已可用；正在补全媒体信息 $completed/$initial" +
+                if (failed == 0) "" else "（失败 $failed）"
+        }
+        refreshFromDatabase()
+        RemLog.info(SCAN_TAG, "媒体信息补全结束：完成=$completed，失败=$failed，总计=$initial")
+        if (failed > 0) _events.tryEmit("有 $failed 项媒体信息暂时无法补全；下次扫描会重试")
+        return completed
+    }
+
+    private fun MediaItem.withEnrichment(result: ScanEnrichment): MediaItem {
+        require(relativePath == result.relativePath)
+        val recognized = result.recognizedMetadata
+        val sources = fieldSources.toMutableMap()
+        fun manual(field: String): Boolean = FieldSource.isManual(sources[field])
+        recognized?.fieldSources.orEmpty().forEach { (field, source) ->
+            if (!manual(field)) sources[field] = source
+        }
+        val recognizedSeries = recognized?.series?.let { title ->
+            dev.susnowy.gallery.model.SeriesRef(
+                id = UUID.nameUUIDFromBytes("$libraryId:$title".encodeToByteArray()).toString(),
+                title = title,
+                sortIndex = recognized.sortIndex,
+                season = recognized.season,
+                episode = recognized.episode,
+                volume = recognized.volume,
+                chapter = recognized.chapter,
+            )
+        }
+        return copy(
+            contentHash = result.contentHash,
+            capturedAt = result.capturedAt ?: capturedAt,
+            latitude = result.latitude ?: latitude,
+            longitude = result.longitude ?: longitude,
+            pageCount = result.pageCount ?: pageCount,
+            displayTitle = if (!manual(MetadataField.DISPLAY_TITLE)) {
+                recognized?.title ?: displayTitle
+            } else {
+                displayTitle
+            },
+            authors = if (!manual(MetadataField.AUTHORS) && !recognized?.authors.isNullOrEmpty()) {
+                recognized?.authors.orEmpty()
+            } else {
+                authors
+            },
+            tags = if (!manual(MetadataField.TAGS)) {
+                (tags + recognized?.tags.orEmpty() +
+                    listOfNotNull(recognized?.language?.let { "language:$it" })).distinct()
+            } else {
+                tags
+            },
+            series = if (!manual(MetadataField.SERIES)) recognizedSeries ?: series else series,
+            fieldSources = sources,
+        )
     }
 
     suspend fun updateMedia(updated: MediaItem): MediaItem = runOperation("正在保存元数据…") {
@@ -716,6 +842,9 @@ class GalleryRepository(context: Context) {
     private suspend fun <T> onIo(block: suspend () -> T): T = withContext(Dispatchers.IO) { block() }
 
     private companion object {
+        const val SCAN_TAG = "GalleryScanner"
+        const val SCAN_LOG_DIRECTORY_INTERVAL = 100
+        const val ENRICHMENT_BATCH_SIZE = 24
         /** How long a second attach waits for the winner to publish `library.json`. */
         const val INITIALIZATION_WAIT_ATTEMPTS = 8
         const val INITIALIZATION_WAIT_MILLIS = 250L

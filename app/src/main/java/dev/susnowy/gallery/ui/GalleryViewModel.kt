@@ -160,6 +160,19 @@ class GalleryViewModel(
             repository.events.collect { message.value = it }
         }
         viewModelScope.launch {
+            delay(2_000)
+            val libraryId = activeLibraryId.value ?: return@launch
+            runCatching { repository.resumePendingEnrichment(libraryId) }
+                .onSuccess { count ->
+                    if (count > 0) message.value = "已从本地检查点继续补全 $count 项媒体信息"
+                }
+                .onFailure { error ->
+                    if (error !is CancellationException) {
+                        RemLog.failure("GalleryScanner", "自动续扫暂时无法继续", error)
+                    }
+                }
+        }
+        viewModelScope.launch {
             delay(1_500)
             runCatching { repository.cleanupExpired(retentionDays.value) }
                 .onSuccess { if (it > 0) message.value = "已安全清理 $it 个到期回收站项目" }
