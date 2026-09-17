@@ -3,18 +3,38 @@ package dev.susnowy.gallery.metadata
 import dev.susnowy.gallery.library.LibraryDocumentAccess
 import dev.susnowy.gallery.library.PortableDocumentWriter
 import dev.susnowy.gallery.model.CURRENT_SCHEMA_VERSION
+import dev.susnowy.gallery.model.EditionAssetRole
+import dev.susnowy.gallery.model.MediaDomain
 import dev.susnowy.gallery.model.MediaItem
+import dev.susnowy.gallery.model.MediaKind
 import dev.susnowy.gallery.model.PlaybackProgress
+import dev.susnowy.gallery.model.PortableAsset
 import dev.susnowy.gallery.model.PortableCatalog
+import dev.susnowy.gallery.model.PortableEdition
+import dev.susnowy.gallery.model.PortableEditionAsset
+import dev.susnowy.gallery.model.PortableGroup
 import dev.susnowy.gallery.model.PortableItemMetadata
 import dev.susnowy.gallery.model.PortableProgress
+import dev.susnowy.gallery.model.PortableSeries
+import dev.susnowy.gallery.model.PortableSeriesMember
 import dev.susnowy.gallery.model.PortableState
 import dev.susnowy.gallery.model.PortableTrashEntry
+import dev.susnowy.gallery.model.PortableWork
+import dev.susnowy.gallery.model.SeriesRef
+import dev.susnowy.gallery.model.SourceKind
 import dev.susnowy.gallery.model.UnsupportedSchemaException
+import java.nio.charset.StandardCharsets
 import java.time.Instant
+import java.util.Locale
+import java.util.UUID
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 
 class RevisionConflictException(message: String) : IllegalStateException(message)
 
@@ -32,9 +52,10 @@ class PortableMetadataStore(
         read(CATALOG_PATH)?.let { text ->
             runCatching { json.decodeFromString<PortableCatalog>(text) }
                 .getOrElse { throw SerializationException("catalog.json 无法解析", it) }
-                .also {
-                    require(it.libraryId == libraryId) { "Catalog 不属于当前 Library" }
-                    requireSupportedSchema(it.schemaVersion)
+                .also { catalog ->
+                    require(catalog.libraryId == libraryId) { "Catalog 不属于当前 Library" }
+                    requireCurrentSchema(catalog.schemaVersion)
+                    validate(catalog)
                 }
         } ?: PortableCatalog(
             libraryId = libraryId,
@@ -58,35 +79,141 @@ class PortableMetadataStore(
         }
 
         val catalog = loadCatalog(libraryId)
+        val previousItems = catalog.items
         val now = Instant.now().toString()
-        val metadata = updates.map { (item, expectedRevision) ->
-            val existing = catalog.items.firstOrNull { it.id == item.id }
-                ?: catalog.items.firstOrNull { it.relativePath == item.relativePath }
-            if (existing != null && existing.revision != expectedRevision) {
+        val assets = catalog.assets.toMutableList()
+        val works = catalog.works.toMutableList()
+        val editions = catalog.editions.toMutableList()
+
+        updates.forEach { (item, expectedRevision) ->
+            val previous = previousItems.firstOrNull { it.id == item.id }
+                ?: previousItems.firstOrNull { it.relativePath == item.relativePath }
+            if (previous != null && previous.revision != expectedRevision) {
                 throw RevisionConflictException(
-                    "${item.displayTitle} 已被其他设备修改（磁盘 ${existing.revision}，本机 $expectedRevision）",
+                    "${item.displayTitle} 已被其他设备修改（磁盘 ${previous.revision}，本机 $expectedRevision）",
                 )
             }
-            item.toPortableMetadata(
-                revision = (existing?.revision ?: 0) + 1,
-                updatedAt = now,
-                // Provenance is sticky: a caller that does not mention a field keeps
-                // whatever the disk already recorded, so a relocation or cover
-                // refresh cannot silently drop a human's manual lock.
-                fieldSources = existing?.fieldSources.orEmpty() + item.fieldSources,
+            val existingWork = previous?.let { old -> works.firstOrNull { it.id == old.id } }
+            val existingEdition = existingWork?.let { work ->
+                editions.firstOrNull { it.id == work.preferredEditionId }
+                    ?: editions.filter { it.workId == work.id }.minByOrNull(PortableEdition::id)
+            }
+            val existingMember = existingEdition?.assets?.firstOrNull { it.role == EditionAssetRole.PRIMARY }
+                ?: existingEdition?.assets?.firstOrNull()
+            val existingAsset = existingMember?.let { member -> assets.firstOrNull { it.id == member.assetId } }
+            val assetId = existingAsset?.id ?: stableId("asset", libraryId, item.id)
+            val editionId = existingEdition?.id ?: stableId("edition", libraryId, item.id)
+
+            assets.replaceById(
+                PortableAsset(
+                    id = assetId,
+                    relativePath = item.relativePath,
+                    mediaType = item.kind,
+                    source = item.sourceKind,
+                    secondaryPath = item.secondaryPath,
+                    contentHash = item.contentHash,
+                    revision = (existingAsset?.revision ?: 0) + 1,
+                    updatedAt = now,
+                ),
+            )
+            editions.replaceById(
+                PortableEdition(
+                    id = editionId,
+                    workId = item.id,
+                    label = existingEdition?.label,
+                    assets = if (existingEdition == null) {
+                        listOf(PortableEditionAsset(assetId = assetId))
+                    } else {
+                        existingEdition.assets.map { member ->
+                            if (member.assetId == existingMember?.assetId) member.copy(assetId = assetId) else member
+                        }.ifEmpty { listOf(PortableEditionAsset(assetId = assetId)) }
+                    },
+                    revision = (existingEdition?.revision ?: 0) + 1,
+                    updatedAt = now,
+                ),
+            )
+            works.replaceById(
+                PortableWork(
+                    id = item.id,
+                    type = item.kind,
+                    domain = item.domain,
+                    displayTitle = item.displayTitle,
+                    originalTitle = item.originalTitle,
+                    authors = item.authors,
+                    tags = item.tags,
+                    collections = item.collections,
+                    preferredEditionId = editionId,
+                    coverPath = item.coverPath,
+                    favorite = item.favorite,
+                    fieldSources = existingWork?.fieldSources.orEmpty() + item.fieldSources,
+                    revision = (existingWork?.revision ?: 0) + 1,
+                    updatedAt = now,
+                ),
             )
         }
-        val updatedIds = metadata.mapTo(mutableSetOf(), PortableItemMetadata::id)
-        val updatedPaths = metadata.mapTo(mutableSetOf(), PortableItemMetadata::relativePath)
-        val remaining = catalog.items.filterNot { it.id in updatedIds || it.relativePath in updatedPaths }
+
+        val updatedIds = updates.mapTo(mutableSetOf()) { it.first.id }
+        val modifiedSeriesIds = mutableSetOf<String>()
+        val series = catalog.series.map { sequence ->
+            val members = sequence.members.filterNot { it.workId in updatedIds }
+            if (members.size == sequence.members.size) {
+                sequence
+            } else {
+                modifiedSeriesIds += sequence.id
+                sequence.copy(
+                    members = members,
+                    revision = sequence.revision + 1,
+                    updatedAt = now,
+                )
+            }
+        }.toMutableList()
+        updates.forEach { (item, _) ->
+            val assignment = item.series ?: return@forEach
+            val index = series.indexOfFirst { sequence ->
+                sequence.id == assignment.id || sequence.title.normalizedTitle() == assignment.title.normalizedTitle()
+            }
+            val current = series.getOrNull(index)
+            val seriesId = current?.id ?: assignment.id
+            val replacement = PortableSeries(
+                id = seriesId,
+                title = assignment.title.trim(),
+                aliases = current?.aliases.orEmpty(),
+                members = current?.members.orEmpty() + PortableSeriesMember(
+                    workId = item.id,
+                    sortIndex = assignment.sortIndex,
+                    season = assignment.season,
+                    episode = assignment.episode,
+                    volume = assignment.volume,
+                    chapter = assignment.chapter,
+                ),
+                fieldSources = current?.fieldSources.orEmpty(),
+                revision = when {
+                    current == null -> 1
+                    seriesId in modifiedSeriesIds -> current.revision
+                    else -> current.revision + 1
+                },
+                updatedAt = now,
+            )
+            modifiedSeriesIds += seriesId
+            if (index >= 0) series[index] = replacement else series += replacement
+        }
+
         val updated = catalog.copy(
             schemaVersion = CURRENT_SCHEMA_VERSION,
             revision = catalog.revision + 1,
             updatedAt = now,
-            items = (remaining + metadata).sortedBy(PortableItemMetadata::relativePath),
+            assets = assets.sortedBy(PortableAsset::relativePath),
+            works = works.sortedBy(PortableWork::id),
+            editions = editions.sortedBy(PortableEdition::id),
+            series = series.filter { it.members.isNotEmpty() }
+                .map { it.copy(members = it.members.sortedWith(seriesMemberOrder())) }
+                .sortedBy(PortableSeries::id),
         )
+        validate(updated)
         writeSafely(CATALOG_PATH, json.encodeToString(updated), "application/json")
-        return metadata
+        return updated.items.filter { it.id in updatedIds }.sortedBy { item ->
+            updates.indexOfFirst { it.first.id == item.id }
+        }
     }
 
     fun loadState(libraryId: String): PortableState = read(STATE_PATH)?.let { text ->
@@ -94,7 +221,8 @@ class PortableMetadataStore(
             .getOrElse { throw SerializationException("state.json 无法解析", it) }
             .also {
                 require(it.libraryId == libraryId) { "State 不属于当前 Library" }
-                requireSupportedSchema(it.schemaVersion)
+                requireCurrentSchema(it.schemaVersion)
+                validate(it)
             }
     } ?: PortableState(libraryId = libraryId, updatedAt = Instant.EPOCH.toString())
 
@@ -154,12 +282,48 @@ class PortableMetadataStore(
     fun removeItem(item: MediaItem) {
         val now = Instant.now().toString()
         val catalog = loadCatalog(item.libraryId)
+        val removedEditionIds = catalog.editions.filter { it.workId == item.id }
+            .mapTo(mutableSetOf(), PortableEdition::id)
+        val removedAssetIds = catalog.editions.filter { it.id in removedEditionIds }
+            .flatMapTo(mutableSetOf()) { edition -> edition.assets.map(PortableEditionAsset::assetId) }
+        val remainingEditions = catalog.editions.filterNot { it.id in removedEditionIds }
+        val stillReferencedAssets = remainingEditions.flatMapTo(mutableSetOf()) { edition ->
+            edition.assets.map(PortableEditionAsset::assetId)
+        }
         val catalogUpdated = catalog.copy(
             schemaVersion = CURRENT_SCHEMA_VERSION,
             revision = catalog.revision + 1,
             updatedAt = now,
-            items = catalog.items.filterNot { it.id == item.id },
+            assets = catalog.assets.filterNot { it.id in removedAssetIds && it.id !in stillReferencedAssets },
+            works = catalog.works.filterNot { it.id == item.id },
+            editions = remainingEditions,
+            groups = catalog.groups.mapNotNull { group ->
+                val members = group.members.filterNot { it.workId == item.id }
+                when {
+                    members.size == group.members.size -> group
+                    members.isEmpty() -> null
+                    else -> group.copy(
+                        members = members,
+                        coverWorkId = group.coverWorkId?.takeUnless { it == item.id },
+                        revision = group.revision + 1,
+                        updatedAt = now,
+                    )
+                }
+            },
+            series = catalog.series.mapNotNull { sequence ->
+                val members = sequence.members.filterNot { it.workId == item.id }
+                when {
+                    members.size == sequence.members.size -> sequence
+                    members.isEmpty() -> null
+                    else -> sequence.copy(
+                        members = members,
+                        revision = sequence.revision + 1,
+                        updatedAt = now,
+                    )
+                }
+            },
         )
+        validate(catalogUpdated)
         writeSafely(CATALOG_PATH, json.encodeToString(catalogUpdated), "application/json")
 
         val state = loadState(item.libraryId)
@@ -197,23 +361,254 @@ class PortableMetadataStore(
         secondaryTarget: String? = null,
     ): Boolean {
         val catalog = loadCatalog(libraryId)
-        val existing = catalog.items.firstOrNull { it.id == itemId } ?: return false
+        val work = catalog.works.firstOrNull { it.id == itemId } ?: return false
+        val edition = catalog.editions.firstOrNull { it.id == work.preferredEditionId }
+            ?: catalog.editions.filter { it.workId == itemId }.minByOrNull(PortableEdition::id)
+            ?: return false
+        val primary = edition.assets.firstOrNull { it.role == EditionAssetRole.PRIMARY }
+            ?: edition.assets.firstOrNull()
+            ?: return false
+        val asset = catalog.assets.firstOrNull { it.id == primary.assetId } ?: return false
         val now = Instant.now().toString()
-        val relocated = existing.copy(
-            relativePath = target,
-            coverPath = existing.coverPath?.replacePathPrefix(source, target),
-            secondaryPath = secondaryTarget ?: existing.secondaryPath?.replacePathPrefix(source, target),
-            revision = existing.revision + 1,
-            updatedAt = now,
-        )
         val updated = catalog.copy(
             schemaVersion = CURRENT_SCHEMA_VERSION,
             revision = catalog.revision + 1,
             updatedAt = now,
-            items = catalog.items.map { if (it.id == itemId) relocated else it },
+            assets = catalog.assets.map {
+                if (it.id == asset.id) it.copy(
+                    relativePath = target,
+                    secondaryPath = secondaryTarget ?: it.secondaryPath?.replacePathPrefix(source, target),
+                    revision = it.revision + 1,
+                    updatedAt = now,
+                ) else it
+            },
+            works = catalog.works.map {
+                if (it.id == itemId) it.copy(
+                    coverPath = it.coverPath?.replacePathPrefix(source, target),
+                    revision = it.revision + 1,
+                    updatedAt = now,
+                ) else it
+            },
         )
+        validate(updated)
         writeSafely(CATALOG_PATH, json.encodeToString(updated), "application/json")
         return true
+    }
+
+    /**
+     * One-time pre-release conversion. Normal reads accept only v4; this converter is
+     * invoked after all v3 documents have been snapshotted. It is idempotent so a stop
+     * between the catalog and state commits can resume without a compatibility branch.
+     */
+    fun migrateV3ToV4(libraryId: String) {
+        val now = Instant.now().toString()
+        read(CATALOG_PATH)?.let { text ->
+            when (declaredSchema(text)) {
+                CURRENT_SCHEMA_VERSION -> json.decodeFromString<PortableCatalog>(text).also { catalog ->
+                    require(catalog.libraryId == libraryId) { "Catalog 不属于当前 Library" }
+                    validate(catalog)
+                }
+                3 -> {
+                    val legacy = json.decodeFromString<LegacyCatalog>(text)
+                    require(legacy.libraryId == libraryId) { "Catalog 不属于当前 Library" }
+                    val assets = legacy.items.map { item ->
+                        PortableAsset(
+                            id = stableId("asset", libraryId, item.id),
+                            relativePath = item.relativePath,
+                            mediaType = item.type,
+                            source = item.source,
+                            secondaryPath = item.secondaryPath,
+                            contentHash = item.contentHash,
+                            revision = item.revision,
+                            updatedAt = item.updatedAt,
+                        )
+                    }
+                    val editions = legacy.items.map { item ->
+                        PortableEdition(
+                            id = stableId("edition", libraryId, item.id),
+                            workId = item.id,
+                            assets = listOf(
+                                PortableEditionAsset(stableId("asset", libraryId, item.id)),
+                            ),
+                            revision = item.revision,
+                            updatedAt = item.updatedAt,
+                        )
+                    }
+                    val works = legacy.items.map { item ->
+                        PortableWork(
+                            id = item.id,
+                            type = item.type,
+                            domain = item.domain ?: MediaDomain.CLASSIFIED,
+                            displayTitle = item.displayTitle,
+                            originalTitle = item.originalTitle,
+                            authors = item.authors,
+                            tags = item.tags,
+                            collections = item.collections,
+                            preferredEditionId = stableId("edition", libraryId, item.id),
+                            coverPath = item.coverPath,
+                            favorite = item.favorite,
+                            fieldSources = item.fieldSources,
+                            revision = item.revision,
+                            updatedAt = item.updatedAt,
+                        )
+                    }
+                    val series = legacy.items.mapNotNull { item -> item.series?.let { it to item.id } }
+                        .groupBy { (reference, _) -> reference.title.normalizedTitle() }
+                        .map { (_, assignments) ->
+                            val id = assignments.minOf { (reference, _) -> reference.id }
+                            PortableSeries(
+                                id = id,
+                                title = assignments.first().first.title,
+                                members = assignments.map { (reference, workId) ->
+                                    PortableSeriesMember(
+                                        workId = workId,
+                                        sortIndex = reference.sortIndex,
+                                        season = reference.season,
+                                        episode = reference.episode,
+                                        volume = reference.volume,
+                                        chapter = reference.chapter,
+                                    )
+                                }.sortedWith(seriesMemberOrder()),
+                                updatedAt = now,
+                            )
+                        }
+                    val migrated = PortableCatalog(
+                        libraryId = libraryId,
+                        revision = legacy.revision + 1,
+                        updatedAt = now,
+                        assets = assets.sortedBy(PortableAsset::relativePath),
+                        works = works.sortedBy(PortableWork::id),
+                        editions = editions.sortedBy(PortableEdition::id),
+                        series = series.sortedBy(PortableSeries::id),
+                    )
+                    validate(migrated)
+                    writeSafely(CATALOG_PATH, json.encodeToString(migrated), "application/json")
+                }
+                else -> throw UnsupportedSchemaException("只支持把测试期 Schema v3 转换为 v4")
+            }
+        }
+        read(STATE_PATH)?.let { text ->
+            when (declaredSchema(text)) {
+                CURRENT_SCHEMA_VERSION -> json.decodeFromString<PortableState>(text).also { state ->
+                    require(state.libraryId == libraryId) { "State 不属于当前 Library" }
+                    validate(state)
+                }
+                3 -> {
+                    val legacy = json.decodeFromString<LegacyState>(text)
+                    require(legacy.libraryId == libraryId) { "State 不属于当前 Library" }
+                    val migrated = PortableState(
+                        libraryId = libraryId,
+                        revision = legacy.revision + 1,
+                        updatedAt = now,
+                        progress = legacy.progress.map { progress ->
+                            PortableProgress(
+                                itemId = progress.itemId,
+                                page = progress.page,
+                                positionMs = progress.positionMs,
+                                finished = progress.finished,
+                                lastOpenedAt = progress.lastOpenedAt,
+                            )
+                        },
+                        trash = legacy.trash.map { trash ->
+                            PortableTrashEntry(
+                                itemId = trash.itemId,
+                                relativePath = trash.relativePath,
+                                deletedAt = trash.deletedAt,
+                            )
+                        },
+                    )
+                    validate(migrated)
+                    writeSafely(STATE_PATH, json.encodeToString(migrated), "application/json")
+                }
+                else -> throw UnsupportedSchemaException("只支持把测试期 Schema v3 转换为 v4")
+            }
+        }
+    }
+
+    private fun validate(catalog: PortableCatalog) {
+        require(catalog.schemaVersion == CURRENT_SCHEMA_VERSION) { "Catalog 必须使用当前 Schema v4" }
+        requireUnique("Asset ID", catalog.assets.map(PortableAsset::id))
+        requireUnique("Work ID", catalog.works.map(PortableWork::id))
+        requireUnique("Edition ID", catalog.editions.map(PortableEdition::id))
+        requireUnique("Group ID", catalog.groups.map(PortableGroup::id))
+        requireUnique("Series ID", catalog.series.map(PortableSeries::id))
+        requireUnique("媒体路径", catalog.assets.map(PortableAsset::relativePath))
+        catalog.assets.forEach { asset ->
+            requirePortablePath(asset.relativePath)
+            asset.secondaryPath?.let(::requirePortablePath)
+        }
+        val assetIds = catalog.assets.mapTo(mutableSetOf(), PortableAsset::id)
+        val workIds = catalog.works.mapTo(mutableSetOf(), PortableWork::id)
+        catalog.editions.forEach { edition ->
+            require(edition.workId in workIds) { "Edition ${edition.id} 引用了不存在的 Work" }
+            require(edition.assets.isNotEmpty()) { "Edition ${edition.id} 没有来源" }
+            require(edition.assets.all { it.assetId in assetIds }) { "Edition ${edition.id} 引用了不存在的 Asset" }
+            edition.assets.mapNotNull(PortableEditionAsset::entryPath).forEach(::requirePortablePath)
+        }
+        catalog.works.forEach { work ->
+            require(catalog.editions.any { it.workId == work.id }) { "Work ${work.id} 没有 Edition" }
+            require(
+                work.preferredEditionId == null || catalog.editions.any {
+                    it.id == work.preferredEditionId && it.workId == work.id
+                },
+            ) {
+                "Work ${work.id} 的首选 Edition 不存在"
+            }
+            work.coverPath?.let(::requirePortablePath)
+        }
+        catalog.groups.forEach { group ->
+            require(group.members.all { it.workId in workIds }) { "Group ${group.id} 引用了不存在的 Work" }
+            requireUnique("Group ${group.id} 成员", group.members.map { it.workId })
+            require(group.coverWorkId == null || group.coverWorkId in workIds) {
+                "Group ${group.id} 的封面 Work 不存在"
+            }
+        }
+        catalog.series.forEach { sequence ->
+            require(sequence.members.all { it.workId in workIds }) {
+                "Series ${sequence.id} 引用了不存在的 Work"
+            }
+            requireUnique("Series ${sequence.id} 成员", sequence.members.map(PortableSeriesMember::workId))
+        }
+        requireUnique(
+            "Series 全局成员",
+            catalog.series.flatMap { sequence -> sequence.members.map(PortableSeriesMember::workId) },
+        )
+    }
+
+    private fun validate(state: PortableState) {
+        require(state.schemaVersion == CURRENT_SCHEMA_VERSION) { "State 必须使用当前 Schema v4" }
+        requireUnique("进度 Work", state.progress.map(PortableProgress::itemId))
+        requireUnique("回收站 Work", state.trash.map(PortableTrashEntry::itemId))
+        state.trash.forEach { entry -> requirePortablePath(entry.relativePath) }
+    }
+
+    private fun declaredSchema(text: String): Int? = runCatching {
+        json.parseToJsonElement(text).jsonObject["schema_version"]?.jsonPrimitive?.intOrNull
+    }.getOrNull()
+
+    private fun requireCurrentSchema(schemaVersion: Int) {
+        if (schemaVersion != CURRENT_SCHEMA_VERSION) {
+            throw UnsupportedSchemaException(
+                if (schemaVersion > CURRENT_SCHEMA_VERSION) {
+                    "Library 元数据 Schema v$schemaVersion 高于本客户端支持的版本，已拒绝写入"
+                } else {
+                    "Library 元数据仍是测试期 Schema v$schemaVersion，请先完成 Library 升级"
+                },
+            )
+        }
+    }
+
+    private fun requirePortablePath(path: String) {
+        require(path.isNotBlank() && !path.startsWith('/') && '\\' !in path && ':' !in path) {
+            "媒体路径必须是 Library 内的相对路径：$path"
+        }
+        require(path.split('/').none { it.isBlank() || it == "." || it == ".." }) {
+            "媒体路径包含无效片段：$path"
+        }
+    }
+
+    private fun requireUnique(label: String, values: List<String>) {
+        require(values.distinct().size == values.size) { "$label 必须唯一" }
     }
 
     private fun read(path: String): String? = writer.read(path)
@@ -221,48 +616,102 @@ class PortableMetadataStore(
     private fun writeSafely(path: String, text: String, mimeType: String) =
         writer.write(path, text, mimeType)
 
-    private fun requireSupportedSchema(schemaVersion: Int) {
-        if (schemaVersion > CURRENT_SCHEMA_VERSION) {
-            throw UnsupportedSchemaException(
-                "Library 元数据 Schema v$schemaVersion 高于本客户端支持的版本，已拒绝写入",
-            )
-        }
-    }
-
-    private fun MediaItem.toPortableMetadata(
-        revision: Long,
-        updatedAt: String,
-        fieldSources: Map<String, String>,
-    ) =
-        PortableItemMetadata(
-            id = id,
-            relativePath = relativePath,
-            type = kind,
-            domain = domain,
-            displayTitle = displayTitle,
-            originalTitle = originalTitle,
-            source = sourceKind,
-            authors = authors,
-            tags = tags,
-            collections = collections,
-            series = series,
-            coverPath = coverPath,
-            secondaryPath = secondaryPath,
-            contentHash = contentHash,
-            favorite = favorite,
-            fieldSources = fieldSources,
-            revision = revision,
-            updatedAt = updatedAt,
-        )
-
     private fun String.replacePathPrefix(source: String, target: String): String = when {
         this == source -> target
         startsWith("$source/") -> target + removePrefix(source)
         else -> this
     }
 
+    private fun String.normalizedTitle(): String = trim().lowercase(Locale.ROOT)
+
+    private fun <T> MutableList<T>.replaceById(value: T) {
+        val id = when (value) {
+            is PortableAsset -> value.id
+            is PortableWork -> value.id
+            is PortableEdition -> value.id
+            else -> error("不支持的便携实体")
+        }
+        val index = indexOfFirst { current ->
+            when (current) {
+                is PortableAsset -> current.id == id
+                is PortableWork -> current.id == id
+                is PortableEdition -> current.id == id
+                else -> false
+            }
+        }
+        if (index >= 0) this[index] = value else add(value)
+    }
+
     companion object {
         const val CATALOG_PATH = ".gallery/items/catalog.json"
         const val STATE_PATH = ".gallery/state/state.json"
+
+        private fun stableId(kind: String, libraryId: String, workId: String): String =
+            UUID.nameUUIDFromBytes("$kind:$libraryId:$workId".toByteArray(StandardCharsets.UTF_8)).toString()
+
+        private fun seriesMemberOrder(): Comparator<PortableSeriesMember> =
+            compareBy<PortableSeriesMember> { it.sortIndex ?: Double.MAX_VALUE }
+                .thenBy { it.season ?: Int.MAX_VALUE }
+                .thenBy { it.episode ?: Double.MAX_VALUE }
+                .thenBy { it.volume ?: Double.MAX_VALUE }
+                .thenBy { it.chapter ?: Double.MAX_VALUE }
+                .thenBy(PortableSeriesMember::workId)
     }
 }
+
+@Serializable
+private data class LegacyCatalog(
+    @SerialName("schema_version") val schemaVersion: Int,
+    @SerialName("library_id") val libraryId: String,
+    val revision: Long = 0,
+    @SerialName("updated_at") val updatedAt: String,
+    val items: List<LegacyItem> = emptyList(),
+)
+
+@Serializable
+private data class LegacyItem(
+    val id: String,
+    @SerialName("relative_path") val relativePath: String,
+    val type: MediaKind,
+    val domain: MediaDomain? = null,
+    @SerialName("display_title") val displayTitle: String,
+    @SerialName("original_title") val originalTitle: String? = null,
+    val source: SourceKind,
+    val authors: List<String> = emptyList(),
+    val tags: List<String> = emptyList(),
+    val collections: List<String> = emptyList(),
+    val series: SeriesRef? = null,
+    @SerialName("cover_path") val coverPath: String? = null,
+    @SerialName("secondary_path") val secondaryPath: String? = null,
+    @SerialName("content_hash") val contentHash: String? = null,
+    val favorite: Boolean = false,
+    @SerialName("field_sources") val fieldSources: Map<String, String> = emptyMap(),
+    val revision: Long = 1,
+    @SerialName("updated_at") val updatedAt: String,
+)
+
+@Serializable
+private data class LegacyState(
+    @SerialName("schema_version") val schemaVersion: Int,
+    @SerialName("library_id") val libraryId: String,
+    val revision: Long = 0,
+    @SerialName("updated_at") val updatedAt: String,
+    val progress: List<LegacyProgress> = emptyList(),
+    val trash: List<LegacyTrash> = emptyList(),
+)
+
+@Serializable
+private data class LegacyProgress(
+    @SerialName("item_id") val itemId: String,
+    val page: Int = 0,
+    @SerialName("position_ms") val positionMs: Long = 0,
+    val finished: Boolean = false,
+    @SerialName("last_opened_at") val lastOpenedAt: String,
+)
+
+@Serializable
+private data class LegacyTrash(
+    @SerialName("item_id") val itemId: String,
+    @SerialName("relative_path") val relativePath: String,
+    @SerialName("deleted_at") val deletedAt: String,
+)

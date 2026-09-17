@@ -1,144 +1,152 @@
 # Rem development memory
 
-This file is the short, living handoff for any agent continuing work on Rem. It applies to the whole repository. Keep it current when a change alters product intent, portable data, safety rules, or a lesson learned. Detailed history belongs in `docs/DEV_LOG.md`; user-facing behavior belongs in `README.md` and `docs/USER_GUIDE.md`.
+This file applies to the whole repository. It is the short operational handoff for a coding agent, not a duplicate product specification.
 
-## Mission and current priority
+Read in this order:
 
-Rem is an Android, local-first library for large image, comic, and video collections on removable storage. Media stays usable outside Rem. The portable `.gallery/` metadata travels with the Library, while the Android SQLite database and caches are disposable projections.
+1. `AGENTS.md` — constraints and current work;
+2. `Gallery_Project_Guide.md` — product semantics and portable format;
+3. `docs/ARCHITECTURE.md` — code that actually exists;
+4. the latest entry in `docs/DEV_LOG.md`;
+5. the relevant user-facing section in `docs/USER_GUIDE.md`.
 
-The current product priority is the ingestion and logical-content model, especially:
+## Mission and user preferences
 
-- put every new or uncertain user file into a useful **Inbox / 未处理** workflow;
-- let ordinary images, videos, photo sets, and mixed image-video sets live naturally in the **图片 / 视频** area;
-- make comics readable as standalone works or as manually editable ordered series;
-- support non-destructive grouping, adding content, comparing editions, and merging duplicate-heavy sets;
-- retain small derived previews for useful offline/unmounted-Library browsing; these previews are allowed but are never originals or metadata truth;
-- postpone broad interaction redesign until these semantics are stable, while taking interaction cues from EhViewer and MT Manager: dense browsing, predictable back behavior, long-press actions, selection mode, and operations close to the content.
+Rem is an Android, local-first library for large image, comic, photo-set, and video collections on removable storage. Media remains ordinary user-owned files. Portable truth travels in `.gallery/`; Android databases, logs, enrichment queues, and previews are disposable projections.
 
-## Non-negotiable invariants
+Current priorities:
 
-- Never move, rename, rewrite, merge, or delete media as a side effect of scanning, recognition, grouping, or changing a view.
-- Physical changes require a previewed, explicit user action and the existing recoverable transaction pattern.
-- `.gallery/` is the portable truth. The local database must remain rebuildable and must not be the only home of a user decision.
-- Portable paths are slash-separated and relative to the Library root. Never persist Android URIs, drive letters, or absolute host paths.
-- Existing `manual` field provenance wins. Automated recognition, providers, and agents must merge field by field and must not modify a manually locked field.
-- A detector emits a suggestion plus evidence/confidence; it does not silently turn a guessed folder convention into truth.
-- Duplicate detection may propose actions, but it never deletes automatically. Preserve a reversible route for every merge or cleanup.
-- Account credentials, cookies, and tokens never enter the Library, logs, fixtures, or Git.
-- Keep SAF round-trips proportional to the tree. Prefer one projected directory query, reuse locators and unchanged scan results, and hash large content only on demand.
-- Never write a newer unsupported portable Schema. Back up portable metadata before migration or a high-risk batch operation.
-- Rem is still pre-release. Do not accumulate compatibility shims for formats that were never shipped as a stable contract; prefer the cleanest current model. A deliberate test-phase Schema replacement may rebuild the device index and migrate or reset test metadata after backup, but it must never alter the user's media bytes. Document the new current format and keep refusing unknown newer formats.
-- Small preview/cover derivatives are permitted. Keep device-private offline previews bounded and clearable; if a cover is intentionally made portable under `.gallery/`, distinguish it from disposable thumbnails and never treat either as the original media.
+1. a clean portable logical model;
+2. portable Inbox decisions;
+3. editable image/video Groups;
+4. first-class Series editing;
+5. non-destructive Edition comparison and merge;
+6. real-device testing with the large E-drive Library;
+7. interaction polish inspired by EhViewer and MT Manager.
 
-## Product vocabulary to converge on
+The project is pre-release. Prefer the cleanest current design over compatibility layers for formats that were never stable. Schema v4 is current; v3 has one explicit backup-first conversion path only. Do not add support for older experiments unless the user explicitly asks.
 
-The current `MediaItem` combines a physical source with a logical work. That is adequate for the preview version but is the main blocker for mixed sets and safe merging. Future design should separate these concepts before adding more folder-name heuristics:
+Use Chinese commit messages.
 
-- **Asset/source**: physical file, directory, archive, or archive entry, with path, size, times, format, and fingerprints.
-- **Work**: the logical thing a user names, tags, favorites, reads, or watches.
-- **Group**: an ordered or unordered set of members shown together. Useful group types include photo set, mixed image-video set, and manual collection. Membership should support a role such as page, image, video, bonus, cover, or alternate.
-- **Series**: an optional ordered sequence of works/chapters/episodes. A member may have no number; manual ordering must remain possible.
-- **Edition/release**: an acquired version of the same logical work. Two editions may be kept separately, viewed as a unified de-duplicated result, or explicitly consolidated without destroying either source by default.
+## Non-negotiable safety
 
-Do not use `Series` as a substitute for “same author” or “same folder.” A creator shelf or smart filtered view can provide continuous browsing without pretending that every work by one author is one numbered series. Do not equate `ImageSet` with “comic”: an ordered photo set and a comic can share a reader primitive while belonging to different product surfaces.
+- Scanning, recognition, metadata edits, grouping, and view changes never move, rename, rewrite, merge, or delete media.
+- Physical changes require an explicit preview, user confirmation, conflict checks, and the recoverable transaction pattern.
+- `.gallery/` is portable truth. A user decision must not live only in SQLite.
+- Portable paths use `/` and are relative to the Library root. Never persist Android URIs, drive letters, absolute paths, `.`, or `..`.
+- `manual` field provenance wins. Automatic recognition, providers, and agents merge field by field.
+- Detection produces a suggestion with evidence/confidence, never an irreversible classification.
+- Duplicate or Edition comparison never deletes automatically.
+- Credentials, cookies, and tokens never enter Library files, logs, fixtures, commits, or diagnostic exports.
+- Keep SAF round-trips proportional to the tree; hash large content only for an explicit operation.
+- Back up portable documents before Schema conversion or a high-risk batch operation.
+- Never write an unknown newer Schema.
+- Disposable previews are not originals and never enter portable truth.
+- Preserve unrelated user changes. Do not use destructive Git commands.
 
-The likely primary surfaces are:
+## Current portable model
 
-1. **相册**: camera/system-photo timeline.
-2. **图片 / 视频**: individual media plus photo sets and mixed groups, browsable by folder or logical group.
-3. **漫画 / 阅读**: comics as standalone works or ordered series, with progress and reading-oriented presentation.
+Schema v4 normalizes `.gallery/items/catalog.json`:
 
-This is a design direction, not an implemented contract. Settle the portable model and migration before changing navigation labels.
+- **Asset** — physical file, directory, archive, or imported source;
+- **Work** — user-facing logical content and editable metadata;
+- **Edition** — one acquired version of a Work, referencing ordered Assets;
+- **Group** — Works browsed together, such as a photo set or mixed image/video set;
+- **Series** — ordered Works with optional sort, season/episode, or volume/chapter positions.
 
-## Inbox and recognition policy
+Relationships have one owner:
 
-- Discovery and classification are separate. First record what exists; then attach zero or more classification suggestions.
-- Recognized media, ambiguous directory structures, and unsupported-but-user-visible files should remain reviewable in Inbox. They must not disappear merely because Android cannot decode them yet.
-- Known internal/sidecar entries should not become standalone Inbox cards: `.gallery/**`, `.nomedia`, `.ehviewer`, `ComicInfo.xml`, downloader thumbnails, transaction files, and other explicitly registered sidecars.
-- Prefer small, testable recognizer adapters. Current useful inputs include ComicInfo, JM numeric IDs under a JM-like root, EhViewer GID folders/markers, Pixiv IDs, common chapter/episode names, and downloader-specific parent folders.
-- Folder names are evidence, not authority. `JM` in the current sample is user-created; numeric directory formats are not universally trustworthy.
-- If Android-side recognition becomes fragile or expensive, keep the candidate in Inbox and let a local agent classify it later from portable evidence.
+```text
+Edition -> Work, Asset
+Group   -> Work
+Series  -> Work
+State   -> Work
+```
 
-## Real Library observations (read-only audit, 2026-09-17)
+Do not use Series for “same author”, Group for edition identity, or path layout as permanent classification. A creator shelf can be a query without creating a relationship.
 
-These numbers describe the attached `E:/Rem-lib` sample and must not be hard-coded:
+The current Android runtime still consumes a `MediaItem` projection. `PortableMetadataStore` joins v4 entities into that projection; new portable behavior must update normalized entities first rather than reintroducing a serialized `items` array.
 
-- about 464.92 GiB and 76,517 non-metadata files;
-- 69,494 JPG, 2,984 WebP, 1,610 CBZ, 1,011 GIF, 796 PNG, and 466 MP4 files;
-- 272 indexed image-set directories also contain videos, totaling 320 child videos;
-- `downloads/` currently includes 1,566 CBZ files from a downloader hierarchy;
-- `JM/` contains numeric directories plus numeric ZIP files; `eh/` contains GID-title directories, only some of which carry `.ehviewer` markers;
-- the current portable catalog has 1,383 valid-path items (931 image sets and 452 videos), all in `works`, assigned to 8 manually locked series.
+## Recognition and real Library facts
 
-The sample proves that the Library contains app-generated metadata, manually arranged folders, downloader output, archives, sidecars, image-only works, video-only works, and mixed image-video works. Preserve that heterogeneity rather than forcing a new physical layout.
+Discovery and classification stay separate. Unsupported user-visible entries remain reviewable in Inbox; known internals and sidecars do not become cards.
 
-## Known gaps in the current implementation
+Useful signals include ComicInfo, stable downloader IDs, EhViewer markers, Pixiv IDs, episode/chapter naming, and parent folders. A folder named `JM` is not authoritative.
 
-- Mixed leaf directories now have a derived 图片 / 视频 group, but the relationship is inferred from direct physical children and is not yet a portable, manually editable Group.
-- Pure image-only leaf directories still default to `WORKS` outside the explicit `Images/` root. Moving arbitrary photo sets into 图片 / 视频 still needs a portable/manual Group decision instead of more folder heuristics.
-- `SeriesRef` is embedded in each item. There is no portable series membership document, no explicit group membership, and no edition relationship.
-- Discovery rows are currently rebuildable device-local evidence only. There is not yet a portable user decision for “ignore”, “handled”, or a manually chosen classification, so such decisions would be lost after rebuilding the index.
-- Automatic hashes stop above 64 MiB, and directory fingerprints describe structure rather than byte-identical pages. Current duplicate detection cannot merge two image-set editions page by page.
-- Inbox acceptance is represented indirectly by the presence of portable item metadata. Any new review-state design must remain portable and survive index rebuilds.
-- The Works screen now has a derived series shelf, but Series is still stored inline on every item. There is no portable first-class series document, alias/rename transaction, or atomic multi-member reordering operation yet.
-- The deep-enrichment queue is resumable, but the initial read-only tree inventory is still one atomic pass. If real-device timing shows that inventory alone is too slow, checkpoint by top-level subtree without treating unvisited paths as deleted.
+The read-only sample observed on 2026-09-17 was approximately 464.92 GiB and 76,517 files, including about 69,494 JPG, 2,984 WebP, 1,610 CBZ, 1,011 GIF, 796 PNG, 466 MP4, and 272 image-set directories with direct child videos. These values are evidence, never constants.
 
 ## Implemented foundation
 
-- New recognized media stays exclusively in Inbox until the user edits it or explicitly accepts the suggestion.
-- Inbox supports single-item and multi-select acceptance. Acceptance persists automatic provenance; only changed fields become `manual`.
-- ComicInfo and filename/path recognizers now retain field provenance through merge.
-- The sample's `eh/` alias, numeric archives below a JM-like root, and numbered CBZ files below a series folder are recognized as Inbox suggestions.
-- Unsupported user-visible files and ambiguous directory structures are indexed separately and shown under Inbox's “其他待判断”. Known Rem internals and sidecars are filtered explicitly. These discovery rows do not enter the portable catalog.
-- Works can be browsed as a series shelf or flat item grid. The shelf groups legacy same-title references for display, keeps unassigned works visible, and orders entries by manual sort index then season/episode or volume/chapter. The editor preserves and edits every existing series position field.
-- Large scans now publish a byte-free inventory first, then checkpoint hashes, archive inspection, ComicInfo, and capture metadata in a device-local v6 queue. Completed batches resume after process restart; the queue is disposable and never becomes portable truth.
-- A directory-backed image set and its direct child videos can be shown as one derived 图片 / 视频 group. Mixed leaves outside explicit work roots default to `classified`; an existing manual domain remains authoritative. This presentation neither moves files nor creates a portable relationship.
-- Visible cards lazily retain a device-private 512 px JPEG preview under `noBackupFilesDir`, bounded to 256 MiB / 20,000 files with LRU-style trimming and a Settings clear action. These previews keep an offline Library recognizable but are disposable and never enter `.gallery`.
+- Library identity, provider-exclusive initialization lease, Schema protection, backups, and generated Library guide;
+- SAF storage abstraction with projected directory queries and cache invalidation;
+- byte-free inventory followed by a resumable local enrichment queue;
+- Inbox confirmation, weak recognizers, provenance, and visible unsupported/ambiguous discoveries;
+- image, directory/ZIP/CBZ reader, video player, system album import, search, metadata editing, and progress;
+- logical trash, protected permanent deletion, and recoverable Organizer/page-order transactions;
+- derived Series shelf and mixed image/video presentation;
+- bounded device-private offline previews;
+- normalized Schema v4 plus idempotent v3-to-v4 conversion after snapshots.
 
-## Preferred implementation path
+## Known gaps
 
-Do not start with a broad UI rewrite.
+- Inbox ignore/handled/manual-classification decisions are not yet portable.
+- Derived mixed groups cannot yet be saved or manually edited as Group entities.
+- Group membership, cover, role, and order have no UI.
+- Series entities exist portably, but batch member editing and drag reordering are unfinished.
+- Edition comparison, page-level hashes, virtual merge, and recoverable cleanup UI are unfinished.
+- Initial inventory is still one atomic traversal; only enrichment is resumable.
+- `refreshFromDatabase()` still materializes the full media table.
+- Real E-drive scanning and mass video-preview behavior have not been validated with the latest build.
+- A few decoder formats can display through Coil but cannot generate the BitmapFactory-based offline JPEG.
 
-1. **Freeze fixtures and decisions**: add anonymized/minimal test trees for mixed sets, nested works, downloader CBZ, JM archives, EhViewer aliases, unsupported files, and two overlapping editions. Write the target portable model and migration rules first.
-2. **Finish separating discovery from classification**: discovered-entry records and explicit ignore/sidecar rules now exist; next add portable user decisions plus structured suggestion evidence/confidence. Preserve current scan performance characteristics.
-3. **Add portable logical relationships**: evolve the Schema additively to first-class works/groups/series/editions or an equivalent normalized design. Keep existing v3 item IDs and manual fields stable during migration.
-4. **Build 图片 / 视频 grouping**: show folders and logical groups; a mixed group opens once and exposes its images and videos together. Grouping must not require moving files.
-5. **Finish the comic series model**: the derived series shelf, ordered entries, work detail/reader context, and optional volume/chapter/episode/manual sort fields now exist. Next normalize portable series membership and add atomic batch/drag reordering.
-6. **Add merge and update flows**: compare two editions, calculate hashes only for the selected scope, classify exact duplicates versus unique additions, preview a virtual merge, and offer physical cleanup only as a separate recoverable transaction.
-7. **Polish interaction**: tighten density, selection, long-press menus, contextual tools, and back-stack behavior using real-device sessions. Do not let navigation work mask missing data semantics.
+## Next implementation order
 
-Offline preview work should accompany the model/UI phase: define a strict pixel/byte budget, device-private retention and purge behavior, and whether an explicitly selected cover is also copied into portable `.gallery` metadata. Unplugging a Library must not make its catalog unintelligible, but cached previews must remain disposable.
+1. Add portable Inbox decisions with explicit evidence and confidence.
+2. Add repository operations and UI for Group create/edit/member order/cover.
+3. Offer saving a derived mixed folder as an explicit Group.
+4. Add atomic Series member editing and reordering.
+5. Add scoped Edition comparison and virtual merge preview.
+6. Test the current build against the actual removable Library, then decide whether inventory checkpoints and database paging are required.
+7. Polish density, selection, long-press actions, contextual tools, and back behavior.
 
-Each phase needs unit tests for inference and migration plus a real SAF/device check when storage-provider behavior matters.
+Do not start a broad UI rewrite before portable semantics are usable.
 
-## Development workflow
+## Working procedure
 
-Before changing code:
+Before editing:
 
-1. Read this file, `README.md`, `docs/ARCHITECTURE.md`, the relevant section of `Gallery_Project_Guide.md`, and the latest `docs/DEV_LOG.md` entry.
-2. Run `git status --short`, inspect recent commits, and preserve unrelated user changes.
-3. State one bounded goal and the portable-data impact. If a Schema change is involved, specify compatibility, backup, rollback, and rebuild behavior first.
+1. Run `git status --short`, inspect recent commits, and identify unrelated changes.
+2. State one bounded goal and whether it changes portable data.
+3. For a Schema change, define backup, failure, retry, rollback, and newer-version refusal before writing code.
+4. Add or update a failing test for storage, migration, or data-loss defects.
 
-Before handing off:
+Before handoff:
 
-1. Run focused tests, then the proportionate regression set. The usual baseline is:
+1. Run focused tests, then normally:
 
    ```powershell
    .\gradlew.bat testDebugUnitTest lintDebug assembleDebug assembleDebugAndroidTest
    ```
 
-2. Inspect `git diff`; do not hide warnings or silently regenerate user data.
-3. Update `docs/DEV_LOG.md` with symptom, evidence, root cause, change, verification, and remaining risk. Update this file only when the durable guidance changed.
-4. Report separately what was implemented, what was only inferred, and what still needs a device or real Library check.
+2. Run device tests when SAF, provider behavior, migration, decoding, or navigation changed.
+3. Inspect `git diff --check`, staged scope, and final status.
+4. Update only the documents whose responsibility changed:
+   - product/format decision → `Gallery_Project_Guide.md`;
+   - implementation architecture → `docs/ARCHITECTURE.md`;
+   - current user behavior → `docs/USER_GUIDE.md`;
+   - evidence and remaining risk → `docs/DEV_LOG.md`;
+   - user-visible release change → `CHANGELOG.md`;
+   - durable agent rule/current status → this file.
+5. Report implementation, inference, and unverified real-device behavior separately.
 
 ## Lessons already paid for
 
-- Removable-storage performance is dominated by provider/Binder query count, not just bytes read.
-- `DocumentFile` convenience calls can hide repeated queries; provider behavior must be tested through `ContentResolver` semantics.
-- A provider may qualify a conflicting name with ` (1)` instead of overwriting. A successful rename return value is not proof that the requested path was committed.
-- Library initialization needs a provider-exclusive, expiring lease and must commit identity last.
-- A transient unreadable directory is not proof that its indexed contents were deleted.
-- Fake providers and fixtures must reproduce real conflict semantics or they can validate the wrong behavior.
-- Diagnostic text and exception summaries both require path/URI scrubbing; logs stay device-local because storage failure is itself a diagnostic scenario.
-- Before reorganizing metadata or files, verify that every intermediate state can still be attached, scanned, and recovered.
-- Tests have repeatedly exposed design bugs faster than inspection alone. Add the failing case before fixing a storage or migration defect.
+- Removable-storage performance is dominated by provider/Binder query count, not only bytes.
+- `DocumentFile` convenience calls can hide repeated queries.
+- A provider may qualify a conflicting name with ` (1)`; a successful rename result does not prove the requested path was committed.
+- Library identity must be committed last and initialization needs an expiring exclusive lease.
+- A temporarily unreadable subtree is not proof that its indexed contents were deleted.
+- Fake providers must reproduce real conflict semantics.
+- Logs need URI/path scrubbing and remain device-private.
+- Every intermediate state of a migration or physical transaction must be attachable or safely resumable.
+- Tests have repeatedly found storage bugs faster than inspection alone.

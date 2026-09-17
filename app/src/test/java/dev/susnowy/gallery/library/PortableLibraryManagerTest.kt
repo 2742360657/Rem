@@ -8,6 +8,10 @@ import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.io.OutputStream
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.int
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Assert.assertThrows
@@ -24,20 +28,25 @@ class PortableLibraryManagerTest {
         assertTrue(access.files.containsKey("GALLERY_LIBRARY.md"))
         val guide = access.files.getValue("GALLERY_LIBRARY.md").decodeToString()
         assertTrue(guide.contains("这是一个 Rem 便携媒体库"))
-        assertTrue(guide.contains("Agent 辅助识别与同步"))
+        assertTrue(guide.contains("Agent 开始前必须读取"))
         assertTrue(guide.contains("任何来源为 `manual` 的字段都不得修改"))
         assertTrue(guide.contains("`field_sources.tags` 为 `manual`，整组标签必须原样保留"))
+        assertTrue(guide.contains("Group 只表达一起浏览；Series 只表达顺序"))
         assertTrue(access.files.containsKey(PortableLibraryManager.SCHEMA_FILE))
-        assertEquals(".gallery/schema/v3.json", PortableLibraryManager.SCHEMA_FILE)
+        assertEquals(".gallery/schema/v4.json", PortableLibraryManager.SCHEMA_FILE)
+        val schema = Json.parseToJsonElement(
+            access.files.getValue(PortableLibraryManager.SCHEMA_FILE).decodeToString(),
+        ).jsonObject
+        assertEquals(4, schema.getValue("schema_version").jsonPrimitive.int)
         assertTrue(access.files.containsKey(PortableLibraryManager.MEDIA_IGNORE_FILE))
         assertTrue(PortableLibraryManager(access).inspect() is LibraryInspection.Valid)
     }
 
     @Test
-    fun migratesVersionOneLibraryWithBackups() {
+    fun migratesVersionThreeLibraryWithBackups() {
         val original = """{
             "format":"gallery-library",
-            "schema_version":1,
+            "schema_version":3,
             "library_id":"d421f1ce-59e7-4f9f-85a0-250a586cdca5",
             "name":"Old Library",
             "created_at":"2026-01-01T00:00:00Z",
@@ -45,19 +54,22 @@ class PortableLibraryManagerTest {
         }"""
         val access = MemoryDocumentAccess().apply {
             files[PortableLibraryManager.LIBRARY_JSON] = original.encodeToByteArray()
-            files[".gallery/items/catalog.json"] = """{"schema_version":1,"library_id":"d421f1ce-59e7-4f9f-85a0-250a586cdca5","revision":5,"updated_at":"2026-01-02T00:00:00Z","items":[]}""".encodeToByteArray()
-            files[".gallery/state/state.json"] = """{"schema_version":1,"library_id":"d421f1ce-59e7-4f9f-85a0-250a586cdca5","revision":2,"updated_at":"2026-01-02T00:00:00Z","progress":[],"trash":[]}""".encodeToByteArray()
+            files[".gallery/items/catalog.json"] = """{"schema_version":3,"library_id":"d421f1ce-59e7-4f9f-85a0-250a586cdca5","revision":5,"updated_at":"2026-01-02T00:00:00Z","items":[]}""".encodeToByteArray()
+            files[".gallery/state/state.json"] = """{"schema_version":3,"library_id":"d421f1ce-59e7-4f9f-85a0-250a586cdca5","revision":2,"updated_at":"2026-01-02T00:00:00Z","progress":[],"trash":[]}""".encodeToByteArray()
+            files[PortableLibraryManager.LEGACY_SCHEMA_FILE] = """{"schema_version":3}""".encodeToByteArray()
         }
         val manager = PortableLibraryManager(access)
 
         val migrated = manager.migrateSchema((manager.inspect() as LibraryInspection.Valid).library)
 
         assertEquals(CURRENT_SCHEMA_VERSION, migrated.schemaVersion)
-        assertTrue(access.files.containsKey(".gallery/schema/v3.json"))
-        assertTrue(access.files.getValue(PortableLibraryManager.LIBRARY_JSON).decodeToString().contains("\"schema_version\": 3"))
+        assertTrue(access.files.containsKey(".gallery/schema/v4.json"))
+        assertTrue(access.files.getValue(PortableLibraryManager.LIBRARY_JSON).decodeToString().contains("\"schema_version\": 4"))
+        assertTrue(access.files.getValue(".gallery/items/catalog.json").decodeToString().contains("\"assets\""))
+        assertTrue(!access.files.containsKey(PortableLibraryManager.LEGACY_SCHEMA_FILE))
         // The original documents stay available as a pre-migration snapshot.
-        val backups = access.files.keys.filter { it.startsWith(".gallery/backups/schema-v1-") }
-        assertEquals(3, backups.size)
+        val backups = access.files.keys.filter { it.startsWith(".gallery/backups/schema-v3-") }
+        assertEquals(4, backups.size)
         assertTrue(backups.any { access.files.getValue(it).decodeToString() == original })
         assertTrue(manager.inspect() is LibraryInspection.Valid)
     }
@@ -75,6 +87,32 @@ class PortableLibraryManagerTest {
         assertThrows(UnsupportedSchemaException::class.java) {
             PortableLibraryManager(MemoryDocumentAccess()).migrateSchema(newer)
         }
+    }
+
+    @Test
+    fun failedConversionDoesNotAdvanceLibraryIdentity() {
+        val original = """{
+            "format":"gallery-library",
+            "schema_version":3,
+            "library_id":"d421f1ce-59e7-4f9f-85a0-250a586cdca5",
+            "name":"Broken Test Library",
+            "created_at":"2026-01-01T00:00:00Z",
+            "updated_at":"2026-01-02T00:00:00Z"
+        }"""
+        val access = MemoryDocumentAccess().apply {
+            files[PortableLibraryManager.LIBRARY_JSON] = original.encodeToByteArray()
+            files[".gallery/items/catalog.json"] =
+                """{"schema_version":3,"library_id":"wrong-library","items":[]}""".encodeToByteArray()
+        }
+        val manager = PortableLibraryManager(access)
+
+        assertThrows(IllegalArgumentException::class.java) {
+            manager.migrateSchema((manager.inspect() as LibraryInspection.Valid).library)
+        }
+
+        assertEquals(original, access.files.getValue(PortableLibraryManager.LIBRARY_JSON).decodeToString())
+        assertTrue(access.files.keys.any { it.startsWith(".gallery/backups/schema-v3-") })
+        assertTrue(!access.files.containsKey(PortableLibraryManager.SCHEMA_FILE))
     }
 
     @Test
@@ -146,12 +184,34 @@ class PortableLibraryManagerTest {
     fun adoptsADirectoryWhoseSchemaSurvivedAndRegeneratesTheGuide() {
         val access = MemoryDocumentAccess().apply {
             files[PortableLibraryManager.SCHEMA_FILE] =
-                """{"schema_version":3}""".encodeToByteArray()
+                """{"schema_version":4}""".encodeToByteArray()
         }
 
         PortableLibraryManager(access).initialize("Library")
 
         assertTrue(access.files.containsKey(PortableLibraryManager.GUIDE_FILE))
+        assertTrue(PortableLibraryManager(access).inspect() is LibraryInspection.Valid)
+    }
+
+    @Test
+    fun missingIdentityIsRecoveredFromLegacyPortableDocuments() {
+        val libraryId = "d421f1ce-59e7-4f9f-85a0-250a586cdca5"
+        val access = MemoryDocumentAccess().apply {
+            files[PortableLibraryManager.LEGACY_SCHEMA_FILE] =
+                """{"schema_version":3}""".encodeToByteArray()
+            files[".gallery/items/catalog.json"] =
+                """{"schema_version":3,"library_id":"$libraryId","revision":1,"updated_at":"now","items":[]}"""
+                    .encodeToByteArray()
+            files[".gallery/state/state.json"] =
+                """{"schema_version":3,"library_id":"$libraryId","revision":1,"updated_at":"now","progress":[],"trash":[]}"""
+                    .encodeToByteArray()
+        }
+
+        val recovered = PortableLibraryManager(access).initialize("Recovered")
+
+        assertEquals(libraryId, recovered.libraryId)
+        assertEquals(CURRENT_SCHEMA_VERSION, recovered.schemaVersion)
+        assertTrue(access.files.getValue(".gallery/items/catalog.json").decodeToString().contains("\"assets\""))
         assertTrue(PortableLibraryManager(access).inspect() is LibraryInspection.Valid)
     }
 

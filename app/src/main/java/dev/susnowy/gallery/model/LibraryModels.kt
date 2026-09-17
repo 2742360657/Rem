@@ -6,12 +6,10 @@ import kotlinx.serialization.Serializable
 const val GALLERY_FORMAT = "gallery-library"
 
 /**
- * v1 → v2 adds per-field provenance (`field_sources`) to catalog items so that
- * automatic metadata can never silently overwrite a manual edit.
- * v2 → v3 adds an explicit media domain. This keeps the three product surfaces
- * (album, classified folders, and works) independent of mutable path names.
+ * v4 is the first normalized pre-release format. Physical assets, logical works,
+ * editions, browsing groups, and ordered series have one portable source of truth.
  */
-const val CURRENT_SCHEMA_VERSION = 3
+const val CURRENT_SCHEMA_VERSION = 4
 
 /** Raised instead of writing to a Library that declares a newer Schema. */
 class UnsupportedSchemaException(message: String) : IllegalStateException(message)

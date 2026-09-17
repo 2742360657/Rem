@@ -1,102 +1,160 @@
 # Rem architecture
 
-Rem is an Android 8.0+ local-first media library. The project intentionally uses one Gradle application module and separates responsibilities by Kotlin package; physical module splitting can wait until build or ownership pressure justifies it.
+This document describes the implementation that exists now. Product semantics and roadmap live in `Gallery_Project_Guide.md`; historical investigations live in `docs/DEV_LOG.md`.
 
-The public product name is Rem and its release application ID is `com.susnowy.rem`. Debug builds use `com.susnowy.rem.debug`, so development and release signatures can coexist without replacing each other. Both install alongside the legacy `dev.susnowy.gallery` development build; device-local indexes and SAF grants do not migrate automatically between application IDs. Kotlin package names, `.gallery/`, and Gallery portable-schema identifiers remain stable Library compatibility contracts.
+## Application shape
 
-## Data layers
+Rem is one Android application module targeting Android 8.0+. Kotlin packages separate responsibilities; extra Gradle modules are not justified yet.
 
-1. Media bytes remain in the user-selected Storage Access Framework tree.
-2. Portable truth lives under `.gallery/` in that tree. It contains the versioned Library identity, catalog overrides, progress, logical trash, imports, backups, and recoverable file transactions.
-3. `gallery-index.db` is a device-local SQLite index. It stores SAF URIs, query-friendly media projections, rebuildable discovery records for unsupported files or ambiguous directories, and the disposable `scan_enrichment` resume queue. It can be rebuilt from the Library; neither a discovery row nor an enrichment checkpoint is portable truth.
-4. Every item has a portable `domain`: `album`, `classified`, or `works`. Compose exposes these as exactly three primary destinations; file type and product surface are not conflated.
-5. Compose screens consume repository state. Thumbnail and decoder data never enters the portable Library.
+- release application ID: `com.susnowy.rem`;
+- debug application ID: `com.susnowy.rem.debug`;
+- portable format identifier remains `gallery-library`;
+- Schema v4 is current.
 
-`OfflinePreviewStore` lazily derives a 512 px JPEG only for a card that is actually requested. Files live under the app's `noBackupFilesDir`, are keyed by Library/item identity plus source modification state, and are capped at 256 MiB / 20,000 entries with a 90% low-water trim. They are an offline recognition aid, not metadata truth or an original-media backup; Settings can clear them without affecting the Library.
+Debug and release can coexist. Device-local SQLite data, logs, previews, and SAF grants do not migrate between application IDs.
 
-The current series shelf is a presentation derived from each item's portable `SeriesRef`; it does not introduce a second source of truth. It groups legacy same-title references case-insensitively for display, orders explicit `sort_index` first and otherwise falls back to season/episode or volume/chapter, and keeps unassigned works visible. A future normalized series document must migrate these inline references explicitly rather than silently treating the derived shelf as portable truth.
+## Data ownership
 
-Mixed image/video folders currently use the same deliberately derived approach. The scanner retains one directory-backed `IMAGE_SET` and independent direct-child `VIDEO` rows; `MixedMediaPresentation` joins them by Library and physical parent only for the 图片 / 视频 UI. Group videos are hidden from the separate video tab while the group is being presented, but no membership is written to `.gallery/`. A future portable Group/Edition model must replace this inference for manual membership, cross-directory grouping, edition comparison, and merge decisions without changing or deleting source media.
+```text
+SAF media tree
+  ├─ user media bytes
+  └─ .gallery portable truth
+         │
+         ├─ projected into gallery-index.db
+         └─ rendered by Compose
+                  │
+                  └─ disposable caches/previews
+```
 
-Android URIs and mount paths are local-only. Every portable media path uses `/`-separated paths relative to the Library root.
+1. Media bytes remain in the selected SAF tree.
+2. Portable user truth lives under `.gallery/`.
+3. `gallery-index.db` stores query-oriented device projections, discoveries, URIs, and enrichment checkpoints.
+4. Compose consumes repository state and local projections.
+5. Decoded pages, Coil cache, diagnostics, and offline previews remain device-private.
+
+## Portable Schema v4
+
+### Documents
+
+- `.gallery/library.json`: identity and current version;
+- `.gallery/schema/v4.json`: machine-readable contract summary;
+- `.gallery/items/catalog.json`: normalized logical catalog;
+- `.gallery/state/state.json`: progress and logical trash keyed by `work_id`;
+- `.gallery/imports/*.json`: program-managed import and derivation manifests;
+- `.gallery/transactions/*.json`: recoverable physical operations;
+- `.gallery/backups/`: pre-migration and pre-operation snapshots;
+- `GALLERY_LIBRARY.md`: generated instructions for an external organizing Agent.
+
+### Catalog entities
+
+`PortableAsset` owns physical source data. `PortableWork` owns editable metadata. `PortableEdition` joins a Work to ordered Assets. `PortableGroup` and `PortableSeries` point to Works.
+
+`PortableCatalog.items` is a computed runtime projection for the current scanner/UI. It is not serialized. This lets the existing Android screens keep using `MediaItem` while portable storage no longer combines path, work metadata, editions, groups, and series into one record.
+
+Every v4 load validates:
+
+- unique entity IDs and Asset paths;
+- relative, normalized portable paths;
+- Edition → Work/Asset references;
+- Work → preferred Edition reference;
+- Group/Series → Work references;
+- non-empty Edition sources;
+- unique members inside each Series.
+
+### Test-format conversion
+
+v3 is converted once:
+
+1. snapshot identity, catalog, state, guide, and v3 schema when present;
+2. create one Asset, Work, and Edition for each former item;
+3. normalize inline `SeriesRef` values into Series members;
+4. rewrite state references from `item_id` to `work_id`;
+5. write `schema/v4.json` and the new Library guide;
+6. commit `library.json` as v4 last.
+
+The converter is idempotent per document, so a stop after the catalog commit but before the state or identity commit can resume. Normal metadata reads accept only v4. Unknown newer versions are never written.
 
 ## Packages
 
-- `library`: initialization, identity, additive Schema v3 migration, and generated Library guide.
-- `storage`: the only layer that directly traverses or mutates SAF documents.
-- `scanner`: nested-directory discovery and classification, explicit sidecar/internal ignore rules, content fingerprints, EXIF/video dates, ZIP/CBZ inspection, and Inbox candidates.
-- `metadata`: portable catalog/state persistence, revision checks, ComicInfo, and provider contracts.
-- `data`: local SQLite index and application repository.
-- `media`: lazy folder/archive access, sampled archive decoding, a bounded decoded-page cache, and direction-aware comic preloading.
-- `organizer`: previewed, conflict-checked, journaled physical organization and interrupted-operation recovery.
-- `importer` and `derive`: copy-only system media imports and explicit derived media operations.
-- `logging`: the device-side record used to investigate a problem reported from a phone.
-- `ui`: Compose navigation, grids, readers, player, metadata editor, search, trash, and settings.
+- `library`: identity, initialization lease, Schema conversion, generated guide, atomic portable writer;
+- `storage`: SAF traversal, mutation, locator reuse, and directory cache;
+- `scanner`: inventory, classification candidates, enrichment, sidecar filtering;
+- `metadata`: portable catalog/state storage, provenance, recognizers, ComicInfo;
+- `data`: SQLite index and repository orchestration;
+- `media`: lazy directory/archive pages, decoding, preload policy, offline previews;
+- `ui`: Compose navigation, grids, viewers, editor, search, trash, settings;
+- `organizer`: previewed and journaled physical layout changes;
+- `importer`: copy-only system media import;
+- `derive`: explicit copy-based derived media actions;
+- `logging`: bounded, scrubbed diagnostics.
 
-## SAF access cost
+## Library initialization and writes
 
-Every `DocumentsContract` query is a Binder round-trip, and on a removable Library the
-provider behind it is a USB device, so the number of round-trips — not the number of
-bytes — dominates scan time. Three rules keep that count proportional to the tree:
+Initialization claims a provider-exclusive root lease before creating `.gallery/`. The lease carries a timestamp and expires after 15 minutes. `library.json` is the completion marker and is committed last.
 
-- A directory is listed with one projection query returning every column, because
-  `DocumentFile` answers `name`, `type`, `isDirectory`, `length()` and `lastModified()`
-  with five separate queries per child.
-- `DocumentTreeStorage` memoizes path-to-document resolution and directory listings, so a
-  path is never walked from the tree root twice. A mutation invalidates the affected
-  subtree and its direct parent's listing while retaining resolved ancestors and unrelated
-  branches. A provider returning no cursor is an I/O failure, never a cached empty directory.
-- Documents carry their provider locator, and readers prefer it, so a read never
-  re-resolves a path it was already handed.
+`PortableDocumentWriter` stages every write with a unique name, temporarily moves the previous revision aside, then verifies the requested final path exists. If a provider publishes a qualified ` (1)` copy or leaves the staging document visible, the writer removes the refused result and restores the previous revision.
 
-Scanning has two phases. The inventory phase recursively lists the tree, classifies paths,
-and commits a usable media/discovery index without opening media payloads. Byte-level work
-(small-file hashes, ZIP/CBZ manifests and ComicInfo, and album capture metadata) is queued in
-`scan_enrichment` and committed in small batches. The queue is local and rebuildable; after a
-process restart the app continues its remaining rows without repeating completed byte reads.
+A returned rename URI or Boolean alone is not treated as proof of commit.
 
-A rescan compares size and modified time against an indexed row whose enrichment checkpoint
-is complete and reuses its fingerprint, capture metadata, and archive page count. Only a
-changed or unfinished file is opened; changed ZIP/CBZ files are traversed for page count and
-ComicInfo. Directory fingerprints include page modification times. A size or timestamp
-difference always re-reads because keeping a stale fingerprint would silently mis-merge
-metadata.
+## Scanning
+
+Scanning has two phases.
+
+### Inventory
+
+The inventory traverses directories using one projected query per directory. It classifies paths and commits a usable media/discovery index without reading media payloads.
+
+The initial inventory is still one atomic traversal. If killed before its commit, it restarts. An unreadable subtree protects its previous indexed rows and is not treated as deletion.
+
+### Enrichment
+
+Hashes, archive manifests, ComicInfo, capture time, and coordinates enter a local `scan_enrichment` queue. Small batches atomically update media rows and checkpoints. A stopped process repeats at most the uncommitted batch.
+
+An unchanged file reuses completed enrichment only when size and modified time still match. Changed content is reopened. Automatic hashes stop above 64 MiB unless a user-selected operation requires them.
+
+## Runtime presentation
+
+- `MediaItem` is the current SQLite/UI projection of a preferred Edition and its Work.
+- The Series shelf is derived from normalized Series projected back to `SeriesRef`.
+- Mixed directory groups are still presentation-only inference; they are not yet written as `PortableGroup`.
+- Search and facet viewers retain their originating result order.
+- Large UI collections are reconstructed from the local index rather than stored in Android saved state.
+
+## Media and cache budgets
+
+- directory/archive pages are loaded lazily;
+- comic pages use a 1440 × 6000 pixel decode budget;
+- preload keeps five pages ahead and two behind, cancelling stale work;
+- ZIP/CBZ decoded pages use a bounded 64 MiB bitmap cache;
+- Coil may use up to 25% of heap and 768 MiB disposable disk cache;
+- offline previews are 512 px JPEG files under `noBackupFilesDir`, capped at 256 MiB / 20,000 entries and trimmed to a 90% low-water mark.
+
+No cache is portable truth.
 
 ## Safety invariants
 
-- Classification never moves files.
-- Ordinary deletion only writes a logical trash entry.
-- Permanent deletion re-resolves and validates the target first.
-- Organizer copies and verifies before deleting a source and records every durable step.
-- Schema and Organizer changes create portable metadata backups.
-- A newer unsupported Library Schema is never written.
-- Manual portable metadata wins over local and inferred metadata.
-- Album media stays metadata-light, classified media uses physical folders as its hierarchy, and author/tag/series facets are confined to works.
-- Duplicate detection reports SHA-256 matches but never deletes or merges them.
-- System media browsing uses read-only `MediaStore` access with full/partial/denied states; it never requests `MANAGE_EXTERNAL_STORAGE`.
-- Forgetting a Library removes only its device-local index and persisted SAF grant; it never mutates the selected tree.
-- Photos View selection is ephemeral UI state. Batch Author/Tag/Collection/favorite edits merge into one portable catalog write, and batch trash uses one portable state write before synchronizing the local index.
-- Image and Photos viewers use a lazy horizontal pager. One-finger swipes page while unzoomed; once zoomed, the current image owns pan gestures until it returns to its base scale.
-- The comic reader decodes directory pages against a 1440 × 6000 pixel budget, preloads five pages in the scroll direction plus two behind, and cancels stale preloads after a fast jump. Coil may use up to 25% of the app heap for decoded images and 768 MB of disposable disk cache; ZIP/CBZ pages additionally use a bounded 64 MB bitmap cache. None of these caches enter the portable Library.
-- A detail viewer keeps the originating grid/result order as its paging context, so Search and facet browsing do not leak into unrelated media.
-- `SavedStateHandle` retains only small navigation keys (screen, query, selected item); large media collections are reconstructed from the local index instead of being placed in Android saved-state bundles.
-- Every Library has a root `.nomedia` marker so Android media scanners ignore Library copies while Rem continues to use SAF.
-- System album imports preserve portable source-directory text but never persist Android content URIs in Library metadata.
-- Organizer prunes only verified-empty directories below known Library media roots and never deletes the roots themselves.
-- Initializing a Library claims a root-level provider-exclusive lease and commits its identity last, so two concurrent attaches cannot create separate `.gallery` directories or identities. The lease is released after commit; a lease left by a stopped process expires after 15 minutes.
-- A portable document is only committed once it is addressable under exactly the requested path. A provider that publishes a qualified copy instead of replacing the target gets that duplicate removed and the previous revision restored.
-- Diagnostics are written to the app's private files directory, never into the Library, and are reduced before writing: complete messages and exception summaries have content URIs and host filesystem paths stripped. Export waits for queued writes and grants read-only FileProvider URIs through the system share sheet.
-- A scan reports directory, entry, and candidate counts while it runs. A failed directory query marks the scan incomplete and protects that subtree's previous local rows; temporary provider failure is not treated as media deletion.
-- The inventory commit and every enrichment batch update media rows and local resume state atomically. Killing the process during enrichment can repeat at most the uncommitted batch; it cannot turn a partial deep scan into a completed checkpoint. The initial tree inventory itself is still one atomic pass and may repeat if killed before its first commit.
-- Unsupported user-visible files and structurally ambiguous directories remain in a separate local discovery index and appear under Inbox. Known internal files and registered sidecars are ignored. Discovery alone never creates portable metadata or claims that Android can decode the path.
+- classification and logical relationships never move files;
+- ordinary deletion writes portable logical trash;
+- permanent deletion re-resolves the path and verifies current identity/size;
+- Organizer copies and verifies before deleting a source;
+- page reordering and Organizer operations have recovery journals;
+- manual provenance wins over automatic metadata;
+- system media access is read-only until the user chooses a copy import;
+- forgetting a Library removes only local registration, index, and SAF grant;
+- a failed provider query never becomes a cached empty directory;
+- diagnostics strip content URIs and host paths before writing;
+- `.nomedia` prevents Library copies from being duplicated into the system album.
 
-## Build and verification
+## Known scaling boundary
+
+The scanner avoids repeated provider queries and byte reads, but `refreshFromDatabase()` still materializes all media rows. Real testing with the approximately 76,000-file sample determines whether the next change should be top-level inventory checkpoints, paged database queries, or both.
+
+## Verification baseline
+
+For ordinary changes:
 
 ```powershell
-.\gradlew.bat testDebugUnitTest lintDebug assembleDebug assembleRelease
-.\gradlew.bat assembleDebugAndroidTest connectedDebugAndroidTest
+.\gradlew.bat testDebugUnitTest lintDebug assembleDebug assembleDebugAndroidTest
 ```
 
-The installable development APK is generated at `app/build/outputs/apk/debug/app-debug.apk` with application ID `com.susnowy.rem.debug`. A debug-only `DocumentsProvider` plus connected tests exercise tree queries, provider-qualified names, scoped cache invalidation, query failures, and full portable-Library initialization through the real `ContentResolver` path; neither the provider nor its tests enter release builds. If Gradle's unified test-platform report dependencies are unavailable, build `assembleDebugAndroidTest`, install both APKs with ADB, and invoke `com.susnowy.rem.debug.test/androidx.test.runner.AndroidJUnitRunner` directly.
-
-Release signing is loaded from an external properties file (`T:/jks/keystore.properties` by default) so no key or password enters Git. The owner must preserve the same release key for every later update. `assembleRelease` also copies the R8 mapping to `dist/Rem-<version>-mapping.txt`, which is what makes a crash report from a user's device readable after `build/` is cleaned.
+Run AndroidJUnitRunner on a real device whenever SAF provider behavior, Schema conversion, media decoding, or navigation lifecycle changes. A successful emulator or empty-volume launch is not evidence of large removable-Library performance.

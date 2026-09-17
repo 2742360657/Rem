@@ -115,12 +115,15 @@ data class PlaybackProgress(
     val lastOpenedAt: Long = 0,
 )
 
-@Serializable
+/**
+ * Runtime projection used by the current scanner and UI while the portable catalog is
+ * normalized. It is not serialized as a top-level v4 document.
+ */
 data class PortableItemMetadata(
     val id: String,
     @SerialName("relative_path") val relativePath: String,
     val type: MediaKind,
-    /** Null only when decoding a pre-v3 catalog; the scanner then infers it. */
+    /** Nullable only in the runtime projection used while converting pre-v4 test data. */
     val domain: MediaDomain? = null,
     @SerialName("display_title") val displayTitle: String,
     @SerialName("original_title") val originalTitle: String? = null,
@@ -144,17 +147,193 @@ data class PortableItemMetadata(
 )
 
 @Serializable
+data class PortableAsset(
+    val id: String,
+    @SerialName("relative_path") val relativePath: String,
+    @SerialName("media_type") val mediaType: MediaKind,
+    val source: SourceKind,
+    @SerialName("secondary_path") val secondaryPath: String? = null,
+    @SerialName("content_hash") val contentHash: String? = null,
+    val revision: Long = 1,
+    @SerialName("updated_at") val updatedAt: String,
+)
+
+@Serializable
+data class PortableWork(
+    val id: String,
+    val type: MediaKind,
+    val domain: MediaDomain,
+    @SerialName("display_title") val displayTitle: String,
+    @SerialName("original_title") val originalTitle: String? = null,
+    val authors: List<String> = emptyList(),
+    val tags: List<String> = emptyList(),
+    val collections: List<String> = emptyList(),
+    @SerialName("preferred_edition_id") val preferredEditionId: String? = null,
+    @SerialName("cover_path") val coverPath: String? = null,
+    val favorite: Boolean = false,
+    @SerialName("field_sources") val fieldSources: Map<String, String> = emptyMap(),
+    val revision: Long = 1,
+    @SerialName("updated_at") val updatedAt: String,
+)
+
+@Serializable
+enum class EditionAssetRole {
+    @SerialName("primary") PRIMARY,
+    @SerialName("page") PAGE,
+    @SerialName("image") IMAGE,
+    @SerialName("video") VIDEO,
+    @SerialName("bonus") BONUS,
+    @SerialName("cover") COVER,
+    @SerialName("alternate") ALTERNATE,
+}
+
+@Serializable
+data class PortableEditionAsset(
+    @SerialName("asset_id") val assetId: String,
+    val role: EditionAssetRole = EditionAssetRole.PRIMARY,
+    @SerialName("sort_index") val sortIndex: Double? = null,
+    /** Optional path inside a directory or archive asset. */
+    @SerialName("entry_path") val entryPath: String? = null,
+)
+
+@Serializable
+data class PortableEdition(
+    val id: String,
+    @SerialName("work_id") val workId: String,
+    val label: String? = null,
+    val assets: List<PortableEditionAsset>,
+    val revision: Long = 1,
+    @SerialName("updated_at") val updatedAt: String,
+)
+
+@Serializable
+enum class GroupType {
+    @SerialName("media_set") MEDIA_SET,
+    @SerialName("manual_collection") MANUAL_COLLECTION,
+}
+
+@Serializable
+enum class GroupMemberRole {
+    @SerialName("item") ITEM,
+    @SerialName("image") IMAGE,
+    @SerialName("video") VIDEO,
+    @SerialName("bonus") BONUS,
+    @SerialName("cover") COVER,
+}
+
+@Serializable
+data class PortableGroupMember(
+    @SerialName("work_id") val workId: String,
+    val role: GroupMemberRole = GroupMemberRole.ITEM,
+    @SerialName("sort_index") val sortIndex: Double? = null,
+)
+
+@Serializable
+data class PortableGroup(
+    val id: String,
+    val title: String,
+    val type: GroupType = GroupType.MEDIA_SET,
+    val ordered: Boolean = true,
+    val members: List<PortableGroupMember> = emptyList(),
+    @SerialName("cover_work_id") val coverWorkId: String? = null,
+    @SerialName("field_sources") val fieldSources: Map<String, String> = emptyMap(),
+    val revision: Long = 1,
+    @SerialName("updated_at") val updatedAt: String,
+)
+
+@Serializable
+data class PortableSeriesMember(
+    @SerialName("work_id") val workId: String,
+    @SerialName("sort_index") val sortIndex: Double? = null,
+    val season: Int? = null,
+    val episode: Double? = null,
+    val volume: Double? = null,
+    val chapter: Double? = null,
+)
+
+@Serializable
+data class PortableSeries(
+    val id: String,
+    val title: String,
+    val aliases: List<String> = emptyList(),
+    val members: List<PortableSeriesMember> = emptyList(),
+    @SerialName("field_sources") val fieldSources: Map<String, String> = emptyMap(),
+    val revision: Long = 1,
+    @SerialName("updated_at") val updatedAt: String,
+)
+
+@Serializable
 data class PortableCatalog(
     @SerialName("schema_version") val schemaVersion: Int = CURRENT_SCHEMA_VERSION,
     @SerialName("library_id") val libraryId: String,
     val revision: Long = 0,
     @SerialName("updated_at") val updatedAt: String,
-    val items: List<PortableItemMetadata> = emptyList(),
-)
+    val assets: List<PortableAsset> = emptyList(),
+    val works: List<PortableWork> = emptyList(),
+    val editions: List<PortableEdition> = emptyList(),
+    val groups: List<PortableGroup> = emptyList(),
+    val series: List<PortableSeries> = emptyList(),
+) {
+    /** Transitional projection; portable v4 never serializes an `items` array. */
+    val items: List<PortableItemMetadata>
+        get() {
+            val assetsById = assets.associateBy(PortableAsset::id)
+            val editionsByWork = editions.groupBy(PortableEdition::workId)
+            val seriesByWork = buildMap<String, Pair<PortableSeries, PortableSeriesMember>> {
+                series.sortedBy(PortableSeries::id).forEach { sequence ->
+                    sequence.members.forEach { member -> putIfAbsent(member.workId, sequence to member) }
+                }
+            }
+            return works.mapNotNull { work ->
+                val available = editionsByWork[work.id].orEmpty()
+                val edition = available.firstOrNull { it.id == work.preferredEditionId }
+                    ?: available.minByOrNull(PortableEdition::id)
+                    ?: return@mapNotNull null
+                val primary = edition.assets.firstOrNull { it.role == EditionAssetRole.PRIMARY }
+                    ?: edition.assets.minWithOrNull(
+                        compareBy<PortableEditionAsset> { it.sortIndex ?: Double.MAX_VALUE }
+                            .thenBy(PortableEditionAsset::assetId),
+                    )
+                    ?: return@mapNotNull null
+                val asset = assetsById[primary.assetId] ?: return@mapNotNull null
+                val sequence = seriesByWork[work.id]
+                PortableItemMetadata(
+                    id = work.id,
+                    relativePath = asset.relativePath,
+                    type = work.type,
+                    domain = work.domain,
+                    displayTitle = work.displayTitle,
+                    originalTitle = work.originalTitle,
+                    source = asset.source,
+                    authors = work.authors,
+                    tags = work.tags,
+                    collections = work.collections,
+                    series = sequence?.let { (series, member) ->
+                        SeriesRef(
+                            id = series.id,
+                            title = series.title,
+                            sortIndex = member.sortIndex,
+                            season = member.season,
+                            episode = member.episode,
+                            volume = member.volume,
+                            chapter = member.chapter,
+                        )
+                    },
+                    coverPath = work.coverPath,
+                    secondaryPath = asset.secondaryPath,
+                    contentHash = asset.contentHash,
+                    favorite = work.favorite,
+                    fieldSources = work.fieldSources,
+                    revision = work.revision,
+                    updatedAt = work.updatedAt,
+                )
+            }
+        }
+}
 
 @Serializable
 data class PortableProgress(
-    @SerialName("item_id") val itemId: String,
+    @SerialName("work_id") val itemId: String,
     val page: Int = 0,
     @SerialName("position_ms") val positionMs: Long = 0,
     val finished: Boolean = false,
@@ -173,7 +352,7 @@ data class PortableState(
 
 @Serializable
 data class PortableTrashEntry(
-    @SerialName("item_id") val itemId: String,
+    @SerialName("work_id") val itemId: String,
     @SerialName("relative_path") val relativePath: String,
     @SerialName("deleted_at") val deletedAt: String,
 )

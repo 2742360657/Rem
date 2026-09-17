@@ -30,6 +30,7 @@ import dev.susnowy.gallery.model.DiscoveredEntry
 import dev.susnowy.gallery.model.MediaItem
 import dev.susnowy.gallery.model.PermissionState
 import dev.susnowy.gallery.model.PlaybackProgress
+import dev.susnowy.gallery.model.PortableItemMetadata
 import dev.susnowy.gallery.model.PortableLibrary
 import dev.susnowy.gallery.organizer.OrganizationPlan
 import dev.susnowy.gallery.organizer.OrganizerService
@@ -510,8 +511,9 @@ class GalleryRepository(context: Context) {
             val storage = storageFor(requireLibrary(updated.libraryId))
             val locked = updated.copy(fieldSources = updated.withManualEdits(database.mediaItem(updated.id)))
             val portable = PortableMetadataStore(storage).saveItem(locked, locked.revision)
-            val saved = locked.copy(revision = portable.revision, inInbox = false)
+            val saved = locked.withPortableMetadata(portable).copy(inInbox = false)
             database.upsertMedia(saved)
+            synchronizeSeriesProjection(saved.libraryId, listOf(portable))
             refreshFromDatabase()
             saved
         }
@@ -532,12 +534,10 @@ class GalleryRepository(context: Context) {
                 val portable = PortableMetadataStore(storage).saveItems(items).associateBy { it.id }
                 items.forEach { item ->
                     database.upsertMedia(
-                        item.copy(
-                            revision = portable.getValue(item.id).revision,
-                            inInbox = false,
-                        ),
+                        item.withPortableMetadata(portable.getValue(item.id)).copy(inInbox = false),
                     )
                 }
+                synchronizeSeriesProjection(libraryId, portable.values)
                 refreshFromDatabase()
                 items.size
             }
@@ -568,12 +568,10 @@ class GalleryRepository(context: Context) {
             val portable = PortableMetadataStore(storage).saveItems(updated).associateBy { it.id }
             updated.forEach { item ->
                 database.upsertMedia(
-                    item.copy(
-                        revision = portable.getValue(item.id).revision,
-                        inInbox = false,
-                    ),
+                    item.withPortableMetadata(portable.getValue(item.id)).copy(inInbox = false),
                 )
             }
+            synchronizeSeriesProjection(libraryId, portable.values)
             refreshFromDatabase()
             updated.size
         }
@@ -743,7 +741,8 @@ class GalleryRepository(context: Context) {
                 val result = imageSetOrder.reorder(item, pages, storage)
                 val updated = item.copy(coverPath = result.coverPath)
                 val portable = PortableMetadataStore(storage).saveItem(updated, updated.revision)
-                database.upsertMedia(updated.copy(revision = portable.revision, inInbox = false))
+                database.upsertMedia(updated.withPortableMetadata(portable).copy(inInbox = false))
+                synchronizeSeriesProjection(item.libraryId, listOf(portable))
                 refreshFromDatabase()
                 result
             }
@@ -802,6 +801,41 @@ class GalleryRepository(context: Context) {
         _libraries.value = database.libraries()
         _media.value = database.media()
         _discoveries.value = database.discoveries()
+    }
+
+    private fun MediaItem.withPortableMetadata(portable: PortableItemMetadata): MediaItem = copy(
+        domain = portable.domain ?: domain,
+        displayTitle = portable.displayTitle,
+        originalTitle = portable.originalTitle,
+        authors = portable.authors,
+        tags = portable.tags,
+        collections = portable.collections,
+        series = portable.series,
+        coverPath = portable.coverPath,
+        secondaryPath = portable.secondaryPath,
+        contentHash = portable.contentHash,
+        favorite = portable.favorite,
+        fieldSources = portable.fieldSources,
+        revision = portable.revision,
+    )
+
+    private fun synchronizeSeriesProjection(
+        libraryId: String,
+        portable: Collection<PortableItemMetadata>,
+    ) {
+        val canonical = portable.mapNotNull(PortableItemMetadata::series)
+        if (canonical.isEmpty()) return
+        val byId = canonical.associateBy { it.id }
+        val byTitle = canonical.associateBy { it.title.trim().lowercase(java.util.Locale.ROOT) }
+        database.media(libraryId).forEach { item ->
+            val current = item.series ?: return@forEach
+            val resolved = byId[current.id]
+                ?: byTitle[current.title.trim().lowercase(java.util.Locale.ROOT)]
+                ?: return@forEach
+            if (current.id != resolved.id || current.title != resolved.title) {
+                database.upsertMedia(item.copy(series = current.copy(id = resolved.id, title = resolved.title)))
+            }
+        }
     }
 
     fun library(libraryId: String): LibraryRegistration? = database.library(libraryId)

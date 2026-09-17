@@ -8,6 +8,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.susnowy.gallery.library.PortableLibraryManager
 import dev.susnowy.gallery.model.LibraryInspection
+import dev.susnowy.gallery.model.CURRENT_SCHEMA_VERSION
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
@@ -100,7 +101,33 @@ class DocumentTreeStorageInstrumentedTest {
 
         assertEquals(initialized.libraryId, inspected.library.libraryId)
         assertNull(storage.find(PortableLibraryManager.INIT_LOCK_FILE))
-        assertEquals(3, inspected.library.schemaVersion)
+        assertEquals(4, inspected.library.schemaVersion)
+    }
+
+    @Test
+    fun legacyPortableDocumentsRecoverIdentityAndConvertThroughRealProvider() {
+        val libraryId = "d421f1ce-59e7-4f9f-85a0-250a586cdca5"
+        val storage = DocumentTreeStorage(context, treeUri)
+        writeText(storage, PortableLibraryManager.LEGACY_SCHEMA_FILE, """{"schema_version":3}""")
+        writeText(
+            storage,
+            ".gallery/items/catalog.json",
+            """{"schema_version":3,"library_id":"$libraryId","revision":1,"updated_at":"now","items":[]}""",
+        )
+        writeText(
+            storage,
+            ".gallery/state/state.json",
+            """{"schema_version":3,"library_id":"$libraryId","revision":1,"updated_at":"now","progress":[],"trash":[]}""",
+        )
+
+        val recovered = PortableLibraryManager(storage).initialize("Recovered Provider Library")
+
+        assertEquals(libraryId, recovered.libraryId)
+        assertEquals(CURRENT_SCHEMA_VERSION, recovered.schemaVersion)
+        assertNull(storage.find(PortableLibraryManager.LEGACY_SCHEMA_FILE))
+        assertTrue(readText(storage, ".gallery/items/catalog.json").contains("\"assets\""))
+        assertTrue(storage.list(".gallery/backups").isNotEmpty())
+        assertNull(storage.find(PortableLibraryManager.INIT_LOCK_FILE))
     }
 
     private fun childQueryCount(documentId: String): Int =
@@ -115,4 +142,14 @@ class DocumentTreeStorageInstrumentedTest {
             arg,
             extras,
         )
+
+    private fun writeText(storage: DocumentTreeStorage, path: String, text: String) {
+        val document = storage.createFile(path, "application/json")
+        storage.openOutput(document).bufferedWriter(Charsets.UTF_8).use { it.write(text) }
+    }
+
+    private fun readText(storage: DocumentTreeStorage, path: String): String {
+        val document = requireNotNull(storage.find(path))
+        return storage.openInput(document).bufferedReader(Charsets.UTF_8).use { it.readText() }
+    }
 }

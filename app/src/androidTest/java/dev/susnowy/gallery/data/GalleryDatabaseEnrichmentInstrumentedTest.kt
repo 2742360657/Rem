@@ -3,6 +3,7 @@ package dev.susnowy.gallery.data
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import dev.susnowy.gallery.model.LibraryRegistration
+import dev.susnowy.gallery.model.CURRENT_SCHEMA_VERSION
 import dev.susnowy.gallery.model.MediaDomain
 import dev.susnowy.gallery.model.MediaItem
 import dev.susnowy.gallery.model.MediaKind
@@ -32,7 +33,7 @@ class GalleryDatabaseEnrichmentInstrumentedTest {
                 name = "checkpoint-test",
                 treeUri = "content://checkpoint/$libraryId",
                 permissionState = PermissionState.AVAILABLE,
-                schemaVersion = 3,
+                schemaVersion = CURRENT_SCHEMA_VERSION,
             ),
         )
     }

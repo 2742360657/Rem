@@ -1,36 +1,59 @@
 # Rem
 
-Rem 是一个 Android 本地优先媒体库，当前版本为 **0.0.3**。用户通过系统目录选择器接入实体文件夹；媒体保持在原位置，`.gallery/` 保存可随硬盘移动、可供 Agent 理解的元数据和规则，本机 SQLite 只作为可重建索引。
+Rem 是一个面向移动硬盘和大容量本地目录的 Android 媒体库。它管理图片、视频、写真集、漫画和系列，同时让原媒体继续保持普通文件形态。
 
-正式应用 ID 为 `com.susnowy.rem`，本地调试版使用 `com.susnowy.rem.debug`，两者可并存且不会再因签名不同互相覆盖。它们不能直接共享本机索引和 SAF 目录授权；重新接入原 Library 后，`.gallery/` 中的标签、分类和进度仍可恢复。Kotlin 包名、`GALLERY_LIBRARY.md` 和 Gallery Schema 等内部格式标识暂不重命名。
+当前项目处于首次稳定发布前，便携格式为 **Schema v4**。
 
-当前一级界面只有三类：
+## 核心特性
 
-- **相册**：照片和相册视频的纯净时间线。
-- **图片 / 视频**：按真实目录分类的普通媒体相册。
-- **漫画 / 动漫**：带作者、Tag、Series、搜索、排序和阅读/观看进度的作品库。
+- 使用 Android Storage Access Framework 接入一个或多个目录；
+- `.gallery/` 随 Library 保存身份、逻辑关系、人工元数据、进度、回收站和可恢复事务；
+- 本机 SQLite、日志、扫描补全队列和缩略图都是可重建或可清除数据；
+- 新媒体和不确定内容先进入 Inbox；
+- 支持普通图片、目录 ImageSet、ZIP/CBZ、视频和系统相册复制导入；
+- 支持 Series 书架、手动顺序、季/集、卷/章；
+- 同目录图片集和直属视频可以作为一个混合入口浏览；
+- 扫描先快速清点，再分批补全媒体信息，App 被结束后可以续做；
+- 逻辑回收站、永久删除核验和 Organizer 真实文件事务相互分离；
+- 浏览过的卡片按需保存 512 px 本机离线预览，限制为 256 MiB / 20,000 张。
 
-各主页面把筛选、目录和作品操作放在自己的右侧工具栏中，左侧只保留 Library 与全局管理。页面切换会保留各自状态；漫画采用“作品列表 → 详情与编辑 → 沉浸阅读”的操作层级，缩略图和漫画页均支持长按快捷操作。
+Schema v4 将便携目录拆分为：
 
-漫画 / 动漫默认以系列书架展示，也可切换回全部作品。系列内按可选的手动顺序排序；未填写时使用季/集或卷/章，完全未编号的作品仍可保留并按标题浏览。编辑器允许单独填写或清空这些字段，同名旧系列即使历史 ID 不一致也会先合并展示。
-
-扫描器额外识别常见下载结构：`JM/<纯数字 ID>/`、EhViewer 的
-`<gid>-<title>/.ehviewer`，以及 Pixiv 的 `<illust_id>_pN` / `_ugoira…`。
-识别结果保留稳定来源 ID，并且只作为 Inbox 建议；用户编辑或明确接受后才进入正式媒体视图。直接接受保留自动字段来源，只有实际编辑的字段才标记为 `manual`。当前版本不内置站点抓取；需要补全标题、作者或标签时，可让 Agent 按 Library 自带规则辅助同步，所有标记为 `manual` 的人工字段始终保持不变，站点 Cookie 也不会写入 Library。
-
-扫描还会把当前无法安全分类的扩展名和结构不明确的目录列在 Inbox 的“其他待判断”中。它们只是可重建的本机发现记录，不会被伪装成媒体、写入便携 catalog 或移动原文件；`.gallery/`、`.nomedia`、`.ehviewer`、`ComicInfo.xml` 等 Rem 内部文件和已登记 sidecar 会被排除。后续可由用户、Agent 或新增格式支持继续处理。
-
-图片显示支持 GIF、Animated WebP（Android 9+）、SVG，以及系统可解码的
-HEIF/AVIF/DNG 等格式。缩略图固定按显示尺寸解码；超大静态图会先探测尺寸并安全降采样，避免整张原图直接解码造成内存溢出。
-
-浏览到的媒体卡片会按需保存最长边 512 px 的本机离线小预览，移动 Library 拔出后仍可辨认已有内容。预览不写入移动介质，限制为 256 MiB / 20,000 张，并可从设置中安全清除。
-
-详细设计见 `Gallery_Project_Guide.md`，使用方法见 `docs/USER_GUIDE.md`，架构约束见 `docs/ARCHITECTURE.md`，版本变化见 `CHANGELOG.md`，开发过程中的问题与解决措施见 `docs/DEV_LOG.md`。
-
-```powershell
-.\gradlew.bat testDebugUnitTest lintDebug assembleDebug assembleDebugAndroidTest assembleRelease
+```text
+Asset    物理来源
+Work     用户编辑的逻辑作品
+Edition  同一作品的取得版本
+Group    一起浏览的作品集合
+Series   有顺序的作品序列
 ```
 
-设置页提供可导出的诊断日志（`设置 → 诊断日志`）；日志只写在本机 App 私有目录，不进入 Library。`assembleRelease` 会把 R8 mapping 归档到 `dist/Rem-<版本>-mapping.txt`，用于还原真机崩溃堆栈。
+目前 Android 界面仍通过兼容投影使用这些实体。Group 手动编辑、Edition 比较和虚拟合并是下一阶段，不应误认为已经完成。
 
-可直接安装的开发 APK 位于 `app/build/outputs/apk/debug/app-debug.apk`，包名为 `com.susnowy.rem.debug`。正式构建默认从 `T:/jks/keystore.properties` 读取仓库外签名配置，也可用 Gradle 属性 `rem.signingProperties` 或环境变量 `REM_SIGNING_PROPERTIES` 指定其他位置；密码和 JKS 不得提交到仓库。
+## 文档
+
+- [产品与便携格式规范](Gallery_Project_Guide.md)
+- [开发 Agent 规则](AGENTS.md)
+- [当前架构](docs/ARCHITECTURE.md)
+- [使用说明](docs/USER_GUIDE.md)
+- [开发记录](docs/DEV_LOG.md)
+- [版本变化](CHANGELOG.md)
+
+Library 接入后还会在根目录生成 `GALLERY_LIBRARY.md`，供本地 Agent 在整理该 Library 前阅读。它说明 Schema v4 实体、人工字段保护、来源标签、备份和文件安全边界。
+
+## 构建与检查
+
+```powershell
+.\gradlew.bat testDebugUnitTest lintDebug assembleDebug assembleDebugAndroidTest
+```
+
+Debug 包使用 `com.susnowy.rem.debug`，可以与 Release 包并存。涉及 SAF、Schema 转换、媒体解码或导航生命周期时，还应运行真机 AndroidJUnitRunner。
+
+## 数据安全摘要
+
+- 扫描、识别、改元数据和逻辑分组不会移动媒体；
+- 真实文件变化必须先预览并确认；
+- 所有便携路径都是 Library 相对路径；
+- `manual` 字段不会被自动识别或 Agent 覆盖；
+- 未知更高 Schema 会拒绝写入；
+- Cookie、Token 和账号信息不得进入 Library、日志或 Git；
+- 不要手动删除 `.gallery/`、`.nomedia` 或活动事务。

@@ -8,6 +8,7 @@ import dev.susnowy.gallery.model.MediaDomain
 import dev.susnowy.gallery.model.MediaKind
 import dev.susnowy.gallery.model.PlaybackProgress
 import dev.susnowy.gallery.model.SourceKind
+import dev.susnowy.gallery.model.SeriesRef
 import dev.susnowy.gallery.model.UnsupportedSchemaException
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
@@ -39,8 +40,13 @@ class PortableMetadataStoreTest {
     fun savesAndRejectsStaleRevision() {
         val first = store.saveItem(item, expectedRevision = 0)
         assertEquals(1, first.revision)
-        assertEquals("abc", store.loadCatalog("library-id").items.single().contentHash)
-        assertEquals(MediaDomain.WORKS, store.loadCatalog("library-id").items.single().domain)
+        val catalog = store.loadCatalog("library-id")
+        assertEquals("abc", catalog.items.single().contentHash)
+        assertEquals(MediaDomain.WORKS, catalog.items.single().domain)
+        assertEquals(1, catalog.assets.size)
+        assertEquals(1, catalog.works.size)
+        assertEquals(1, catalog.editions.size)
+        assertFalse(access.read(PortableMetadataStore.CATALOG_PATH)!!.contains("\"items\""))
 
         assertThrows(RevisionConflictException::class.java) {
             store.saveItem(item.copy(displayTitle = "Stale"), expectedRevision = 0)
@@ -167,26 +173,102 @@ class PortableMetadataStoreTest {
     }
 
     @Test
-    fun olderSchemaIsStillReadable() {
+    fun seriesMembershipHasOnePortableOwner() {
+        val first = store.saveItem(
+            item.copy(series = SeriesRef("series-a", "A", chapter = 1.0)),
+            expectedRevision = 0,
+        )
+
+        store.saveItem(
+            item.copy(
+                revision = first.revision,
+                series = SeriesRef("series-b", "B", sortIndex = 2.0),
+            ),
+            expectedRevision = first.revision,
+        )
+
+        val catalog = store.loadCatalog("library-id")
+        assertEquals(listOf("series-b"), catalog.series.map { it.id })
+        assertEquals("item-id", catalog.series.single().members.single().workId)
+        assertEquals("B", catalog.items.single().series?.title)
+    }
+
+    @Test
+    fun v3RequiresExplicitConversionAndBecomesNormalizedV4() {
         val seeded = MetadataMemoryAccess().apply {
             seed(
                 PortableMetadataStore.CATALOG_PATH,
                 """
                 {
-                  "schema_version": 1,
+                  "schema_version": 3,
                   "library_id": "library-id",
                   "revision": 3,
                   "updated_at": "2026-01-01T00:00:00Z",
-                  "items": []
+                  "items": [
+                    {
+                      "id": "old-work",
+                      "relative_path": "Works/old.cbz",
+                      "type": "image_set",
+                      "domain": "works",
+                      "display_title": "Old Work",
+                      "source": "archive",
+                      "series": {"id":"series-z","title":"Series","chapter":2.0},
+                      "revision": 2,
+                      "updated_at": "2026-01-01T00:00:00Z"
+                    },
+                    {
+                      "id": "other-work",
+                      "relative_path": "Works/other.cbz",
+                      "type": "image_set",
+                      "domain": "works",
+                      "display_title": "Other Work",
+                      "source": "archive",
+                      "series": {"id":"series-a","title":"series","chapter":1.0},
+                      "revision": 1,
+                      "updated_at": "2026-01-01T00:00:00Z"
+                    }
+                  ]
+                }
+                """.trimIndent(),
+            )
+            seed(
+                PortableMetadataStore.STATE_PATH,
+                """
+                {
+                  "schema_version": 3,
+                  "library_id": "library-id",
+                  "revision": 2,
+                  "updated_at": "2026-01-01T00:00:00Z",
+                  "progress": [{
+                    "item_id": "old-work",
+                    "page": 8,
+                    "last_opened_at": "2026-01-01T00:00:00Z"
+                  }],
+                  "trash": []
                 }
                 """.trimIndent(),
             )
         }
 
-        val catalog = PortableMetadataStore(seeded).loadCatalog("library-id")
+        val legacyStore = PortableMetadataStore(seeded)
+        assertThrows(UnsupportedSchemaException::class.java) {
+            legacyStore.loadCatalog("library-id")
+        }
+        legacyStore.migrateV3ToV4("library-id")
+        val catalog = legacyStore.loadCatalog("library-id")
 
-        assertEquals(1, catalog.schemaVersion)
-        assertEquals(3, catalog.revision)
+        assertEquals(CURRENT_SCHEMA_VERSION, catalog.schemaVersion)
+        assertEquals(4, catalog.revision)
+        assertEquals(2, catalog.assets.size)
+        assertEquals(2, catalog.works.size)
+        assertEquals(2, catalog.editions.size)
+        assertEquals("series-a", catalog.series.single().id)
+        assertEquals(listOf("other-work", "old-work"), catalog.series.single().members.map { it.workId })
+        assertEquals("Works/old.cbz", catalog.items.first { it.id == "old-work" }.relativePath)
+        assertEquals("old-work", legacyStore.loadState("library-id").progress.single().itemId)
+        assertFalse(seeded.read(PortableMetadataStore.CATALOG_PATH)!!.contains("\"items\""))
+        assertTrue(seeded.read(PortableMetadataStore.STATE_PATH)!!.contains("\"work_id\""))
+        assertFalse(seeded.read(PortableMetadataStore.STATE_PATH)!!.contains("\"item_id\""))
     }
 
     @Test

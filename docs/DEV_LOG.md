@@ -1,10 +1,49 @@
 # 开发记录
 
-按 `Gallery_Project_Guide.md` 31.5 维护：每次内容开发、性能优化或缺陷修复，记录**遇到的问题**与**解决措施**。
+每次内容开发、性能优化或缺陷修复都记录问题、证据、取舍、措施、验证和剩余风险。
 
 这里写过程与判断依据；面向使用者的版本变化写 `CHANGELOG.md`，两处不重复。
 
 条目按时间倒序。同一问题的后续进展追加到原条目，不另起新条。
+
+旧条目保留当时的版本号和判断，仅用于追溯；当前产品与格式以 `Gallery_Project_Guide.md`、`AGENTS.md` 和 `docs/ARCHITECTURE.md` 为准。
+
+---
+
+## 2026-09-17 · 文档收敛与便携 Schema v4
+
+**范围**：项目说明、`model`、`metadata`、`library`；媒体原文件不变
+
+### 问题与决策
+
+- `Gallery_Project_Guide.md` 同时保存产品规范、旧阶段计划、Git 规则、实现细节和历史总结，已超过 2,100 行；`AGENTS.md`、架构和用户指南又重复其中一部分，出现当前行为与旧计划互相冲突。
+- v3 把物理路径、用户可编辑作品、版本和内嵌 `SeriesRef` 放在同一 item 中，无法安全表达跨目录 Group、同一作品的多个 Edition 和后续虚拟合并。
+- 项目仍在测试期，决定只维护干净的当前格式；但已有 v3 测试元数据仍须在修改前备份，转换失败不得提前更新 Library 身份，任何转换不得触碰媒体字节。
+
+### 措施
+
+- 重新规定 Markdown 职责：README 只做入口，项目指南只放产品/格式，AGENTS 只放执行规则与当前状态，架构只描述已实现代码，用户指南只描述已可用操作，DEV_LOG 保留历史证据，CHANGELOG 记录版本变化。
+- 把项目指南从混合长文收敛为当前规范，删除已经完成的 Phase 0–14 清单、重复 Git 规则、重复技术选型和过期格式示例；其余说明同步到各自唯一位置。
+- Schema v4 将便携 Catalog 规范化为 `Asset`、`Work`、`Edition`、`Group`、`Series`。Edition 单向引用 Work/Asset，Group 和 Series 单向引用 Work；`items` 只作为 Android 运行时计算投影，不再序列化。
+- 写入时分别更新 Asset、Work、首选 Edition 和 Series 成员；路径迁移只改 Asset 与封面路径；删除 Work 时同步清理 Group/Series 关系，并只移除没有其他 Edition 引用的 Asset 元数据。
+- 保存后把规范化 Catalog 的计算投影完整回写本机索引；同名旧 Series 被归一或标题修改时，同一 Series 的其他本机行会立即同步稳定 ID/标题，不必等待下次扫描。
+- 加入 ID、相对路径、首选 Edition 所属关系、成员引用和成员唯一性校验；状态改用 `work_id`。
+- v3 转换先快照 identity、catalog、state、guide 和旧 Schema，再转换 Catalog/State，最后才提交 v4 identity。转换逐文档幂等，中途停止后可重试；同名旧 Series 合并为一个实体并选用稳定的最小 ID。
+- Library 身份丢失但 v3 catalog/state 尚存时，从一致且有效的 `library_id` 恢复身份并完成转换；残留文档无法解析、ID 冲突、更早 Schema 或更高 Schema 时拒绝自动认领。
+- 重写新接入 Library 的 `GALLERY_LIBRARY.md`：明确 v4 实体职责、Agent 读取顺序、人工字段保护、来源标签、相对路径、备份和物理文件安全边界。
+
+### 验证
+
+- `testDebugUnitTest`：**108 项通过，0 失败，0 跳过**。覆盖规范化写入、Series 单一所有者、v3 Catalog/State 转换、同名 Series 合并、转换失败不升级 identity，以及丢失 identity 后从便携文档恢复。
+- `lintDebug`：**0 errors、31 warnings**；`assembleDebug` 与 `assembleDebugAndroidTest` 成功。
+- Xiaomi 23127PN0CC / Android 16：AndroidJUnitRunner **8 项通过，0 失败**。新增测试经真实 `ContentResolver`/DocumentsProvider 完成 v3 残留文档、身份恢复、备份、v4 写入、旧 Schema 清理和租约释放。
+- 最新 Debug 覆盖安装并冷启动成功：663 ms，进程保持运行；退出历史仅见测试结束、主动停止和 APK 更新，没有崩溃、ANR 或 OOM。
+
+### 剩余风险
+
+- v4 已建立便携 Group/Edition 结构，但手动 Group 编辑、派生组保存、Edition 比较和虚拟合并尚未接入 UI。
+- 这次只用隔离的测试 DocumentsProvider 验证转换，没有对 E 盘现有 `.gallery` 执行迁移，也没有修改 E 盘媒体或元数据。首次用本构建接入 v3 Library 时会自动备份并转换，应先保留盘外备份再做真实库验收。
+- Android 运行时仍使用 `MediaItem` 投影；后续 Group/Edition UI 应直接修改 v4 实体，不能重新引入序列化 `items`。
 
 ---
 
