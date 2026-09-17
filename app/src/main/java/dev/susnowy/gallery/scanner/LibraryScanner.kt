@@ -289,11 +289,13 @@ class LibraryScanner {
                 val comicInfoEntry = files.firstOrNull {
                     it.name.equals("ComicInfo.xml", ignoreCase = true)
                 }
-                val directoryMetadata = if (unchanged) {
-                    comicInfoEntry?.let { statistics.contentReused(it.relativePath) }
-                    null
-                } else if (depth == ScanDepth.INVENTORY) {
-                    null
+                // Path-derived recognition is free: it reads no media bytes, and skipping it for an
+                // unchanged directory used to leave the image set with no title and no series, so
+                // its chapters could not be ordered or listed as a series. Only the byte-level
+                // ComicInfo read is skipped when the directory is known to be unchanged.
+                val directoryMetadata = if (unchanged || depth == ScanDepth.INVENTORY) {
+                    if (unchanged) comicInfoEntry?.let { statistics.contentReused(it.relativePath) }
+                    inferredMetadata
                 } else {
                     comicInfoEntry?.let { statistics.contentRead(it.relativePath) }
                     val localComicInfo = runCatching { comicInfo.fromDirectory(storage, path) }

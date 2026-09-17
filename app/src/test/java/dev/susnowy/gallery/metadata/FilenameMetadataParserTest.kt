@@ -81,4 +81,46 @@ class FilenameMetadataParserTest {
         assertEquals(1.0, metadata.chapter)
         assertEquals("缘起", metadata.title)
     }
+
+    /**
+     * Regression: a chapter folder that also carries a label used to leave its series empty, so
+     * the directory ImageSet showed up as a standalone work instead of a chapter of its series.
+     */
+    @Test
+    fun keepsALabelledChapterFolderInsideItsSeries() {
+        val metadata = FilenameMetadataParser.parse("第5话 目录版", "测试系列")
+
+        assertEquals("测试系列", metadata.series)
+        assertEquals(5.0, metadata.sortIndex)
+        assertEquals(5.0, metadata.chapter)
+        assertEquals("目录版", metadata.title)
+    }
+
+    @Test
+    fun keepsAPlainChapterFolderInsideItsSeries() {
+        val metadata = FilenameMetadataParser.parse("第5话", "测试系列")
+
+        assertEquals("测试系列", metadata.series)
+        assertEquals(5.0, metadata.chapter)
+        assertEquals("第5话", metadata.title)
+    }
+
+    /** The downloader's ordering prefix is a position, not part of the visible title. */
+    @Test
+    fun stripsTheOrderingPrefixFromALabelledChapterFolder() {
+        val metadata = FilenameMetadataParser.parse("05 第5话 目录版", "测试系列")
+
+        assertEquals("测试系列", metadata.series)
+        assertEquals(5.0, metadata.sortIndex)
+        assertEquals(5.0, metadata.chapter)
+        assertEquals("目录版", metadata.title)
+    }
+
+    @Test
+    fun aStandaloneFolderDoesNotInventASeries() {
+        val metadata = FilenameMetadataParser.parse("独立短篇", "Comics")
+
+        assertEquals(null, metadata.series)
+        assertEquals(null, metadata.chapter)
+    }
 }

@@ -47,11 +47,30 @@ object FilenameMetadataParser {
     private val numberedRelease = Regex("^(.+?)\\s*[-–—]\\s*(?:no\\.?\\s*)?(\\d{1,5})(?:\\s+|\\s*[-–—]\\s*)(.+)$", RegexOption.IGNORE_CASE)
     private val seasonEpisode = Regex("[Ss](\\d{1,2})[Ee](\\d+(?:\\.\\d+)?)", RegexOption.IGNORE_CASE)
     private val episodeWithParent = Regex("^(?:EP?|Episode|第)?\\s*(\\d+(?:\\.\\d+)?)(?:\\s*集)?(?:\\s*[-–—]\\s*(.*))?$", RegexOption.IGNORE_CASE)
-    private val chapterWithParent = Regex("^(?:ch(?:apter)?|vol(?:ume)?|第)\\.?\\s*(\\d+(?:\\.\\d+)?)(?:\\s*[话話章卷])?(?:\\s*[-–—]\\s*(.*))?$", RegexOption.IGNORE_CASE)
+    // A folder named "第 5 话 …" is a chapter of its parent folder, with anything after it being
+    // that chapter's title. Requiring the marker to be the whole name used to drop every chapter
+    // folder that also carried a label, such as "第5话 目录版", out of its series.
+    private val chapterWithParent = Regex(
+        "^(?:ch(?:apter)?|vol(?:ume)?|第)\\.?\\s*(\\d+(?:\\.\\d+)?)\\s*(?:[话話章卷])?\\s*[-–—:：]?\\s*(.*)$",
+        RegexOption.IGNORE_CASE,
+    )
     private val downloadedArchiveChapter = Regex(
         "^(\\d+(?:\\.\\d+)?)[，,、.\\s_-]+(.+?)(?:_[0-9a-f]{6,})?$",
         RegexOption.IGNORE_CASE,
     )
+    /**
+     * A Chinese chapter folder with a label: "第5话 目录版", "第12章 序章".
+     *
+     * Kept as its own pattern because the label may not be preceded by a separator. It sits after
+     * the strict [chapterWithParent] so "第5话 目录版" cannot be read as chapter five of a series
+     * literally named "第5话 目录版".
+     */
+    private val chineseChapter = Regex(
+        "^第\\s*(\\d+(?:\\.\\d+)?)\\s*[话話章卷]\\s*[-–—·:：]?\\s*(.*)$",
+        RegexOption.IGNORE_CASE,
+    )
+    /** A downloader's ordering prefix in front of a chapter marker: "05 ", "007 - ". */
+    private val ORDER_PREFIX = Regex("^\\d{1,4}\\s*[-–—.、,]?\\s+")
     private val releaseFacts = Regex("""\s*[\[【(（]\s*\d+\s*[PpVv](?:\s*[-+、,]\s*\d+\s*[PpVv])?(?:\s*[-–—]\s*[\d.]+\s*(?:[KMGTP]i?[Bb]?|[KMGTP]))?\s*[\]】)）]\s*$""")
     private val qualitySuffix = Regex("""(?:\s*[\[(【][^\])】]*(?:2160p|1080p|720p|HEVC|AVC|x26[45]|[0-9A-F]{8})[^\])】]*[\])】])+$""", RegexOption.IGNORE_CASE)
     private val leadingReleaseId = Regex("^\\d{3,}[._ -]+")
@@ -67,6 +86,23 @@ object FilenameMetadataParser {
             val number = match.groupValues[1].toDoubleOrNull()
             return RecognizedMetadata(
                 title = match.groupValues.getOrNull(2)?.trim().orEmpty().ifBlank { trimmedName },
+                series = parentAuthor,
+                sortIndex = number,
+                chapter = number,
+            )
+        }
+        // "05 第5话 目录版" is chapter five; the downloader's "05 " is an ordering prefix that
+        // must be stepped over before the chapter marker, but must not decide the position.
+        val withoutOrderPrefix = trimmedName
+            .replace(ORDER_PREFIX, "")
+            .trim()
+            .ifBlank { trimmedName }
+        chineseChapter.matchEntire(withoutOrderPrefix)?.let { match ->
+            val number = match.groupValues[1].toDoubleOrNull()
+            return RecognizedMetadata(
+                // The label after the chapter marker is a title, and the parent folder is the
+                // series: a folder that also carries a label used to fall out of its series.
+                title = match.groupValues.getOrNull(2)?.trim().orEmpty().ifBlank { withoutOrderPrefix },
                 series = parentAuthor,
                 sortIndex = number,
                 chapter = number,
