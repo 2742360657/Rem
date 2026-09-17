@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
@@ -299,6 +300,7 @@ fun GroupDetail(
     var deleteOpen by remember { mutableStateOf(false) }
     val dirty = memberIds != group.memberIds || coverWorkId != group.coverWorkId
     val dragState = rememberDragReorderState(REORDER_ROW_HEIGHT)
+    val listState = rememberLazyListState()
     dragState.itemCount = memberIds.size
     fun move(from: Int, to: Int) {
         memberIds = memberIds.toMutableList().apply { add(to, removeAt(from)) }
@@ -358,6 +360,7 @@ fun GroupDetail(
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
             )
             LazyColumn(
+                state = listState,
                 modifier = Modifier.weight(1f),
                 contentPadding = PaddingValues(bottom = 96.dp),
             ) {
@@ -367,6 +370,7 @@ fun GroupDetail(
                         index = index,
                         state = dragState,
                         onMove = ::move,
+                        listState = listState,
                         leading = { if (item != null) MediaThumbnail(item, viewModel, Modifier.fillMaxSize()) },
                         onClick = {
                             item?.let { viewModel.open(it, memberIds.mapNotNull(itemsById::get)) }
