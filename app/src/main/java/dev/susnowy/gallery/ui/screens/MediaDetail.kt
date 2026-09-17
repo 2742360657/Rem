@@ -77,6 +77,10 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.geometry.isSpecified
+import dev.susnowy.gallery.ui.components.Zoomable
+import dev.susnowy.gallery.ui.components.rememberZoomState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.asImageBitmap
@@ -647,72 +651,56 @@ private fun ZoomableImage(
     modifier: Modifier = Modifier,
     onZoomingChanged: (Boolean) -> Unit = {},
 ) {
-    var scale by remember { mutableFloatStateOf(1f) }
-    var offset by remember { mutableStateOf(Offset.Zero) }
-    LaunchedEffect(scale) { onZoomingChanged(scale > 1.01f) }
-    DisposableEffect(Unit) {
-        onDispose { onZoomingChanged(false) }
-    }
-    Box(
-        modifier = modifier
-            .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.surfaceContainerLowest)
-            .pointerInput(item.uri) {
-                awaitEachGesture {
-                    awaitFirstDown(requireUnconsumed = false)
-                    do {
-                        val event = awaitPointerEvent()
-                        val pointerCount = event.changes.count { it.pressed }
-                        val shouldTransform = pointerCount >= 2 || scale > 1.01f
-                        if (shouldTransform) {
-                            val nextScale = (scale * event.calculateZoom()).coerceIn(1f, 6f)
-                            val pan = event.calculatePan()
-                            scale = nextScale
-                            offset = if (nextScale <= 1.01f) Offset.Zero else offset + pan
-                            event.changes.forEach { change ->
-                                if (change.positionChanged()) change.consume()
-                            }
-                        }
-                    } while (event.changes.any { it.pressed })
-                    if (scale <= 1.01f) {
-                        scale = 1f
-                        offset = Offset.Zero
-                    }
-                }
-            },
-        contentAlignment = Alignment.Center,
+    val zoom = rememberZoomState()
+    var intrinsic by remember(item.id) { mutableStateOf<Size?>(null) }
+    LaunchedEffect(zoom.isZoomed) { onZoomingChanged(zoom.isZoomed) }
+    DisposableEffect(Unit) { onDispose { onZoomingChanged(false) } }
+
+    val oversizedResult by produceState<Result<android.graphics.Bitmap?>?>(
+        initialValue = null,
+        item.id,
+        item.modifiedAt,
     ) {
-        val oversizedResult by produceState<Result<android.graphics.Bitmap?>?>(
-            initialValue = null,
-            item.id,
-            item.modifiedAt,
-        ) {
-            value = runCatching { viewModel.oversizedBitmap(item, item.relativePath) }
-        }
-        val oversizedBitmap = oversizedResult?.getOrNull()
-        val imageModifier = Modifier
-            .fillMaxSize()
-            .graphicsLayer {
-                scaleX = scale
-                scaleY = scale
-                translationX = offset.x
-                translationY = offset.y
+        value = runCatching { viewModel.oversizedBitmap(item, item.relativePath) }
+    }
+    val oversizedBitmap = oversizedResult?.getOrNull()
+
+    Zoomable(
+        state = zoom,
+        modifier = modifier,
+        intrinsicSize = intrinsic,
+    ) { contentModifier ->
+        when {
+            oversizedResult == null -> Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center,
+            ) { CircularProgressIndicator(color = Color.White) }
+
+            oversizedBitmap != null -> {
+                LaunchedEffect(oversizedBitmap) {
+                    intrinsic = Size(
+                        oversizedBitmap.width.toFloat(),
+                        oversizedBitmap.height.toFloat(),
+                    )
+                }
+                Image(
+                    bitmap = oversizedBitmap.asImageBitmap(),
+                    contentDescription = item.displayTitle,
+                    contentScale = ContentScale.Fit,
+                    modifier = contentModifier,
+                )
             }
-        if (oversizedResult == null) {
-            CircularProgressIndicator()
-        } else if (oversizedBitmap != null) {
-            Image(
-                bitmap = oversizedBitmap!!.asImageBitmap(),
-                contentDescription = item.displayTitle,
-                contentScale = ContentScale.Fit,
-                modifier = imageModifier,
-            )
-        } else {
-            AsyncImage(
+
+            else -> AsyncImage(
                 model = item.uri.toUri(),
                 contentDescription = item.displayTitle,
                 contentScale = ContentScale.Fit,
-                modifier = imageModifier,
+                modifier = contentModifier,
+                onState = { state ->
+                    state.painter?.intrinsicSize
+                        ?.takeIf { it.isSpecified && it.width > 0f && it.height > 0f }
+                        ?.let { size -> intrinsic = Size(size.width, size.height) }
+                },
             )
         }
     }

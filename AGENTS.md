@@ -114,7 +114,9 @@ A second, always-available test target is the phone's own storage (`/storage/emu
 - Device walkthroughs done on 2026-09-17 (Xiaomi 23127PN0CC, curated Library on phone storage): Inbox accept, derived-Group save, Group reorder, Series reorder with `manual` stamping, card actions, batch add-to-Series/add-to-Group, deep comparison, virtual merge, and reading the merged plan. Those runs found and fixed the missing `@Serializable` on projection types, the empty comparison candidate list and the unreachable merge button.
 - Also verified on a device (2026-09-17): Series drag handle, "clear numbering" (positions cleared, manual order kept) and rename.
 - Also verified on a device (2026-09-17, second pass): the Group editor's drag / set-cover / remove-member / rename (all in one save) and Series "remove member".
-- Still unverified on a device: drag handles on very long lists (auto-scroll while dragging is not implemented), and the full ~465 GiB E-drive inventory, which is the one step that needs the drive attached to the phone.
+- Verified on the emulator (Android 16 AVD, 2026-09-18): archive page decoding after the `ArchiveCache` ownership fix, and the zoom container through injected gestures (`pinch`, `doubleClick`, `swipe`).
+- Reader work still open: the comic reader (directory ImageSet + archive pages) still uses its own zoom implementation instead of `ui.components.Zoomable`, tap-to-hide controls and the "lock the current page while zoomed" behaviour are not wired, and a Series still reads as separate Works without a chapter list or automatic advance to the next chapter.
+- Still unverified on a device: drag handles on very long lists (auto-scroll while dragging is not implemented), and the full ~465 GiB E-drive inventory, which is the one step that needs the drive attached to the phone (the user has decided not to run it on the phone for now).
 
 ## Next implementation order
 

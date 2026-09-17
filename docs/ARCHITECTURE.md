@@ -186,6 +186,12 @@ An unchanged file reuses completed enrichment only when size and modified time s
 - Callers keep a streaming fallback for when no cached copy is available. `ComicInfoReader.inspectArchive(zip, …)`, `readArchivePages(zip, …)` and `MediaContentService`'s entry listing/decoding prefer the cached copy; a merged page plan passes the archive it actually references.
 - Because a cached copy is randomly accessible, reaching page N no longer reads the rest of the archive, and reading consecutive pages no longer re-reads the whole file per page.
 
+## Reader interaction
+
+- `ui.components.ZoomMath` is the pure geometry of a viewer: clamping (a fitted dimension is pinned to the centre, an overflowing one may move only within its overflow), centroid-anchored zoom (the content under the fingers stays there), double-tap targets, and fitted sizing. Unit tested without a device.
+- `ui.components.Zoomable` wraps the geometry in Compose. Its gesture loop only takes over once a second finger is down or the content is already zoomed, so while fitted a vertical drag stays with the surrounding list and continuous reading keeps working; it consumes changes only when it actually transforms. The backdrop is black and the content box has the fitted size, which is what makes clamping exact.
+- `ZoomableInteractionInstrumentedTest` injects real gestures (`pinch`, `doubleClick`, `swipe`) on a device: fitted content must not pan, double tap must toggle, a pinch must zoom within bounds, and a zoomed pan must stay inside the viewport. adb's `input` cannot produce a double tap or a pinch (each call starts a process), which is why these are Compose gesture tests.
+
 ## Media and cache budgets
 
 - directory/archive pages are loaded lazily;
