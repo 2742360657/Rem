@@ -472,6 +472,64 @@ class PortableMetadataStore(
     }
 
     /**
+     * Creates or replaces one Edition.
+     *
+     * Used for virtual merged Editions: the members are page-level references
+     * (`entry_path` inside a directory or archive) across several Assets, which is exactly
+     * what the model allows. Nothing here moves or rewrites media, and [prefer] can make the
+     * new Edition the Work's default in the same write instead of a second catalog rewrite.
+     */
+    fun upsertEdition(
+        libraryId: String,
+        edition: PortableEdition,
+        expectedRevision: Long? = null,
+        prefer: Boolean = false,
+    ): PortableEdition {
+        val catalog = loadCatalog(libraryId)
+        val existing = catalog.editions.firstOrNull { it.id == edition.id }
+        if (expectedRevision != null && existing != null && existing.revision != expectedRevision) {
+            throw RevisionConflictException(
+                "版本 ${existing.label ?: existing.id} 已被其他设备修改（磁盘 ${existing.revision}，本机 $expectedRevision）",
+            )
+        }
+        require(edition.assets.isNotEmpty()) { "Edition 至少需要一个来源" }
+        require(catalog.works.any { it.id == edition.workId }) { "Edition 必须属于一个已存在的 Work" }
+        val now = Instant.now().toString()
+        val replaced = edition.copy(
+            assets = edition.assets.mapIndexed { index, member ->
+                member.copy(sortIndex = member.sortIndex ?: index.toDouble())
+            },
+            revision = (existing?.revision ?: 0) + 1,
+            updatedAt = now,
+        )
+        val updated = catalog.copy(
+            schemaVersion = CURRENT_SCHEMA_VERSION,
+            revision = catalog.revision + 1,
+            updatedAt = now,
+            works = if (prefer) {
+                catalog.works.map { work ->
+                    if (work.id == edition.workId) {
+                        work.copy(
+                            preferredEditionId = replaced.id,
+                            revision = work.revision + 1,
+                            updatedAt = now,
+                        )
+                    } else {
+                        work
+                    }
+                }
+            } else {
+                catalog.works
+            },
+            editions = (catalog.editions.filterNot { it.id == edition.id } + replaced)
+                .sortedBy(PortableEdition::id),
+        )
+        validate(updated)
+        writeSafely(CATALOG_PATH, json.encodeToString(updated), "application/json")
+        return replaced
+    }
+
+    /**
      * Creates or replaces one Series in a single catalog write.
      *
      * Series membership is a user decision: when the app reorders or renames a series it also

@@ -1,16 +1,10 @@
 package dev.susnowy.gallery.metadata
 
-import dev.susnowy.gallery.library.LibraryDocument
-import dev.susnowy.gallery.library.LibraryDocumentAccess
 import dev.susnowy.gallery.model.MediaItem
 import dev.susnowy.gallery.model.MediaKind
 import dev.susnowy.gallery.model.PortableSeries
 import dev.susnowy.gallery.model.PortableSeriesMember
 import dev.susnowy.gallery.model.SourceKind
-import java.io.ByteArrayInputStream
-import java.io.ByteArrayOutputStream
-import java.io.InputStream
-import java.io.OutputStream
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -19,7 +13,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PortableSeriesStoreTest {
-    private val access = SeriesMemoryAccess()
+    private val access = MemoryLibraryAccess()
     private val store = PortableMetadataStore(access)
 
     private fun item(id: String) = MediaItem(
@@ -179,48 +173,4 @@ class PortableSeriesStoreTest {
             store.upsertSeries("library-id", series(workIds = listOf("work-1", "missing")))
         }
     }
-}
-
-private class SeriesMemoryAccess : LibraryDocumentAccess {
-    private val files = mutableMapOf<String, ByteArray>()
-    private val directories = mutableSetOf<String>()
-
-    override fun find(relativePath: String): LibraryDocument? = when {
-        relativePath in directories -> LibraryDocument(relativePath, relativePath.substringAfterLast('/'), true)
-        relativePath in files -> LibraryDocument(relativePath, relativePath.substringAfterLast('/'), false)
-        else -> null
-    }
-
-    override fun ensureDirectory(relativePath: String): LibraryDocument {
-        directories += relativePath
-        return LibraryDocument(relativePath, relativePath.substringAfterLast('/'), true)
-    }
-
-    override fun createFile(relativePath: String, mimeType: String): LibraryDocument {
-        files.putIfAbsent(relativePath, byteArrayOf())
-        return LibraryDocument(relativePath, relativePath.substringAfterLast('/'), false)
-    }
-
-    override fun openInput(document: LibraryDocument): InputStream =
-        ByteArrayInputStream(files.getValue(document.locator ?: document.key))
-
-    override fun openOutput(document: LibraryDocument, truncate: Boolean): OutputStream =
-        object : ByteArrayOutputStream() {
-            override fun close() {
-                files[document.locator ?: document.key] = toByteArray()
-                super.close()
-            }
-        }
-
-    override fun rename(document: LibraryDocument, displayName: String): Boolean {
-        val source = document.locator ?: document.key
-        val bytes = files.remove(source) ?: return false
-        val parent = source.substringBeforeLast('/', "")
-        val target = if (parent.isBlank()) displayName else "$parent/$displayName"
-        files[target] = bytes
-        return true
-    }
-
-    override fun delete(document: LibraryDocument): Boolean =
-        files.remove(document.locator ?: document.key) != null
 }

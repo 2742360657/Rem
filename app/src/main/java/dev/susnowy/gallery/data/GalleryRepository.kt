@@ -46,6 +46,18 @@ import dev.susnowy.gallery.model.derivedGroupId
 import dev.susnowy.gallery.model.roleForKind
 import dev.susnowy.gallery.model.toMediaGroup
 import dev.susnowy.gallery.model.PortableGroup
+import dev.susnowy.gallery.compare.EditionComparisonReport
+import dev.susnowy.gallery.compare.MergeManifest
+import dev.susnowy.gallery.compare.MergePlan
+import dev.susnowy.gallery.compare.MergeResult
+import dev.susnowy.gallery.compare.MergeSource
+import dev.susnowy.gallery.compare.PageComparison
+import dev.susnowy.gallery.library.PortableDocumentWriter
+import dev.susnowy.gallery.media.PageManifestService
+import dev.susnowy.gallery.model.EditionAssetRole
+import dev.susnowy.gallery.model.PortableAsset
+import dev.susnowy.gallery.model.PortableEdition
+import dev.susnowy.gallery.model.PortableEditionAsset
 import dev.susnowy.gallery.model.PortableGroupMember
 import dev.susnowy.gallery.model.PortableInboxDecision
 import dev.susnowy.gallery.model.PortableItemMetadata
@@ -59,6 +71,8 @@ import dev.susnowy.gallery.scanner.LibraryScanner
 import dev.susnowy.gallery.scanner.ScanDepth
 import dev.susnowy.gallery.scanner.ScanEnrichment
 import dev.susnowy.gallery.scanner.ScanResult
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import dev.susnowy.gallery.storage.DocumentTreeStorage
 import java.io.FileNotFoundException
 import java.security.MessageDigest
@@ -79,6 +93,10 @@ import kotlin.coroutines.coroutineContext
 
 class GalleryRepository(context: Context) {
     private val appContext = context.applicationContext
+    private val mergeManifestJson = Json {
+        prettyPrint = true
+        encodeDefaults = true
+    }
     private val database = GalleryDatabase(appContext)
     private val scanner = LibraryScanner()
     private val organizer = OrganizerService()
@@ -86,6 +104,7 @@ class GalleryRepository(context: Context) {
     private val systemMediaCatalog = SystemMediaCatalog(appContext)
     private val derivation = DerivationService()
     private val imageSetOrder = ImageSetOrderService()
+    private val pageManifests = PageManifestService()
     private val offlinePreviews = OfflinePreviewStore(appContext)
     private val progressWriteMutex = Mutex()
 
@@ -926,6 +945,158 @@ class GalleryRepository(context: Context) {
             }
         }
         database.applySeriesAssignment(libraryId, assignments, touched)
+    }
+
+    /**
+     * Compares the preferred Editions of two Works page by page.
+     *
+     * A quick comparison reads no page bytes at all: it lists directory pages and, for
+     * archives, performs the single sequential pass the streaming reader requires. A deep
+     * comparison adds a SHA-256 per page during that same pass (directories then cost one
+     * read per page). Either way the result is evidence — nothing is moved, rewritten or
+     * deleted, and the sources stay exactly as they are.
+     */
+    suspend fun compareWorks(
+        libraryId: String,
+        leftWorkId: String,
+        rightWorkId: String,
+        deep: Boolean,
+        onProgress: (String) -> Unit = {},
+    ): EditionComparisonReport = runOperation(if (deep) "正在按页比较（需要读取内容）…" else "正在快速比较…") {
+        onIo {
+            require(leftWorkId != rightWorkId) { "请选择两个不同的来源进行比较" }
+            val left = database.mediaItem(leftWorkId) ?: error("左侧作品不在本机索引中")
+            val right = database.mediaItem(rightWorkId) ?: error("右侧作品不在本机索引中")
+            require(left.libraryId == libraryId && right.libraryId == libraryId) {
+                "不能跨 Library 比较"
+            }
+            val storage = storageFor(requireLibrary(libraryId))
+            val leftManifest = pageManifests.manifest(
+                item = left,
+                storage = storage,
+                label = left.displayTitle,
+                hashPages = deep,
+            ) { pages, bytes ->
+                onProgress("${left.displayTitle}：$pages 页 / ${bytes / 1024 / 1024} MB")
+            }
+            val rightManifest = pageManifests.manifest(
+                item = right,
+                storage = storage,
+                label = right.displayTitle,
+                hashPages = deep,
+            ) { pages, bytes ->
+                onProgress("${right.displayTitle}：$pages 页 / ${bytes / 1024 / 1024} MB")
+            }
+            PageComparison.compare(leftManifest, rightManifest)
+        }
+    }
+
+    /**
+     * Writes a virtual merged Edition on [targetWorkId].
+     *
+     * The result is a page plan across the source Assets — no file is copied, rewritten or
+     * removed, and both original sources keep their own Edition. The same pair of sources
+     * always resolves to the same Edition id, so merging twice updates that Edition instead
+     * of creating a duplicate, and the evidence lands in `.gallery/imports/`.
+     */
+    suspend fun createMergedEdition(
+        libraryId: String,
+        targetWorkId: String,
+        report: EditionComparisonReport,
+    ): MediaItem = runOperation("正在生成虚拟合并版本…") {
+        onIo {
+            val target = database.mediaItem(targetWorkId) ?: error("目标作品不在本机索引中")
+            val storage = storageFor(requireLibrary(libraryId))
+            val store = PortableMetadataStore(storage)
+            val catalog = store.loadCatalog(libraryId)
+            val assetsByPath = catalog.assets.associateBy(PortableAsset::relativePath)
+            val plan = MergePlan.build(report)
+            val members = plan.mapIndexed { index, page ->
+                val asset = assetsByPath[page.containerPath]
+                    ?: error("合并计划引用了未知来源：${page.containerPath}")
+                PortableEditionAsset(
+                    assetId = asset.id,
+                    role = EditionAssetRole.PAGE,
+                    sortIndex = index.toDouble(),
+                    entryPath = page.entryPath,
+                )
+            }
+            require(members.isNotEmpty()) { "合并结果为空" }
+            val editionId = UUID.nameUUIDFromBytes(
+                "merge:$libraryId:$targetWorkId:${report.left.sourceId}:${report.right.sourceId}"
+                    .encodeToByteArray(),
+            ).toString()
+            val label = "合并版（${report.left.label} + ${report.right.label}）"
+            val saved = store.upsertEdition(
+                libraryId = libraryId,
+                edition = PortableEdition(
+                    id = editionId,
+                    workId = targetWorkId,
+                    label = label,
+                    assets = members,
+                    revision = 1,
+                    updatedAt = java.time.Instant.now().toString(),
+                ),
+                prefer = true,
+            )
+            writeMergeManifest(libraryId, storage, saved, targetWorkId, label, report)
+            val updated = target.copy(
+                revision = saved.revision,
+                coverPath = target.coverPath,
+            )
+            database.upsertMedia(updated)
+            refreshFromDatabase()
+            updated
+        }
+    }
+
+    private fun writeMergeManifest(
+        libraryId: String,
+        storage: DocumentTreeStorage,
+        edition: PortableEdition,
+        targetWorkId: String,
+        label: String,
+        report: EditionComparisonReport,
+    ) {
+        val manifest = MergeManifest(
+            schemaVersion = dev.susnowy.gallery.model.CURRENT_SCHEMA_VERSION,
+            libraryId = libraryId,
+            createdAt = java.time.Instant.now().toString(),
+            editionId = edition.id,
+            targetWorkId = targetWorkId,
+            label = label,
+            sources = listOf(report.left, report.right).map { source ->
+                MergeSource(
+                    workId = source.sourceId,
+                    assetPath = source.pages.firstOrNull()?.containerPath.orEmpty(),
+                    label = source.label,
+                    pages = source.pageCount,
+                    hashed = source.hashed,
+                    bytesRead = source.bytesRead,
+                    durationMs = source.durationMs,
+                )
+            },
+            result = MergeResult(
+                pages = edition.assets.size,
+                identical = report.identicalCount,
+                leftOnly = report.leftOnly.size,
+                rightOnly = report.rightOnly.size,
+                conflicting = report.conflictingCount,
+                unverified = report.unverifiedCount,
+                deep = report.deep,
+            ),
+        )
+        runCatching {
+            PortableDocumentWriter(storage).write(
+                ".gallery/imports/merge-${edition.id}.json",
+                mergeManifestJson.encodeToString(manifest),
+                "application/json",
+            )
+        }.onFailure { error ->
+            // The Edition is already committed; a missing evidence file must not look like a
+            // failed merge, but it is worth a log line.
+            RemLog.failure("GalleryRepository", "合并来源清单写入失败", error)
+        }
     }
 
     private fun mediaDecision(

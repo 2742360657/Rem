@@ -154,6 +154,14 @@ An unchanged file reuses completed enrichment only when size and modified time s
 - Search and facet viewers retain their originating result order.
 - Large UI collections are reconstructed from the local index rather than stored in Android saved state.
 
+## Edition comparison and virtual merge
+
+- `media.PageManifestService` turns one source (a Work's preferred Edition, resolved to pages) into an ordered `SourceManifest`. Directories cost one listing (plus one read per page only when hashing); archives cost exactly one sequential pass, because `ZipInputStream` cannot seek — hashing during that pass adds no I/O; single files cost one entry. Progress and cancellation are cooperatively checked per entry, and a session LRU caches manifests by (library, path, size, modified time, hashed).
+- `compare.PageComparison` is pure: it matches by content hash first and by normalized page name second, and never calls a same-name-same-size page "identical" when bytes were not read. `compare.MergePlan` builds the virtual reading order (left order preserved, right-only pages inserted before the next shared page). Both are unit-tested without Android.
+- `compare.MergeManifest` records the evidence of a merge and is written to `.gallery/imports/merge-<editionId>.json` (program-managed, never user truth).
+- `PortableMetadataStore.upsertEdition` writes a page-plan Edition in one atomic catalog write and can set it as the Work's preferred Edition in the same write. `GalleryRepository.createMergedEdition` derives a stable Edition id from (library, target Work, both sources), so re-merging updates one Edition; sources are never modified and nothing is deleted.
+- Device cost is surfaced, not hidden: the quick comparison reads no page bytes at all, and the deep comparison reads each source once.
+
 ## Media and cache budgets
 
 - directory/archive pages are loaded lazily;
