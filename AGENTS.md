@@ -113,13 +113,13 @@ A second, always-available test target is the phone's own storage (`/storage/emu
 - The archive cache has no UI entry yet (size/clear), and the real-device feel of page-by-page archive reading after the change is still unverified.
 - Device walkthroughs done on 2026-09-17 (Xiaomi 23127PN0CC, curated Library on phone storage): Inbox accept, derived-Group save, Group reorder, Series reorder with `manual` stamping, card actions, batch add-to-Series/add-to-Group, deep comparison, virtual merge, and reading the merged plan. Those runs found and fixed the missing `@Serializable` on projection types, the empty comparison candidate list and the unreachable merge button.
 - Also verified on a device (2026-09-17): Series drag handle, "clear numbering" (positions cleared, manual order kept) and rename.
-- Still unverified on a device: Series "remove member", the Group editor's own drag/cover/remove/rename/delete, and the full ~465 GiB E-drive inventory (needs the drive attached to the phone).
+- Also verified on a device (2026-09-17, second pass): the Group editor's drag / set-cover / remove-member / rename (all in one save) and Series "remove member".
+- Still unverified on a device: drag handles on very long lists (auto-scroll while dragging is not implemented), and the full ~465 GiB E-drive inventory, which is the one step that needs the drive attached to the phone.
 
 ## Next implementation order
 
-1. Test the current build against the actual removable Library (device + real E-drive), then decide whether inventory checkpoints and database paging are required.
-2. Do the same for the new editors and comparison on a real device (merged-plan reading cost, deep comparison timing, cancellation).
-3. Continue interaction polish: density options, back behaviour, and further contextual tools.
+1. Test the current build against the actual removable Library (device + real E-drive), then decide whether inventory checkpoints and database paging are required. This is the only remaining item that needs the user to attach the drive.
+2. Continue interaction polish: density options, back behaviour, drag auto-scroll for long member lists, archive-cache size/clear in settings.
 
 Do not start a broad UI rewrite before portable semantics are usable.
 
