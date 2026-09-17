@@ -370,6 +370,37 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
         "1",
     ).use { cursor -> if (cursor.moveToFirst()) mediaFromCursor(cursor) else null }
 
+    /**
+     * Reads several media rows in one query.
+     *
+     * Committing a completed enrichment batch re-reads the current row for every item in it;
+     * doing that one query per item would turn a batch of 24 into 24 extra provider round-trips
+     * on the very code path that has to stay cheap.
+     */
+    @Synchronized
+    fun mediaItems(itemIds: Collection<String>): Map<String, MediaItem> {
+        val ids = itemIds.distinct()
+        if (ids.isEmpty()) return emptyMap()
+        // SQLite's default host-parameter limit is 999; stay well below it so a larger batch
+        // (or a future one) cannot turn into "too many SQL variables".
+        return buildMap(ids.size) {
+            ids.chunked(MAX_QUERY_PARAMETERS).forEach { chunk ->
+                val selection = chunk.joinToString(",") { "?" }
+                readableDatabase.query(
+                    "media",
+                    null,
+                    "id IN ($selection)",
+                    chunk.toTypedArray(),
+                    null,
+                    null,
+                    null,
+                ).use { cursor ->
+                    cursor.mapRows(::mediaFromCursor).forEach { put(it.id, it) }
+                }
+            }
+        }
+    }
+
     @Synchronized
     fun discoveries(libraryId: String? = null): List<DiscoveredEntry> {
         val selection = libraryId?.let { "library_id = ?" }
@@ -1030,6 +1061,37 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
         )
     }
 
+    /** Reading progress for a series chapter list: one query instead of one per chapter. */
+    @Synchronized
+    fun progressFor(itemIds: Collection<String>): Map<String, PlaybackProgress> {
+        val ids = itemIds.distinct()
+        if (ids.isEmpty()) return emptyMap()
+        return buildMap(ids.size) {
+            ids.chunked(MAX_QUERY_PARAMETERS).forEach { chunk ->
+                val selection = chunk.joinToString(",") { "?" }
+                readableDatabase.query(
+                    "progress",
+                    null,
+                    "item_id IN ($selection)",
+                    chunk.toTypedArray(),
+                    null,
+                    null,
+                    null,
+                ).use { cursor ->
+                    cursor.mapRows { row ->
+                        PlaybackProgress(
+                            itemId = row.string("item_id"),
+                            page = row.int("page"),
+                            positionMs = row.long("position_ms"),
+                            finished = row.int("finished") != 0,
+                            lastOpenedAt = row.long("last_opened_at"),
+                        )
+                    }.forEach { put(it.itemId, it) }
+                }
+            }
+        }
+    }
+
     private fun LibraryRegistration.toValues() = ContentValues().apply {
         put("library_id", libraryId)
         put("name", name)
@@ -1171,5 +1233,8 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
         private const val ENRICHMENT_PENDING = "PENDING"
         private const val ENRICHMENT_COMPLETE = "COMPLETE"
         private const val ENRICHMENT_FAILED = "FAILED"
+
+        /** Below SQLite's default 999 host-parameter limit, with room for future predicates. */
+        private const val MAX_QUERY_PARAMETERS = 500
     }
 }

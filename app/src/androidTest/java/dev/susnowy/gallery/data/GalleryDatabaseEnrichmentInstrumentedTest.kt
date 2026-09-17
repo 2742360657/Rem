@@ -79,4 +79,47 @@ class GalleryDatabaseEnrichmentInstrumentedTest {
         assertEquals("abc", completed.contentHash)
         assertEquals(42, completed.pageCount)
     }
+
+    /**
+     * The commit path re-reads the row for every item in a completed batch. That read has to
+     * return what is on disk right now — including an edit the user made while the batch was
+     * reading media bytes — and it must do so in one query per chunk, not one per item.
+     */
+    @Test
+    fun batchReReadReturnsTheCurrentRowAfterAConcurrentEdit() {
+        val first = scanItem("downloads/a.cbz", "a")
+        val second = scanItem("downloads/b.cbz", "b")
+        val third = scanItem("downloads/c.cbz", "c")
+        database.replaceScannedMedia(
+            libraryId = libraryId,
+            items = listOf(first, second, third),
+            foundPaths = setOf(first.relativePath, second.relativePath, third.relativePath),
+            pendingEnrichment = setOf(first.relativePath, second.relativePath, third.relativePath),
+        )
+        // The user renames one Work while the batch is still reading bytes.
+        database.upsertMedia(
+            first.copy(displayTitle = "用户改的标题", favorite = true),
+        )
+
+        val current = database.mediaItems(listOf(first.id, second.id, third.id, "missing"))
+
+        assertEquals(3, current.size)
+        assertEquals("用户改的标题", current.getValue(first.id).displayTitle)
+        assertTrue(current.getValue(first.id).favorite)
+        // A row the batch no longer finds simply stays absent instead of failing the commit.
+        assertFalse(current.containsKey("missing"))
+    }
+
+    private fun scanItem(relativePath: String, title: String) = MediaItem(
+        id = UUID.randomUUID().toString(),
+        libraryId = libraryId,
+        relativePath = relativePath,
+        uri = "content://checkpoint/$title",
+        kind = MediaKind.IMAGE_SET,
+        domain = MediaDomain.WORKS,
+        sourceKind = SourceKind.ARCHIVE,
+        displayTitle = title,
+        size = 1_024,
+        modifiedAt = 1_700_000_000_000,
+    )
 }

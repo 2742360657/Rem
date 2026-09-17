@@ -27,6 +27,8 @@ import dev.susnowy.gallery.metadata.PortableInboxStore
 import dev.susnowy.gallery.metadata.PortableMetadataStore
 import dev.susnowy.gallery.metadata.FieldSource
 import dev.susnowy.gallery.metadata.MetadataField
+import dev.susnowy.gallery.metadata.mergeEdit
+import dev.susnowy.gallery.metadata.mergeEnrichment
 import dev.susnowy.gallery.metadata.withManualEdits
 import dev.susnowy.gallery.model.InboxDisposition
 import dev.susnowy.gallery.model.InboxTarget
@@ -543,11 +545,14 @@ class GalleryRepository(context: Context) {
         while (true) {
             val batch = database.pendingEnrichmentItems(libraryId, ENRICHMENT_BATCH_SIZE)
             if (batch.isEmpty()) break
-            val enriched = mutableListOf<MediaItem>()
+            // Reading media bytes is the expensive part and happens outside the portable write
+            // mutex: a long batch must never block a metadata edit or a trash action. The
+            // enrichment result is committed against the row read at commit time instead.
+            val enriched = mutableListOf<Pair<MediaItem, ScanEnrichment>>()
             batch.forEach { item ->
                 coroutineContext.ensureActive()
                 runCatching { scanner.enrich(storage, item, archives) }
-                    .onSuccess { result -> enriched += item.withEnrichment(result) }
+                    .onSuccess { result -> enriched += item to result }
                     .onFailure { error ->
                         if (error is CancellationException) throw error
                         failed++
@@ -556,8 +561,26 @@ class GalleryRepository(context: Context) {
                     }
             }
             if (enriched.isNotEmpty()) {
-                database.applyEnrichmentBatch(libraryId, enriched)
-                completed += enriched.size
+                // The batch was planned from a snapshot; the user may have edited the same item
+                // while its bytes were being read. Merging with the current row (and committing
+                // under the portable write mutex) keeps that edit's fields, so a finished batch
+                // can no longer roll the local projection back to the pre-edit value.
+                withPortableWrite {
+                    val current = database.mediaItems(enriched.map { (planned, _) -> planned.id })
+                    val merged = enriched.mapNotNull { (planned, result) ->
+                        val row = current[planned.id] ?: planned
+                        if (row.relativePath != result.relativePath) {
+                            RemLog.warn(
+                                SCAN_TAG,
+                                "补全结果对应的媒体行已改变，已跳过：${planned.relativePath}",
+                            )
+                            return@mapNotNull null
+                        }
+                        row.mergeEnrichment(planned, result)
+                    }
+                    if (merged.isNotEmpty()) database.applyEnrichmentBatch(libraryId, merged)
+                    completed += merged.size
+                }
             }
             _operation.value = "快速索引已可用；正在补全媒体信息 $completed/$initial" +
                 if (failed == 0) "" else "（失败 $failed）"
@@ -571,57 +594,16 @@ class GalleryRepository(context: Context) {
         return completed
     }
 
-    private fun MediaItem.withEnrichment(result: ScanEnrichment): MediaItem {
-        require(relativePath == result.relativePath)
-        val recognized = result.recognizedMetadata
-        val sources = fieldSources.toMutableMap()
-        fun manual(field: String): Boolean = FieldSource.isManual(sources[field])
-        recognized?.fieldSources.orEmpty().forEach { (field, source) ->
-            if (!manual(field)) sources[field] = source
-        }
-        val recognizedSeries = recognized?.series?.let { title ->
-            dev.susnowy.gallery.model.SeriesRef(
-                id = UUID.nameUUIDFromBytes("$libraryId:$title".encodeToByteArray()).toString(),
-                title = title,
-                sortIndex = recognized.sortIndex,
-                season = recognized.season,
-                episode = recognized.episode,
-                volume = recognized.volume,
-                chapter = recognized.chapter,
-            )
-        }
-        return copy(
-            contentHash = result.contentHash,
-            capturedAt = result.capturedAt ?: capturedAt,
-            latitude = result.latitude ?: latitude,
-            longitude = result.longitude ?: longitude,
-            pageCount = result.pageCount ?: pageCount,
-            displayTitle = if (!manual(MetadataField.DISPLAY_TITLE)) {
-                recognized?.title ?: displayTitle
-            } else {
-                displayTitle
-            },
-            authors = if (!manual(MetadataField.AUTHORS) && !recognized?.authors.isNullOrEmpty()) {
-                recognized?.authors.orEmpty()
-            } else {
-                authors
-            },
-            tags = if (!manual(MetadataField.TAGS)) {
-                (tags + recognized?.tags.orEmpty() +
-                    listOfNotNull(recognized?.language?.let { "language:$it" })).distinct()
-            } else {
-                tags
-            },
-            series = if (!manual(MetadataField.SERIES)) recognizedSeries ?: series else series,
-            fieldSources = sources,
-        )
-    }
-
     suspend fun updateMedia(updated: MediaItem): MediaItem = runOperation("正在保存元数据…") {
         withPortableWrite {
             val storage = storageFor(requireLibrary(updated.libraryId))
             val stored = database.mediaItem(updated.id)
-            val locked = updated.copy(fieldSources = updated.withManualEdits(stored))
+            // The editor works on a snapshot and may have been open while the scanner enriched
+            // the same item. Only the fields this edit actually changed are written, so a hash
+            // or page count that arrived in the meantime is not rolled back by saving a title.
+            val locked = stored
+                ?.let { current -> updated.mergeEdit(stored, current) }
+                ?: updated.copy(fieldSources = updated.withManualEdits(null))
             val portable = PortableMetadataStore(storage).saveItem(locked, locked.revision)
             // Editing a Work is also an Inbox decision: the suggestion is no longer pending,
             // and the decision has to survive this device's index.
@@ -1267,6 +1249,15 @@ class GalleryRepository(context: Context) {
     }
 
     suspend fun progress(itemId: String): PlaybackProgress? = onIo { database.progress(itemId) }
+
+    /**
+     * Progress for a whole series chapter list in one query.
+     *
+     * A series shelf asks for the reading state of every chapter at once; one query per chapter
+     * would make a long series visibly stutter while scrolling.
+     */
+    suspend fun progressFor(itemIds: Collection<String>): Map<String, PlaybackProgress> =
+        onIo { database.progressFor(itemIds) }
 
     suspend fun offlinePreview(item: MediaItem): java.io.File? =
         offlinePreviews.getOrCreate(item, storageFor(requireLibrary(item.libraryId)))
