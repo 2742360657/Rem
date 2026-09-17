@@ -122,6 +122,16 @@ Derived folder groups stay presentation-only inference until saved; after that t
 - Database v9 projects Series into a `series` table (`members_json`, disposable), rebuilt from the catalog after attach and scan; `MediaSeries` is what the editor edits.
 - UI: `漫画 / 阅读 → 系列书架 → 编辑系列` (`SeriesEditor`) does rename, batch add/remove, reordering and numbering reset, committed by one explicit save. The picker is the shared `WorkPickerDialog`.
 - `ui.components.DragReorder` provides long-press drag reordering for fixed-height rows (`ReorderableRow`): the step arithmetic (`reorderStep`) is pure and unit-tested, the gesture only edits the editor's local list, and the up/down plus move-to-index paths stay available and produce the same order.
+- `DragReorderState` also carries the auto-scroll: while a row is dragged, `dragAutoScrollSpeed`/`dragAutoScrollDelta` (pure, unit-tested) scroll the enclosing `LazyListState` when the finger is held near an edge, and the dragged row is displaced by the drag offset plus the applied scroll so it follows the list.
+
+## Series reading
+
+- `ui.SeriesReading` is the pure reading state of one ordered chapter list: `SeriesChapter` (progress, finished, label), `SeriesReading.entry` for the "continue reading" rule (an opened-but-unfinished chapter wins, then the first unread one, then the first chapter again) and `nextAfter` for the chapter link.
+- Opening a Series shows `ui.screens.SeriesChapterList` instead of a work grid: every chapter with its position, numbering and reading state, a whole-series progress bar, a "continue reading" entry and a way into the series editor.
+- `GalleryUiState.readerQueue` remembers the ordered Works the open reader belongs to, so "next chapter" means "the next entry of the list I opened from". Opening a single Work from search keeps a one-entry queue and therefore offers no chapter link.
+- The reader shows an end-of-chapter footer ("本话已读完 / 阅读下一话") and can advance automatically; the automatic hand-over only fires after the reader reaches the end following the restored position, so reopening a chapter does not push the reader onwards.
+- Whether a chapter end continues into the next one is a device-local preference (`auto_advance_chapters`), not a portable decision.
+
 
 ## Library initialization and writes
 
@@ -151,10 +161,13 @@ Hashes, archive manifests, ComicInfo, capture time, and coordinates enter a loca
 
 An unchanged file reuses completed enrichment only when size and modified time still match. Changed content is reopened. Automatic hashes stop above 64 MiB unless a user-selected operation requires them.
 
+Reading media bytes happens outside the portable-write mutex, so a long batch never blocks a metadata edit or a trash action. The batch is therefore committed by **merging into the row read at commit time** (`MediaItem.mergeEnrichment`, pure and unit-tested): `manual` fields are never touched, everything else is filled from the recognition result, and the batch re-reads its rows in one query (`GalleryDatabase.mediaItems`). `updateMedia` applies the same rule in the other direction (`mergeEdit`): the editor writes only the fields it actually changed, so a hash or page count that arrived meanwhile is not rolled back. Path-derived recognition for a directory image set is recomputed on every scan because it reads no media bytes; only the byte-level ComicInfo read is skipped while the directory is known to be unchanged.
+
+
 ## Runtime presentation
 
 - `MediaItem` is the current SQLite/UI projection of a preferred Edition and its Work.
-- The Series shelf is derived from normalized Series projected back to `SeriesRef`.
+- The Series shelf is derived from normalized Series projected back to `SeriesRef`, and opening a shelf shows its chapter list rather than a plain work grid.
 - Groups are read from the device projection of `catalog.json`; derived mixed folders remain presentation-only until the user saves one.
 - Search and facet viewers retain their originating result order.
 - Large UI collections are reconstructed from the local index rather than stored in Android saved state.
@@ -193,9 +206,12 @@ An unchanged file reuses completed enrichment only when size and modified time s
 
 ## Reader interaction
 
-- `ui.components.ZoomMath` is the pure geometry of a viewer: clamping (a fitted dimension is pinned to the centre, an overflowing one may move only within its overflow), centroid-anchored zoom (the content under the fingers stays there), double-tap targets, and fitted sizing. Unit tested without a device.
-- `ui.components.Zoomable` wraps the geometry in Compose. Its gesture loop only takes over once a second finger is down or the content is already zoomed, so while fitted a vertical drag stays with the surrounding list and continuous reading keeps working; it consumes changes only when it actually transforms. The backdrop is black and the content box has the fitted size, which is what makes clamping exact.
-- `ZoomableInteractionInstrumentedTest` injects real gestures (`pinch`, `doubleClick`, `swipe`) on a device: fitted content must not pan, double tap must toggle, a pinch must zoom within bounds, and a zoomed pan must stay inside the viewport. adb's `input` cannot produce a double tap or a pinch (each call starts a process), which is why these are Compose gesture tests.
+- `ui.components.ZoomMath` is the pure geometry of a viewer: clamping (a fitted dimension is pinned to the centre, an overflowing one may move only within its overflow), centroid-anchored zoom (the content under the fingers stays there), double-tap targets, fitted sizing, the resting transform per placement, and the visible-slice pan rule. Unit tested without a device.
+- Two placements share it: `ZoomPlacement.FIT` (a photo rests with its whole frame visible) and `ZoomPlacement.WIDTH` (a comic page rests filling the window width, anchored at the top). The resting scale is therefore not always 1, and `ZoomState.isZoomed` compares against the resting scale of the current placement instead of a literal 1.
+- Continuous comic reading puts every page in a scrolling list, so a page can be several times taller than the window. `panWithinWindow` clamps a pan to the part of the page that is currently on screen (`visibleSliceOf` derives it from `LazyListState.layoutInfo`), which is what stops a zoomed page from being dragged into empty space above or below the visible slice.
+- `ui.components.Zoomable` wraps the geometry in Compose. Its gesture loop only takes over once a second finger is down or the content is already zoomed, so while at rest a vertical drag stays with the surrounding list and continuous reading keeps working; it consumes changes only when it actually transforms. The backdrop is black and the content box is sized by the placement, which is what makes clamping exact.
+- `ZoomableInteractionInstrumentedTest` injects real gestures (`pinch`, `doubleClick`, `swipe`) on a device: fitted content must not pan, double tap must toggle, a pinch must zoom within bounds, a zoomed pan must stay inside the viewport, and — for a width-filled page — resting must not pan, double tap must toggle, and a zoomed pan must stay inside the visible slice. adb's `input` cannot produce a double tap or a pinch (each call starts a process), which is why these are Compose gesture tests.
+
 
 ## Media and cache budgets
 

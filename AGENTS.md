@@ -111,22 +111,21 @@ A second, always-available test target is the phone's own storage (`/storage/emu
 - Edition comparison and virtual merge are wired end to end (quick/deep comparison, report, page-plan Edition, `.gallery/imports/` evidence, reader follows the plan) and were walked through on a device on 2026-09-17; pixel-level (re-encode) matching is deliberately not implemented.
 - Initial inventory is still one atomic traversal; only enrichment is resumable.
 - `refreshFromDatabase()` still materializes the full media table.
-- Enrichment reads media outside the portable-write mutex and currently applies the `MediaItem` snapshot captured before that read. If the user edits the same item meanwhile, the completed batch can temporarily overwrite the newer SQLite projection (portable truth remains intact and a rescan restores it). Re-read the current row immediately before merging/applying an enrichment result; do not hold the mutex during media I/O.
 - Real E-drive scanning and mass video-preview behavior have not been validated with the latest build.
 - A few decoder formats can display through Coil but cannot generate the BitmapFactory-based offline JPEG.
 - Archive cache size/clear was walked through on the Android 16 emulator on 2026-09-18 (16-byte private fixture: 1 file/16 B -> clear -> 0/0 with snackbar). The real-device feel of long page-by-page archive reading is still unverified.
 - Device walkthroughs done on 2026-09-17 (Xiaomi 23127PN0CC, curated Library on phone storage): Inbox accept, derived-Group save, Group reorder, Series reorder with `manual` stamping, card actions, batch add-to-Series/add-to-Group, deep comparison, virtual merge, and reading the merged plan. Those runs found and fixed the missing `@Serializable` on projection types, the empty comparison candidate list and the unreachable merge button.
 - Also verified on a device (2026-09-17): Series drag handle, "clear numbering" (positions cleared, manual order kept) and rename.
 - Also verified on a device (2026-09-17, second pass): the Group editor's drag / set-cover / remove-member / rename (all in one save) and Series "remove member".
-- Verified on the emulator (Android 16 AVD, 2026-09-18): archive page decoding after the `ArchiveCache` ownership fix, and the zoom container through injected gestures (`pinch`, `doubleClick`, `swipe`).
-- Reader work still open: the comic reader (directory ImageSet + archive pages) already toggles controls on tap and disables list scrolling while one page is zoomed, but still uses its own zoom implementation instead of the tested `ui.components.Zoomable`; it therefore lacks the shared double-tap and exact clamping behaviour. A Series has an ordered Work list but no automatic advance to the next chapter.
-- Still unverified on a device: drag handles on very long lists (auto-scroll while dragging is not implemented), and the full ~465 GiB E-drive inventory, which is the one step that needs the drive attached to the phone (the user has decided not to run it on the phone for now).
+- Verified on the emulator (Android 16 AVD, 2026-09-18): archive page decoding after the `ArchiveCache` ownership fix; the zoom container through injected gestures (`pinch`, `doubleClick`, `swipe`), including the width-filled comic placement; and the full Series flow on a 5-chapter fixture — chapter list with per-chapter progress, continue entry, automatic advance into the next chapter, end-of-chapter footer when advance is off, and a directory ImageSet chapter that used to fall out of its series.
+- Enrichment now commits by merging into the row re-read at commit time (`MediaItem.mergeEnrichment`) with media I/O outside the portable write mutex, and `updateMedia` merges the other way (`mergeEdit`), so a finished batch can no longer roll the projection back over an edit made while it ran. Locked by `EnrichmentMergeTest` and the batch re-read case in `GalleryDatabaseEnrichmentInstrumentedTest`.
+- Still unverified on a device: drag auto-scroll on very long lists (implemented and unit-tested for the geometry, felt only on the emulator), and the full ~465 GiB E-drive inventory, which is the one step that needs the drive attached to the phone (the user has decided not to run it on the phone for now).
 
 ## Next implementation order
 
 1. When the user is ready, test the current build against the actual removable Library (device + real E-drive), then decide whether inventory checkpoints and database paging are required. This is the only remaining item that needs the drive attached to the phone.
-2. Complete Series reading (progress/continue entry and controlled next-chapter advance), then unify comic-page zoom with `ui.components.Zoomable`.
-3. Continue interaction polish: density options, back behaviour and drag auto-scroll for long member lists.
+2. Continue interaction polish: density options, back behaviour, and reading-readiness details surfaced by real use (for example knowing a page's aspect ratio before it loads, so a comic page does not resize once decoded).
+3. Validate the reader and reader-adjacent flows on the real device with the removable Library attached.
 
 Do not start a broad UI rewrite before portable semantics are usable.
 
