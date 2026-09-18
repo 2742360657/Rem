@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ListItem
@@ -37,6 +38,7 @@ fun WorkPickerDialog(
     title: String = "添加成员",
 ) {
     var query by remember { mutableStateOf("") }
+    val listState = rememberLazyListState()
     var picked by remember { mutableStateOf(emptyList<String>()) }
     val shown = remember(candidates, query) {
         val trimmed = query.trim()
@@ -72,7 +74,8 @@ fun WorkPickerDialog(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(vertical = 6.dp),
                 )
-                LazyColumn(modifier = Modifier.fillMaxWidth()) {
+                ListPositionButton(listState, shown.size)
+                LazyColumn(state = listState, modifier = Modifier.fillMaxWidth()) {
                     itemsIndexed(shown, key = { _, item -> item.id }) { _, item ->
                         ListItem(
                             headlineContent = {

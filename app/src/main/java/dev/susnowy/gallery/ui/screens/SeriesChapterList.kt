@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
@@ -53,6 +54,7 @@ import dev.susnowy.gallery.ui.GalleryViewModel
 import dev.susnowy.gallery.ui.SeriesChapter
 import dev.susnowy.gallery.ui.SeriesReading
 import dev.susnowy.gallery.ui.components.MediaThumbnail
+import dev.susnowy.gallery.ui.components.ListPositionButton
 
 /**
  * The chapter list of one Series.
@@ -74,6 +76,7 @@ fun SeriesChapterList(
     onEditSeries: () -> Unit,
 ) {
     val ordered = remember(chapters) { chapters }
+    val listState = rememberLazyListState()
     val progressRevision by viewModel.progressRevision.collectAsState()
     val progress by produceState<Map<String, PlaybackProgress>>(
         initialValue = emptyMap(),
@@ -109,6 +112,7 @@ fun SeriesChapterList(
                     }
                 },
                 actions = {
+                    ListPositionButton(listState, entries.size)
                     if (series != null) {
                         IconButton(onClick = onEditSeries) {
                             Icon(Icons.Rounded.Edit, contentDescription = "编辑系列")
@@ -167,6 +171,7 @@ fun SeriesChapterList(
                 }
             }
             LazyColumn(
+                state = listState,
                 modifier = Modifier.weight(1f),
                 contentPadding = PaddingValues(bottom = 24.dp),
             ) {

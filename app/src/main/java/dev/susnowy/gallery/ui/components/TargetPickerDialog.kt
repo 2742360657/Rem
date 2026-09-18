@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
@@ -43,6 +44,7 @@ fun TargetPickerDialog(
     emptyText: String = "还没有可选择的项目",
 ) {
     var query by remember { mutableStateOf("") }
+    val listState = rememberLazyListState()
     val shown = remember(options, query) {
         val trimmed = query.trim()
         if (trimmed.isEmpty()) {
@@ -74,7 +76,8 @@ fun TargetPickerDialog(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(vertical = 6.dp),
                 )
-                LazyColumn(modifier = Modifier.fillMaxWidth()) {
+                ListPositionButton(listState, shown.size)
+                LazyColumn(state = listState, modifier = Modifier.fillMaxWidth()) {
                     itemsIndexed(shown, key = { _, option -> option.id }) { _, option ->
                         ListItem(
                             headlineContent = {

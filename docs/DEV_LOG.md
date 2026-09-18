@@ -6,6 +6,12 @@
 
 条目按时间倒序。同一问题的后续进展追加到原条目，不另起新条。
 
+## 2026-09-19：章节及关系选择列表快速定位
+
+- R07/R08：ListPositionButton 复用已有 PositionJumpDialog，接入 SeriesChapterList、WorkPickerDialog、TargetPickerDialog。章节的 LazyListState 保持可保存；定位使用当前过滤结果的顺序，不增删成员或改变便携关系。
+- API 36 三项设备测试通过：150 章跳第 100 章后打开/返回保留锚点，添加第 100 项后过滤并添加第 150 项保持原选择，目标列表定位第 120 项返回正确稳定 ID。初次测试误匹配搜索输入框与同名结果行，限定非可编辑结果节点后通过。
+- 尚未覆盖全部长屏幕，后续继续 Inbox、分组/系列编辑器、分类及设置等入口。
+
 ## 2026-09-19：漫画位置恢复、末页跳转与初始布局
 
 - 实际 ImageSetReader 设备测试复现初始化位置第 9 页被 startPage 拉回第 1 页；代码虽传入 positionInitialized，却未在定位时使用。现保留已初始化的 LazyListState 和像素偏移，显式跳页才重设位置。
