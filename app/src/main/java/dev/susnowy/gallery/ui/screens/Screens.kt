@@ -736,9 +736,15 @@ private fun WorksLibraryScreen(
         // bar) and brings its own toolbar.
         val editableSeries = selectedSeries.key.removePrefix("series:")
             .let { seriesId -> series.firstOrNull { it.id == seriesId } }
+        // Reading order is the Series' own order, never the grid's current sort: "next chapter"
+        // and the chapter numbering both follow this list, so a recently added chapter must not
+        // jump to the end just because the shelf was sorted by modification time.
+        val orderedChapters = remember(selectedSeries.items) {
+            SeriesPresentation.orderEntries(selectedSeries.items)
+        }
         SeriesChapterList(
             title = selectedSeries.title,
-            chapters = selectedSeries.items,
+            chapters = orderedChapters,
             series = editableSeries,
             viewModel = viewModel,
             onBack = { selectedSeriesKey = null },

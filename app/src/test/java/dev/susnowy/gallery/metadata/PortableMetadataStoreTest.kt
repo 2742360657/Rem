@@ -262,8 +262,21 @@ class PortableMetadataStoreTest {
         assertEquals(2, catalog.assets.size)
         assertEquals(2, catalog.works.size)
         assertEquals(2, catalog.editions.size)
-        assertEquals("series-a", catalog.series.single().id)
-        assertEquals(listOf("other-work", "old-work"), catalog.series.single().members.map { it.workId })
+        // v3 carried a SeriesRef per item and matched by title; v4 gives every Series a stable id,
+        // so two differently identified series stay two entities even when their names match.
+        assertEquals(2, catalog.series.size)
+        assertEquals(
+            listOf("series-a", "series-z"),
+            catalog.series.map { it.id }.sorted(),
+        )
+        assertEquals(
+            listOf("other-work"),
+            catalog.series.first { it.id == "series-a" }.members.map { it.workId },
+        )
+        assertEquals(
+            listOf("old-work"),
+            catalog.series.first { it.id == "series-z" }.members.map { it.workId },
+        )
         assertEquals("Works/old.cbz", catalog.items.first { it.id == "old-work" }.relativePath)
         assertEquals("old-work", legacyStore.loadState("library-id").progress.single().itemId)
         assertFalse(seeded.read(PortableMetadataStore.CATALOG_PATH)!!.contains("\"items\""))

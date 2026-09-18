@@ -173,4 +173,29 @@ class PortableSeriesStoreTest {
             store.upsertSeries("library-id", series(workIds = listOf("work-1", "missing")))
         }
     }
+
+    /**
+     * Two Series may legitimately share a name. Saving an edit of one of them must key on the id,
+     * or the other one's members would be silently pulled into it.
+     */
+    @Test
+    fun savingAWorkKeepsSameNamedSeriesApart() {
+        seedWorks()
+        val first = series(title = "同名系列", workIds = listOf("work-1"))
+        val second = series(title = "同名系列", workIds = listOf("work-2")).copy(id = "series-2")
+        store.upsertSeries("library-id", first)
+        store.upsertSeries("library-id", second)
+
+        // The Work already carries revision 1 from seeding; editing it must not be mistaken for a
+        // concurrent change.
+        store.saveItem(
+            item("work-1").copy(series = dev.susnowy.gallery.model.SeriesRef("series-1", "同名系列", chapter = 3.0)),
+            expectedRevision = 1,
+        )
+
+        val reloaded = store.loadCatalog("library-id").series.sortedBy { it.id }
+        assertEquals(2, reloaded.size)
+        assertEquals(listOf("work-1"), reloaded.first { it.id == "series-1" }.members.map { it.workId })
+        assertEquals(listOf("work-2"), reloaded.first { it.id == "series-2" }.members.map { it.workId })
+    }
 }

@@ -87,6 +87,27 @@ class SeriesPresentationTest {
         chapter = chapter,
     )
 
+    /**
+     * The chapter list must not inherit the work grid's current sort. A chapter that was just
+     * added has the newest modification time, and taking the grid order would put it last — which
+     * is also the order "next chapter" follows.
+     */
+    @Test
+    fun anOrderedChapterListIgnoresTheGridsRecencyOrder() {
+        val recentFirst = listOf(
+            item("chapter-6", "New", series(chapter = 6.0)),
+            item("chapter-1", "One", series(chapter = 1.0)),
+            item("chapter-2", "Two", series(chapter = 2.0)),
+        )
+
+        val ordered = SeriesPresentation.orderEntries(recentFirst)
+
+        assertEquals(
+            listOf("chapter-1", "chapter-2", "chapter-6"),
+            ordered.map(MediaItem::id),
+        )
+    }
+
     private fun item(id: String, title: String, series: SeriesRef?) = MediaItem(
         id = id,
         libraryId = "library-id",
