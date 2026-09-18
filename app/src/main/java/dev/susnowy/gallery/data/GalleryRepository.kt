@@ -457,6 +457,57 @@ class GalleryRepository(context: Context) {
                 )
                 scanned += item
             }
+            // Portable truth is the source of the projection. Iterating only the files this
+            // traversal happened to find would let a missing or not-yet-copied subtree delete
+            // every Work, Edition, Group, and Series decision that lives in `.gallery/`.
+            // A Catalog-only row is marked missing instead of being dropped, so a Library
+            // becomes usable the moment its portable documents are readable.
+            result.candidates.mapTo(foundPaths) { it.relativePath }
+            catalog.items.asSequence()
+                .filter { it.relativePath !in foundPaths }
+                .forEach { metadata ->
+                    val decision = inbox.forWork(metadata.id, metadata.relativePath)
+                    val trashEntry = state.trash.firstOrNull { it.itemId == metadata.id }
+                    scanned += MediaItem(
+                        id = metadata.id,
+                        libraryId = libraryId,
+                        relativePath = metadata.relativePath,
+                        uri = "",
+                        kind = metadata.type,
+                        domain = metadata.domain ?: MediaDomain.WORKS,
+                        sourceKind = metadata.source,
+                        displayTitle = metadata.displayTitle,
+                        originalTitle = metadata.originalTitle,
+                        mimeType = null,
+                        size = 0,
+                        modifiedAt = 0,
+                        contentHash = metadata.contentHash,
+                        capturedAt = null,
+                        latitude = null,
+                        longitude = null,
+                        pageCount = null,
+                        authors = metadata.authors,
+                        tags = metadata.tags,
+                        collections = metadata.collections,
+                        series = metadata.series,
+                        coverPath = metadata.coverPath,
+                        secondaryPath = metadata.secondaryPath,
+                        favorite = metadata.favorite,
+                        // A Catalog row is already an accepted decision, so it is never pending.
+                        // `inbox.forWork` is empty for every Work the user has already decided on,
+                        // and treating "no pending decision" as "still pending" would move the whole
+                        // Library back into Inbox.
+                        inInbox = false,
+                        inboxDisposition = decision?.disposition,
+                        trashed = trashEntry != null,
+                        deletedAt = trashEntry?.deletedAt?.let(java.time.Instant::parse)?.toEpochMilli(),
+                        // The Work and its human decisions are intact; only the media bytes are
+                        // out of reach on this device right now.
+                        needsRepair = true,
+                        revision = metadata.revision,
+                        fieldSources = metadata.fieldSources,
+                    )
+                }
             // One transaction for the whole scan: committing per row would flush the WAL
             // once per candidate, which dominates indexing time on a large Library.
             database.replaceScannedMedia(
