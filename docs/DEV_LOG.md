@@ -6,6 +6,12 @@
 
 条目按时间倒序。同一问题的后续进展追加到原条目，不另起新条。
 
+## 2026-09-19：归档页复用尺寸探测预留布局
+
+- R07/R11：归档解码原有 bounds 阶段只服务降采样，UI 仍用固定占位。新增可选尺寸回调贯通 MediaContentService、Repository、ViewModel、DecodedComicPage；命中位图缓存也报告尺寸，冷解码复用原有探测，无额外归档读取。页面已知比例按身份保存。
+- Windows / Java 17：305 单测、lint、debug/test APK、API 36 九项 ArchiveBitmapIdentity/ComicPageRecovery/ReaderPosition 通过。合成 ZIP 检查 16×16 回调；挂起返回位图的组件测试验证 1:2 比例在加载与完成时高度一致。
+- 无便携/真实媒体变更。首次尺寸未知占位仍会变化，缓存降采样尺寸可能有细小比例舍入；归档 EXIF 旋转仍未归一化，不能称全部图片方向已支持。
+
 ## 2026-09-19：归档解码传播取消并检查读取边界
 
 - R11：bounds 的 runCatching 原先会把 CancellationException 记为读取失败；正常返回后还可能进入下一阶段。现显式传播取消，尺寸探测/像素解码/缓存之间检查任务状态，缓存 ZipFile 与流式回退均接入 CancellableInputStream，在底层 read/skip 前后检查取消。

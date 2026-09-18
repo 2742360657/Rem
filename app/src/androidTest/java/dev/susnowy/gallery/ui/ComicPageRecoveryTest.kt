@@ -1,6 +1,9 @@
 package dev.susnowy.gallery.ui
 
 import android.graphics.Bitmap
+import androidx.compose.foundation.layout.width
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.*
@@ -24,6 +27,30 @@ class ComicPageRecoveryTest {
     private val app = ApplicationProvider.getApplicationContext<GalleryApplication>()
     private val file = File(app.cacheDir, "comic-retry-${UUID.randomUUID()}.png")
     @After fun clean() { file.delete() }
+
+    @Test fun archiveDimensionsReserveHeightBeforeDecodeCompletes() {
+        val gate = CompletableDeferred<Bitmap?>()
+        val bitmap = Bitmap.createBitmap(80, 160, Bitmap.Config.ARGB_8888)
+        var width = 0
+        var height = 0
+        rule.setContent { MaterialTheme {
+            androidx.compose.foundation.layout.Column(
+                androidx.compose.ui.Modifier
+                    .then(androidx.compose.ui.Modifier.width(100.dp))
+                    .onSizeChanged { width = it.width; height = it.height },
+            ) {
+                DecodedComicPage("dimensions", "archive") { dimensions ->
+                    dimensions(dev.susnowy.gallery.media.ComicPageDimensions(80, 160))
+                    gate.await()
+                }
+            }
+        } }
+        rule.waitUntil(5_000) { width > 0 && height == width * 2 }
+        val before = height
+        gate.complete(bitmap)
+        rule.onNodeWithContentDescription("archive").assertIsDisplayed()
+        rule.runOnIdle { assertEquals(before, height) }
+    }
 
     @Test fun directPageRetriesSameRequestAfterFileBecomesAvailable() {
         val request = ImageRequest.Builder(app).data(file).build()

@@ -65,7 +65,10 @@ class ArchiveBitmapIdentityTest {
         val second = library("second")
         write(first, Color.RED)
         write(second, Color.BLUE)
-        val red = requireNotNull(service.decodeArchivePage(work("first"), "001.png", first, 100, 100))
+        var dimensions: ComicPageDimensions? = null
+        val red = requireNotNull(service.decodeArchivePage(work("first"), "001.png", first, 100, 100,
+            onDimensions = { dimensions = it }))
+        assertEquals(ComicPageDimensions(16, 16), dimensions)
         assertEquals(Color.RED, red.getPixel(0, 0))
         assertSame(red, service.decodeArchivePage(work("first"), "001.png", first, 100, 100))
         assertEquals(Color.BLUE, requireNotNull(service.decodeArchivePage(work("second"), "001.png", second, 100, 100)).getPixel(0, 0))

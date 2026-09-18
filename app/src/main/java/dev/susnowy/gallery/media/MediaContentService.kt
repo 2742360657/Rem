@@ -82,6 +82,7 @@ class MediaContentService(
         targetWidth: Int,
         targetHeight: Int,
         archivePath: String = item.relativePath,
+        onDimensions: (ComicPageDimensions) -> Unit = {},
     ): Bitmap? = withContext(Dispatchers.IO) {
         // A merged Edition may read another archive whose version differs from its Work.
         val owner = if (archivePath == item.relativePath) item else {
@@ -92,10 +93,16 @@ class MediaContentService(
             owner.libraryId, archivePath, owner.size, owner.modifiedAt,
             entryName, targetWidth, targetHeight,
         )
-        archiveBitmapCache.get(cacheKey)?.let { return@withContext it }
+        archiveBitmapCache.get(cacheKey)?.let {
+            onDimensions(ComicPageDimensions(it.width, it.height))
+            return@withContext it
+        }
 
         archiveDecodeMutex.withLock {
-            archiveBitmapCache.get(cacheKey)?.let { return@withLock it }
+            archiveBitmapCache.get(cacheKey)?.let {
+                onDimensions(ComicPageDimensions(it.width, it.height))
+                return@withLock it
+            }
             val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             val readSucceeded = runCatching {
                 decodeArchiveEntry(archivePath, entryName, storage, bounds, owner)
@@ -115,6 +122,8 @@ class MediaContentService(
                 )
                 return@withLock null
             }
+            onDimensions(ComicPageDimensions(bounds.outWidth, bounds.outHeight))
+            coroutineContext.ensureActive()
             val options = BitmapFactory.Options().apply {
                 inSampleSize = calculateSampleSize(bounds.outWidth, bounds.outHeight, targetWidth, targetHeight)
                 inPreferredConfig = Bitmap.Config.RGB_565

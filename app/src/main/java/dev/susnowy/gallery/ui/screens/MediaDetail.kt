@@ -114,6 +114,7 @@ import coil3.request.ImageRequest
 import coil3.size.Precision
 import coil3.SingletonImageLoader
 import dev.susnowy.gallery.media.ImagePage
+import dev.susnowy.gallery.media.ComicPageDimensions
 import dev.susnowy.gallery.media.readComicPageDimensions
 import dev.susnowy.gallery.media.comicPreloadOrder
 import dev.susnowy.gallery.media.preloadComicPages
@@ -1441,26 +1442,33 @@ private fun ArchiveComicPage(
     DecodedComicPage(
         identity = listOf(item.libraryId, item.id, item.modifiedAt, item.size, entryName, archivePath),
         description = entryName,
-    ) {
+    ) { onDimensions ->
         viewModel.archiveBitmap(item, entryName, COMIC_PAGE_TARGET_WIDTH, COMIC_PAGE_TARGET_HEIGHT,
-            archivePath = archivePath)
+            archivePath = archivePath, onDimensions = onDimensions)
     }
 }
 
 @Composable
-internal fun DecodedComicPage(identity: Any, description: String, load: suspend () -> android.graphics.Bitmap?) {
+internal fun DecodedComicPage(
+    identity: Any,
+    description: String,
+    load: suspend ((ComicPageDimensions) -> Unit) -> android.graphics.Bitmap?,
+) {
     var retry by remember(identity) { mutableIntStateOf(0) }
+    var aspect by rememberSaveable(identity) { mutableFloatStateOf(0f) }
     var result by remember(identity, retry) { mutableStateOf<Result<android.graphics.Bitmap?>?>(null) }
     val currentLoad by rememberUpdatedState(load)
     LaunchedEffect(identity, retry) {
-        result = try { Result.success(currentLoad()) }
+        result = try { Result.success(currentLoad { aspect = it.aspectRatio }) }
         catch (cancelled: CancellationException) { throw cancelled }
         catch (error: Exception) { Result.failure(error) }
     }
-    Box(modifier = Modifier.fillMaxWidth()) {
+    Box(modifier = if (aspect > 0f) Modifier.fillMaxWidth().aspectRatio(aspect) else Modifier.fillMaxWidth()) {
         val bitmap = result?.getOrNull()
         when {
-            result == null -> ComicPageLoading()
+            result == null -> if (aspect <= 0f) ComicPageLoading() else Box(
+                Modifier.fillMaxSize(), contentAlignment = Alignment.Center,
+            ) { CircularProgressIndicator(color = Color.White) }
             bitmap != null -> Image(
                 bitmap = bitmap.asImageBitmap(),
                 contentDescription = description,

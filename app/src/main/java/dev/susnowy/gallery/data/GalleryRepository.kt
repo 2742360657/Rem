@@ -1701,6 +1701,7 @@ class GalleryRepository(context: Context) {
         width: Int,
         height: Int,
         archivePath: String? = null,
+        onDimensions: (dev.susnowy.gallery.media.ComicPageDimensions) -> Unit = {},
     ): Bitmap? = mediaReadPriority.foreground {
         content.decodeArchivePage(
             item = item,
@@ -1709,6 +1710,7 @@ class GalleryRepository(context: Context) {
             targetWidth = width,
             targetHeight = height,
             archivePath = archivePath ?: item.relativePath,
+            onDimensions = onDimensions,
         )
     }
 

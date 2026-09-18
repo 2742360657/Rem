@@ -836,7 +836,8 @@ class GalleryViewModel(
         width: Int,
         height: Int,
         archivePath: String? = null,
-    ): Bitmap? = repository.archiveBitmap(item, entryName, width, height, archivePath)
+        onDimensions: (dev.susnowy.gallery.media.ComicPageDimensions) -> Unit = {},
+    ): Bitmap? = repository.archiveBitmap(item, entryName, width, height, archivePath, onDimensions)
 
     suspend fun oversizedBitmap(item: MediaItem, relativePath: String): Bitmap? =
         repository.oversizedBitmap(item, relativePath)
