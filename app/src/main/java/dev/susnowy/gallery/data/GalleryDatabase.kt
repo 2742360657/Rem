@@ -325,8 +325,12 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
                 "tree_uri = ? AND library_id != ?",
                 arrayOf(library.treeUri, library.libraryId),
             )
-            database.delete("libraries", "library_id = ?", arrayOf(library.libraryId))
-            database.insertOrThrow("libraries", null, library.toValues())
+            // A different tree invalidates URI-backed media; the same tree retains its index.
+            database.delete("libraries", "library_id = ? AND tree_uri != ?", arrayOf(library.libraryId, library.treeUri))
+            // Re-registering the same identity and tree must not cascade-delete its index.
+            if (database.update("libraries", library.toValues(), "library_id = ?", arrayOf(library.libraryId)) == 0) {
+                database.insertOrThrow("libraries", null, library.toValues())
+            }
             database.setTransactionSuccessful()
         } finally {
             database.endTransaction()
@@ -336,6 +340,21 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
     @Synchronized
     fun upsertMedia(item: MediaItem) {
         upsertMediaRow(writableDatabase, item)
+    }
+
+    /** Rebuild accepted portable rows without treating unvisited media as scanned or repaired. */
+    @Synchronized
+    fun replacePortableMedia(libraryId: String, items: List<MediaItem>) {
+        require(items.all { it.libraryId == libraryId })
+        val ids = items.mapTo(mutableSetOf()) { it.id }
+        val obsolete = media(libraryId).filter { !it.inInbox && it.id !in ids }
+        writableDatabase.transaction {
+            obsolete.forEach { item ->
+                delete("media", "id = ?", arrayOf(item.id))
+                delete("scan_enrichment", "library_id = ? AND relative_path = ?", arrayOf(libraryId, item.relativePath))
+            }
+            items.forEach { upsertMediaRow(this, it) }
+        }
     }
 
     private fun upsertMediaRow(database: SQLiteDatabase, item: MediaItem) {

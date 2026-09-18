@@ -25,6 +25,8 @@ Debug and release can coexist. Device-local SQLite data, logs, previews, and SAF
 
 ## Data ownership
 
+Attach projects accepted catalog Works before media traversal, preserving same-path local media facts on the same tree and marking new catalog-only rows missingMedia. Portable projection replacement removes obsolete accepted rows while retaining pending Inbox rows. Reclaiming the same Library/tree updates its registration without cascading index deletion; changing trees still invalidates old URI-backed rows. This does not make the entire attach operation one database transaction.
+
 Archive entry streams check coroutine cancellation before/after underlying read and skip operations. Bounds cancellation propagates without being logged as a decode failure; checks between bounds, pixel decoding and memory-cache insertion prevent cancelled work progressing to the next stage. Native decoding and synchronous Provider calls still must return before cancellation can be observed.
 
 `MediaContentService` keys decoded archive pages by Library ID, archive path, size, modified time, entry name and decode target dimensions. Virtual merged Editions resolve the referenced archive's metadata before both cache lookup and decoding; the containing Work's version does not identify another archive. This is a disposable memory cache, not portable metadata.

@@ -15,6 +15,8 @@
 - 验收底线：产品要求不可缩减；不能以本轮测试通过宣称最终成熟。按模块中文提交，暂存审查与提交后状态核对；不推送、不改写历史。
 - 更新时间：2026-09-19。
 
+- 最新冷接入（基线 e2afc04）：attach 增加便携 Work 投影，GalleryDatabase.replacePortableMedia 事务清理过时 accepted/保留 pending；claimLibraryTree 同 ID 同树改 update，避免级联删索引，异树保持失效。先失败后通过，305 单测/lint/APK + 十三项接入/SAF 通过。Work 冷投影漏项已处理；仍需完整接入事务、大库 UI/真实 Provider 验收。
+
 - 最新接入校验（基线 abe0525）：GalleryRepository.attach 在 claimLibraryTree 前加载验证 catalog/state/Inbox，去掉吞错。LibraryAttachValidationTest 用仅测试 Context 模拟 Provider 权限预检，实际 SAF I/O；先失败证明吞错，后验证不登记/坏字节保留/修好可重试。305 单测/lint/APK + 十二项接入/SAF，通过补充后重试测试再次通过。继续重点：attach 是否投影 Work（当前只见 groups/series/state/plans，疑似缺 Work）、数据库投影事务；原真机问题尚未结案。
 
 - 最新归档方向（基线 c5add9d）：ArchiveOrientation.kt 实现八方向旋转/镜像，MediaContentService 泛化条目读取并读 EXIF，回调显示尺寸、交换采样目标、缓存归一化位图。305 单测/lint/APK + 九项方向/归档/恢复设备测试通过。归档 EXIF 待办已完成实现与合成验证，不重复；首次未知尺寸/慢介质及原始产品需求仍待完善。

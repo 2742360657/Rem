@@ -6,6 +6,12 @@
 
 条目按时间倒序。同一问题的后续进展追加到原条目，不另起新条。
 
+## 2026-09-19：冷接入投影作品与保留同树索引
+
+- R11：合成 catalog 包含 Work 而 attach 后数据库无该卡片，失败测试证实此前只有扫描才投影作品。接入现直接映射便携字段/Inbox/trash，保留同路径本机扫描事实，新项 missingMedia；事务替换已接受卡片并清除旧投影，保留尚未接受的 Inbox 项。
+- 扩充重接入测试又发现 claimLibraryTree 先删同 ID 登记导致级联删除。改为同树 update；换树仍删除旧 URI 索引。测试验证待处理项、页数和 URI 保留，过时已接受卡片消失。
+- Windows / Java 17：305 单测、lint、debug/test APK、API 36 十三项接入/SAF 测试通过。无真实库访问。新项暂按 missingMedia 呈现，媒体扫描后确认可用性；完整接入投影事务与大库耗时仍未验收。
+
 ## 2026-09-19：接入便携元数据错误不再吞掉
 
 - R11：attach 先 claimLibraryTree，再用 runCatching 吞掉 Inbox/catalog/state 的错误，可能登记成功却没有完整内容。改为登记前读取验证三类文档，投影异常向上传播到已有接入错误 UI。
