@@ -366,6 +366,21 @@ class GalleryViewModel(
         detailItemIds.value = chapterIds
         readerQueueIds.value = chapterIds
         setSelectedItem(item.id)
+        markOpened(item)
+    }
+
+    /**
+     * Records that a Work was opened, whatever page it is on.
+     *
+     * Opened from the chapter list, so it belongs to the same user action as opening the Work and
+     * must not be left to the page observer: page 0 is a real position and would otherwise look
+     * like "never opened".
+     */
+    private fun markOpened(item: MediaItem) {
+        val at = nextProgressTimestamp()
+        viewModelScope.launch {
+            runCatching { repository.markOpened(item, at) }.onFailure(::showError)
+        }
     }
 
     fun selectDetailItem(item: MediaItem) {

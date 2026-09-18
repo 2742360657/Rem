@@ -102,6 +102,7 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
                 position_ms INTEGER NOT NULL,
                 finished INTEGER NOT NULL,
                 last_opened_at INTEGER NOT NULL,
+                opened_at INTEGER,
                 FOREIGN KEY(item_id) REFERENCES media(id) ON DELETE CASCADE
             )
             """.trimIndent(),
@@ -241,6 +242,11 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
         }
         if (oldVersion < 9) {
             createSeriesTable(db)
+        }
+        if (oldVersion < 10) {
+            // "Opened but still on page 1" used to be indistinguishable from "never opened".
+            // Existing rows keep the honest "unknown" value; the next open records it.
+            db.execSQL("ALTER TABLE progress ADD COLUMN opened_at INTEGER")
         }
         if (oldVersion > newVersion) {
             db.execSQL("DROP TABLE IF EXISTS progress")
@@ -1025,19 +1031,21 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
 
     @Synchronized
     fun upsertProgress(progress: PlaybackProgress) {
-        val values = ContentValues().apply {
-            put("item_id", progress.itemId)
-            put("page", progress.page)
-            put("position_ms", progress.positionMs)
-            put("finished", progress.finished.asInt())
-            put("last_opened_at", progress.lastOpenedAt)
-        }
         writableDatabase.insertWithOnConflict(
             "progress",
             null,
-            values,
+            progress.toValues(),
             SQLiteDatabase.CONFLICT_REPLACE,
         )
+    }
+
+    private fun PlaybackProgress.toValues() = ContentValues().apply {
+        put("item_id", itemId)
+        put("page", page)
+        put("position_ms", positionMs)
+        put("finished", finished.asInt())
+        put("last_opened_at", lastOpenedAt)
+        openedAt?.let { put("opened_at", it) } ?: putNull("opened_at")
     }
 
     /**
@@ -1092,13 +1100,7 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
                 insertWithOnConflict(
                     "progress",
                     null,
-                    ContentValues().apply {
-                        put("item_id", entry.itemId)
-                        put("page", entry.page)
-                        put("position_ms", entry.positionMs)
-                        put("finished", entry.finished.asInt())
-                        put("last_opened_at", entry.lastOpenedAt)
-                    },
+                    entry.toValues(),
                     SQLiteDatabase.CONFLICT_REPLACE,
                 )
             }
@@ -1117,14 +1119,17 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
         "1",
     ).use { cursor ->
         if (!cursor.moveToFirst()) return@use null
-        PlaybackProgress(
-            itemId = cursor.string("item_id"),
-            page = cursor.int("page"),
-            positionMs = cursor.long("position_ms"),
-            finished = cursor.int("finished") != 0,
-            lastOpenedAt = cursor.long("last_opened_at"),
-        )
+        progressFromCursor(cursor)
     }
+
+    private fun progressFromCursor(cursor: Cursor) = PlaybackProgress(
+        itemId = cursor.string("item_id"),
+        page = cursor.int("page"),
+        positionMs = cursor.long("position_ms"),
+        finished = cursor.int("finished") != 0,
+        lastOpenedAt = cursor.long("last_opened_at"),
+        openedAt = cursor.nullableLong("opened_at"),
+    )
 
     /** Reading progress for a series chapter list: one query instead of one per chapter. */
     @Synchronized
@@ -1143,15 +1148,7 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
                     null,
                     null,
                 ).use { cursor ->
-                    cursor.mapRows { row ->
-                        PlaybackProgress(
-                            itemId = row.string("item_id"),
-                            page = row.int("page"),
-                            positionMs = row.long("position_ms"),
-                            finished = row.int("finished") != 0,
-                            lastOpenedAt = row.long("last_opened_at"),
-                        )
-                    }.forEach { put(it.itemId, it) }
+                    cursor.mapRows(::progressFromCursor).forEach { put(it.itemId, it) }
                 }
             }
         }
@@ -1292,7 +1289,7 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
 
     companion object {
         private const val DATABASE_NAME = "gallery-index.db"
-        private const val DATABASE_VERSION = 9
+        private const val DATABASE_VERSION = 10
         private const val MANUAL_SERIES_FIELD = "series"
         private const val MANUAL_FIELD_SOURCE = "manual"
         private const val ENRICHMENT_PENDING = "PENDING"

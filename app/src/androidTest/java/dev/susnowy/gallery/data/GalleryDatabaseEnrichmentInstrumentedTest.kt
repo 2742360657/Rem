@@ -14,6 +14,7 @@ import java.util.UUID
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -134,6 +135,45 @@ class GalleryDatabaseEnrichmentInstrumentedTest {
         assertFalse(database.mediaItem(first.id)!!.trashed)
         assertTrue(database.mediaItem(second.id)!!.trashed)
         assertEquals(30L, database.mediaItem(second.id)!!.deletedAt)
+    }
+
+    /**
+     * The first-open marker has to survive the round trip through both projections: page 0 with an
+     * open marker is "started", page 0 without one is "untouched", and rebuilding the index from
+     * `state.json` must not turn the first into the second.
+     */
+    @Test
+    fun theFirstOpenMarkerSurvivesTheRoundTripThroughBothProjections() {
+        val opened = scanItem("downloads/opened.cbz", "opened")
+        val untouched = scanItem("downloads/untouched.cbz", "untouched")
+        database.replaceScannedMedia(
+            libraryId = libraryId,
+            items = listOf(opened, untouched),
+            foundPaths = setOf(opened.relativePath, untouched.relativePath),
+        )
+        database.upsertProgress(PlaybackProgress(opened.id, page = 0, lastOpenedAt = 40, openedAt = 40))
+        database.upsertProgress(PlaybackProgress(untouched.id, page = 0, lastOpenedAt = 40))
+
+        assertTrue(database.progress(opened.id)!!.opened)
+        assertFalse(database.progress(untouched.id)!!.opened)
+
+        database.replacePortableState(
+            libraryId = libraryId,
+            progress = listOf(
+                PlaybackProgress(opened.id, page = 0, lastOpenedAt = 40, openedAt = 40),
+                PlaybackProgress(untouched.id, page = 0, lastOpenedAt = 40),
+            ),
+            trashedAt = emptyMap(),
+        )
+
+        assertEquals(40L, database.progress(opened.id)?.openedAt)
+        assertNull(database.progress(untouched.id)?.openedAt)
+        assertTrue(database.progress(opened.id)!!.opened)
+        assertFalse(database.progress(untouched.id)!!.opened)
+        assertEquals(
+            opened.id,
+            database.progressFor(listOf(opened.id, untouched.id)).getValue(opened.id).itemId,
+        )
     }
 
     private fun scanItem(relativePath: String, title: String) = MediaItem(

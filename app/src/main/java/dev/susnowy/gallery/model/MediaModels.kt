@@ -119,7 +119,19 @@ data class PlaybackProgress(
     val positionMs: Long = 0,
     val finished: Boolean = false,
     val lastOpenedAt: Long = 0,
-)
+    /**
+     * When the user first opened this Work, or null when nobody has opened it yet.
+     *
+     * Page 0 is a real reading position, so "the reader was opened" cannot be inferred from the
+     * page number alone: a chapter showing its first page must not look untouched. This is also
+     * what "continue reading" orders by, and it is portable, because losing it to a rebuilt
+     * device index would make an already-opened Work look unread.
+     */
+    val openedAt: Long? = null,
+) {
+    /** True once the reader was opened, whatever page it currently shows. */
+    val opened: Boolean get() = openedAt != null || finished || page > 0
+}
 
 /**
  * Runtime projection used by the current scanner and UI while the portable catalog is
@@ -344,6 +356,11 @@ data class PortableProgress(
     @SerialName("position_ms") val positionMs: Long = 0,
     val finished: Boolean = false,
     @SerialName("last_opened_at") val lastOpenedAt: String,
+    /**
+     * First time the user opened this Work. Optional so a `state.json` written before this field
+     * existed still loads; a missing value simply means "no recorded open event".
+     */
+    @SerialName("opened_at") val openedAt: String? = null,
 )
 
 @Serializable

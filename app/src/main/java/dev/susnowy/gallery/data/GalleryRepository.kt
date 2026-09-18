@@ -45,6 +45,7 @@ import dev.susnowy.gallery.model.SeriesRef
 import dev.susnowy.gallery.model.toMediaSeries
 import dev.susnowy.gallery.model.PermissionState
 import dev.susnowy.gallery.model.PlaybackProgress
+import dev.susnowy.gallery.model.ProgressRules
 import dev.susnowy.gallery.model.GroupMemberRole
 import dev.susnowy.gallery.model.GroupType
 import dev.susnowy.gallery.model.MediaGroup
@@ -1240,17 +1241,36 @@ class GalleryRepository(context: Context) {
         }
     }
 
+    /**
+     * Records reading progress.
+     *
+     * Callers launch these writes from coroutines, so ordering is decided by [ProgressRules] rather
+     * than by the order the coroutines happen to run in: a write stamped before the stored one is
+     * dropped, and the first-open stamp is preserved instead of being refreshed on every page turn.
+     */
     suspend fun saveProgress(progress: PlaybackProgress) = withPortableWrite {
         val item = database.mediaItem(progress.itemId) ?: return@withPortableWrite
-        val current = database.progress(progress.itemId)
-        if (current != null && current.lastOpenedAt > progress.lastOpenedAt) {
-            // Page observers launch writes asynchronously. A slower earlier write must not land
-            // after a newer one and move the portable reading position backwards.
-            return@withPortableWrite
-        }
+        val stored = ProgressRules.resolve(database.progress(progress.itemId), progress)
+            ?: return@withPortableWrite
         val storage = storageFor(requireLibrary(item.libraryId))
-        PortableMetadataStore(storage).saveProgress(item.libraryId, progress)
-        database.upsertProgress(progress)
+        PortableMetadataStore(storage).saveProgress(item.libraryId, stored)
+        database.upsertProgress(stored)
+        _progressRevision.value += 1
+    }
+
+    /**
+     * Marks a Work as opened without changing the reading position.
+     *
+     * Opening the first page is a real event: the chapter list and the continue entry must show it
+     * as started even though its page is still 0.
+     */
+    suspend fun markOpened(item: MediaItem, at: Long) = withPortableWrite {
+        val current = database.progress(item.id)
+        if (current?.openedAt != null) return@withPortableWrite
+        val stored = ProgressRules.opened(current, item.id, at)
+        val storage = storageFor(requireLibrary(item.libraryId))
+        PortableMetadataStore(storage).saveProgress(item.libraryId, stored)
+        database.upsertProgress(stored)
         _progressRevision.value += 1
     }
 
@@ -1481,6 +1501,9 @@ class GalleryRepository(context: Context) {
                     positionMs = progress.positionMs,
                     finished = progress.finished,
                     lastOpenedAt = java.time.Instant.parse(progress.lastOpenedAt).toEpochMilli(),
+                    openedAt = progress.openedAt?.let {
+                        java.time.Instant.parse(it).toEpochMilli()
+                    },
                 )
             },
             trashedAt = state.trash.associate { entry ->

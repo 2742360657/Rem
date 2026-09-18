@@ -36,7 +36,14 @@ class SeriesReadingTest {
         page: Int = 0,
         finished: Boolean = false,
         lastOpenedAt: Long = 0,
-    ) = PlaybackProgress(itemId = id, page = page, finished = finished, lastOpenedAt = lastOpenedAt)
+        openedAt: Long? = if (page > 0 || finished) lastOpenedAt else null,
+    ) = PlaybackProgress(
+        itemId = id,
+        page = page,
+        finished = finished,
+        lastOpenedAt = lastOpenedAt,
+        openedAt = openedAt,
+    )
 
     @Test
     fun anOpenedButUnfinishedChapterIsWhereReadingContinues() {
@@ -97,11 +104,12 @@ class SeriesReadingTest {
     fun anUnknownPageCountDoesNotPretendAChapterIsFinished() {
         val chapters = SeriesReading.chapters(
             listOf(chapter("a", pageCount = null), chapter("b")),
-            mapOf("a" to progress("a", page = 0)),
+            mapOf("a" to progress("a", page = 0, lastOpenedAt = 4, openedAt = 4)),
         )
 
         assertFalse(chapters.first().finished)
         assertEquals("第 1 页", chapters.first().progressLabel())
+        assertTrue("打开过就属于已开始", chapters.first().started)
     }
 
     @Test
@@ -161,11 +169,70 @@ class SeriesReadingTest {
     fun openingTheFirstPageCountsAsStarted() {
         val opened = SeriesReading.chapters(
             listOf(chapter("a")),
-            mapOf("a" to progress("a", page = 0, lastOpenedAt = 10)),
+            mapOf("a" to progress("a", page = 0, lastOpenedAt = 10, openedAt = 10)),
         ).first()
 
         assertTrue(opened.started)
         assertEquals("第 1 / 20 页", opened.progressLabel())
+        assertFalse(opened.finished)
+    }
+
+    /**
+     * A reading row can exist without the Work ever being opened (a video position, a leftover
+     * row from an older index). "Not started" must be decided by the open marker, not by the
+     * presence of a row.
+     */
+    @Test
+    fun aRowWithoutAnOpenMarkerIsStillNotStarted() {
+        val row = SeriesReading.chapters(
+            listOf(chapter("a")),
+            mapOf("a" to progress("a", page = 0, lastOpenedAt = 10, openedAt = null)),
+        ).first()
+
+        assertFalse(row.started)
+        assertEquals("未开始", row.progressLabel())
+    }
+
+    /** Page 0 is a real position, so a chapter that is genuinely at page 1 is "started". */
+    @Test
+    fun aChapterShowingItsFirstPageIsNotUnstarted() {
+        val chapters = SeriesReading.chapters(
+            listOf(chapter("a"), chapter("b")),
+            mapOf("a" to progress("a", page = 0, lastOpenedAt = 5, openedAt = 5)),
+        )
+
+        assertEquals(1, SeriesReading.summarize(chapters).started)
+        assertEquals("a", SeriesReading.entry(chapters).chapter?.item?.id)
+    }
+
+    @Test
+    fun resumingAFinishedChapterStartsFromItsFirstPage() {
+        val done = SeriesReading.chapters(
+            listOf(chapter("a")),
+            mapOf("a" to progress("a", page = 19, finished = true, lastOpenedAt = 30)),
+        ).first()
+        val partial = SeriesReading.chapters(
+            listOf(chapter("a")),
+            mapOf("a" to progress("a", page = 7, lastOpenedAt = 30)),
+        ).first()
+        val untouched = SeriesReading.chapters(listOf(chapter("a")), emptyMap()).first()
+
+        assertEquals("重新阅读必须从第 1 页开始", 0, done.resumePageIndex())
+        assertEquals(7, partial.resumePageIndex())
+        assertEquals(0, untouched.resumePageIndex())
+    }
+
+    /** Every entry point resolves the start page with the same rule, so they cannot disagree. */
+    @Test
+    fun theStartPageRuleIsSharedByAllEntryPoints() {
+        val opened = progress("a", page = 7, lastOpenedAt = 30)
+        val done = progress("a", page = 19, finished = true, lastOpenedAt = 30)
+
+        assertEquals(7, resumePageIndex(pageCount = 20, progress = opened))
+        assertEquals(0, resumePageIndex(pageCount = 20, progress = done))
+        assertEquals(0, resumePageIndex(pageCount = 20, progress = opened, restart = true))
+        assertEquals("未知页数时回到第一页", 0, resumePageIndex(pageCount = 0, progress = opened))
+        assertEquals("越界的旧进度必须被钳制", 19, resumePageIndex(pageCount = 20, progress = progress("a", page = 99, lastOpenedAt = 30)))
     }
 
     @Test

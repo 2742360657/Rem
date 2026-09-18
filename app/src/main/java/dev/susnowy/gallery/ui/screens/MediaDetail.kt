@@ -120,6 +120,7 @@ import dev.susnowy.gallery.model.SeriesRef
 import dev.susnowy.gallery.model.SourceKind
 import dev.susnowy.gallery.ui.GalleryViewModel
 import dev.susnowy.gallery.ui.chapterEndReached
+import dev.susnowy.gallery.ui.resumePageIndex
 import dev.susnowy.gallery.ui.components.MetadataEditor
 import dev.susnowy.gallery.ui.components.MediaGrid
 import dev.susnowy.gallery.ui.components.EditionCompareDialog
@@ -409,9 +410,25 @@ private fun ImageSetWorkDetail(
     onBack: () -> Unit,
     onOpenNextChapter: (MediaItem) -> Unit,
 ) {
+    val progressRevision by viewModel.progressRevision.collectAsState()
+    val storedProgress by produceState<PlaybackProgress?>(
+        initialValue = null,
+        item.id,
+        item.modifiedAt,
+        progressRevision,
+    ) {
+        value = viewModel.progress(item)
+    }
     var reading by rememberSaveable(item.id) { mutableStateOf(false) }
-    var readerStartPage by rememberSaveable(item.id) { mutableStateOf<Int?>(null) }
+    var restartChapter by rememberSaveable(item.id) { mutableStateOf(false) }
     var comparing by rememberSaveable(item.id) { mutableStateOf(false) }
+    // The resume page is resolved here, once, with the same rule the chapter list and the detail
+    // page use; the reader itself only follows it.
+    val readerStartPage = resumePageIndex(
+        pageCount = item.pageCount ?: 0,
+        progress = storedProgress,
+        restart = restartChapter,
+    )
     if (reading) {
         BackHandler { reading = false }
         ImageSetReaderScreen(
@@ -425,6 +442,7 @@ private fun ImageSetWorkDetail(
                 // Hand over to the next chapter and go back to its detail screen, so leaving the
                 // reader lands on the chapter that is actually open.
                 reading = false
+                restartChapter = false
                 onOpenNextChapter(next)
             },
         )
@@ -436,7 +454,7 @@ private fun ImageSetWorkDetail(
             viewModel = viewModel,
             onBack = onBack,
             onRead = { restart ->
-                readerStartPage = if (restart) 0 else null
+                restartChapter = restart
                 reading = true
             },
             onCompare = { comparing = true },
@@ -482,6 +500,10 @@ private fun ImageSetOverview(
     var confirmTrash by remember { mutableStateOf(false) }
     val pageCount = item.pageCount ?: 0
     val readPage = progress?.page?.coerceAtLeast(0) ?: 0
+    // "Not started" is decided by the portable open marker, not by the page index: page 1 is a
+    // real position, so a chapter the reader already opened must not offer "开始阅读" again.
+    val opened = progress?.opened == true
+    val finished = progress?.finished == true
 
     Scaffold(
         topBar = {
@@ -540,19 +562,19 @@ private fun ImageSetOverview(
                 buildString {
                     append(if (pageCount > 0) "$pageCount 页" else "页数待扫描")
                     item.series?.title?.let { append(" · $it") }
-                    if (progress != null && pageCount > 0) append(" · 已读 ${readPage + 1}/$pageCount")
+                    if (opened && pageCount > 0) append(" · 已读 ${readPage + 1}/$pageCount")
                 },
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Button(
-                onClick = { onRead(progress?.finished == true) },
+                onClick = { onRead(finished) },
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Icon(Icons.Rounded.PlayArrow, contentDescription = null)
                 Text(
                     when {
-                        progress?.finished == true -> " 重新阅读本话"
-                        progress == null -> " 开始阅读"
+                        finished -> " 重新阅读本话"
+                        !opened -> " 开始阅读"
                         else -> " 继续阅读 · 第 ${readPage + 1} 页"
                     },
                 )
@@ -782,7 +804,7 @@ private fun ImageSetReaderScreen(
     onBack: () -> Unit,
     nextChapter: MediaItem? = null,
     autoAdvance: Boolean = false,
-    startPage: Int? = null,
+    startPage: Int = 0,
     onOpenNextChapter: (MediaItem) -> Unit = {},
 ) {
     val pages by produceState<Result<List<ImagePage>>?>(null, item.id, item.modifiedAt, item.coverPath) {
@@ -1041,7 +1063,7 @@ private fun ImageSetReader(
     onLongPressPage: (Int) -> Unit,
     nextChapter: MediaItem? = null,
     autoAdvance: Boolean = false,
-    startPage: Int? = null,
+    startPage: Int = 0,
     listState: LazyListState,
     positionInitialized: Boolean,
     onPositionInitialized: () -> Unit,
@@ -1049,7 +1071,7 @@ private fun ImageSetReader(
     onOpenNextChapter: (MediaItem) -> Unit = {},
 ) {
     val restorePage by produceState<Int?>(initialValue = startPage, item.id, startPage) {
-        value = startPage ?: (viewModel.progress(item)?.page ?: 0)
+        value = startPage
     }
     val context = LocalContext.current
     val imageLoader = remember(context) { SingletonImageLoader.get(context) }

@@ -22,18 +22,31 @@ data class SeriesChapter(
     val finished: Boolean
         get() = progress?.finished == true
 
-    val started: Boolean get() = progress != null
+    /**
+     * Opened at least once.
+     *
+     * Page 0 is a real position, so "not started" means "no reading state at all", not "page 1":
+     * a chapter whose first page is on screen must not look untouched in the list.
+     */
+    val started: Boolean get() = progress?.opened == true
 
     /** "第 12 / 40 页", "未开始" or "已读完" for the chapter row. */
     fun progressLabel(): String {
         val count = pageCount
         return when {
             finished -> "已读完"
-            progress != null && count != null -> "第 ${lastPage + 1} / $count 页"
-            progress != null -> "第 ${lastPage + 1} 页"
+            started && count != null -> "第 ${lastPage + 1} / $count 页"
+            started -> "第 ${lastPage + 1} 页"
             else -> "未开始"
         }
     }
+
+    /**
+     * Where the reader should resume this chapter: page 1 for an unopened or finished chapter,
+     * otherwise the saved page. Resuming must never silently reopen a finished chapter at its
+     * last page.
+     */
+    fun resumePageIndex(): Int = resumePageIndex(pageCount ?: 0, progress)
 }
 
 /** What the "continue reading" entry should do for a whole series. */
@@ -106,6 +119,21 @@ fun chapterEndReached(
     advancedAfterRestore &&
     lastVisibleItemIndex >= pageCount - 1 &&
     !canScrollForward
+
+/**
+ * Page index the reader must open at.
+ *
+ * One rule for every entry point, so "继续阅读", the chapter list and the detail page cannot
+ * disagree: an explicit restart, an unopened Work and a finished Work all start at page 1;
+ * anything else resumes where it stopped. Restoring the saved page of a finished chapter is what
+ * used to re-open it at its last page instead of reading it again.
+ */
+fun resumePageIndex(pageCount: Int, progress: PlaybackProgress?, restart: Boolean = false): Int {
+    if (pageCount <= 0) return 0
+    if (restart) return 0
+    if (progress?.opened != true || progress.finished) return 0
+    return progress.page.coerceIn(0, pageCount - 1)
+}
 
 data class SeriesSummary(val total: Int, val finished: Int, val started: Int) {
     val untouched: Boolean get() = total > 0 && started == 0

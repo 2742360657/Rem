@@ -170,9 +170,9 @@ class PortableMetadataStore(
         }.toMutableList()
         updates.forEach { (item, _) ->
             val assignment = item.series ?: return@forEach
-            val index = series.indexOfFirst { sequence ->
-                sequence.id == assignment.id || sequence.title.normalizedTitle() == assignment.title.normalizedTitle()
-            }
+            // Identity is the id, never the title: two Series may legitimately share a name, and
+            // matching by title would silently merge their members, numbering and progress.
+            val index = series.indexOfFirst { sequence -> sequence.id == assignment.id }
             val current = series.getOrNull(index)
             val seriesId = current?.id ?: assignment.id
             val replacement = PortableSeries(
@@ -236,6 +236,7 @@ class PortableMetadataStore(
             positionMs = progress.positionMs,
             finished = progress.finished,
             lastOpenedAt = Instant.ofEpochMilli(progress.lastOpenedAt).toString(),
+            openedAt = progress.openedAt?.let { Instant.ofEpochMilli(it).toString() },
         )
         val updated = state.copy(
             schemaVersion = CURRENT_SCHEMA_VERSION,
@@ -662,10 +663,12 @@ class PortableMetadataStore(
                             updatedAt = item.updatedAt,
                         )
                     }
+                    // One Series entity per reference id. Grouping by title here would merge two
+                    // legitimately same-named series during the one-time v3 conversion, and the
+                    // converted catalog is portable truth from then on.
                     val series = legacy.items.mapNotNull { item -> item.series?.let { it to item.id } }
-                        .groupBy { (reference, _) -> reference.title.normalizedTitle() }
-                        .map { (_, assignments) ->
-                            val id = assignments.minOf { (reference, _) -> reference.id }
+                        .groupBy { (reference, _) -> reference.id }
+                        .map { (id, assignments) ->
                             PortableSeries(
                                 id = id,
                                 title = assignments.first().first.title,
@@ -831,8 +834,6 @@ class PortableMetadataStore(
         startsWith("$source/") -> target + removePrefix(source)
         else -> this
     }
-
-    private fun String.normalizedTitle(): String = trim().lowercase(Locale.ROOT)
 
     private fun <T> MutableList<T>.replaceById(value: T) {
         val id = when (value) {
