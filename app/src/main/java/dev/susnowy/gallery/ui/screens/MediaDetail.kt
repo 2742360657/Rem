@@ -1740,13 +1740,7 @@ private fun VideoViewer(
             player.release()
         }
     }
-    AndroidView(
-        factory = { PlayerView(it).apply { this.player = player } },
-        update = { it.player = player },
-        modifier = modifier
-            .fillMaxWidth()
-            .background(androidx.compose.ui.graphics.Color.Black),
-    )
+    dev.susnowy.gallery.ui.components.VideoPlayerSurface(player, modifier)
 }
 
 @Composable

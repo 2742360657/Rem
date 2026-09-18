@@ -12,6 +12,8 @@
 
 ## 2026-09-19：R08 批量字段编辑与持续回归
 
+- 视频横屏模块：抽取 VideoPlayerSurface 复用同一 Player，在全屏 Dialog 请求 sensor landscape，退出恢复原方向，解绑旧 PlayerView；MainActivity 处理方向/屏幕尺寸变化避免旋转重建播放器。完整单测/lint/debug/test APK 构建及 API 36 全部 42 项设备回归通过。全屏测试使用未准备媒体的 seek 位置验证实例/位置保持，不声称验证了真实视频解码。
+
 - GridReturnPositionTest 使用 150 项合成媒体，验证定位至第 100 项可见、离开/返回列表及空快照期间界面重建后恢复相同行首。API 36 通过；第一轮测试误把多列网格目标索引视为行首，修正为记录实际行首后比较。没有通过修改产品来迎合错误断言，尚不覆盖整个 App 导航或其他长列表。
 
 - R07 定位入口：新增共享 PositionJumpDialog，漫画底部页码可跳页，MediaGrid 可跳当前结果序号并保留异步空快照期间的滚动状态 holder。阅读跳转重新建立到达末尾判定基线，不能把定位当作已读完；这一端到端语义仍需补设备场景。testDebugUnitTest/lintDebug/assembleDebug/assembleDebugAndroidTest 通过；PositionJumpInteractionTest 两项通过（越界/零禁用，首末位置，取消）。
