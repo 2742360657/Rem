@@ -98,6 +98,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.MediaItem as PlayerMediaItem
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.common.Player
 import androidx.media3.ui.PlayerView
 import androidx.core.net.toUri
 import androidx.core.view.WindowCompat
@@ -1663,28 +1664,44 @@ private fun VideoViewer(
         }
         return
     }
-    val player = remember(item.id) { ExoPlayer.Builder(context).build() }
-    val saved by produceState<Long?>(null, item.id) {
-        value = viewModel.progress(item)?.positionMs ?: 0
+    val player = remember(item.libraryId, item.id, uri) { ExoPlayer.Builder(context).build() }
+    val session = remember(player) { dev.susnowy.gallery.ui.VideoPlaybackSession() }
+    val saved by produceState<PlaybackProgress?>(null, player) {
+        value = viewModel.progress(item) ?: PlaybackProgress(itemId = item.id)
     }
     LaunchedEffect(player, uri, saved) {
-        val position = saved ?: return@LaunchedEffect
+        val progress = saved ?: return@LaunchedEffect
+        session.restore(progress.finished)
         player.setMediaItem(PlayerMediaItem.fromUri(uri.toUri()))
         player.prepare()
-        if (position > 0) player.seekTo(position)
+        if (!progress.finished && progress.positionMs > 0) player.seekTo(progress.positionMs)
     }
     LaunchedEffect(player, active) {
         player.playWhenReady = active
     }
     DisposableEffect(player) {
+        val listener = object : Player.Listener {
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                if (isPlaying) session.playing()
+            }
+
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                if (playbackState == Player.STATE_ENDED) {
+                    session.ended()
+                    if (session.initialized) viewModel.saveProgress(item,
+                        positionMs = player.currentPosition.coerceAtLeast(0), finished = session.finished)
+                }
+            }
+        }
+        player.addListener(listener)
         onDispose {
             val position = player.currentPosition.coerceAtLeast(0)
-            val duration = player.duration.coerceAtLeast(0)
-            viewModel.saveProgress(
+            if (session.initialized) viewModel.saveProgress(
                 item,
                 positionMs = position,
-                finished = duration > 0 && position >= duration - 5_000,
+                finished = session.finished,
             )
+            player.removeListener(listener)
             player.release()
         }
     }
