@@ -604,7 +604,8 @@ class GalleryRepository(context: Context) {
             val locked = stored
                 ?.let { current -> updated.mergeEdit(previous, current) }
                 ?: updated.copy(fieldSources = updated.withManualEdits(null))
-            val portable = PortableMetadataStore(storage).saveItem(locked, locked.revision)
+            val store = PortableMetadataStore(storage)
+            val portable = store.saveItem(locked, locked.revision)
             // Editing a Work is also an Inbox decision: the suggestion is no longer pending,
             // and the decision has to survive this device's index.
             val disposition = if (stored != null && stored.domain != locked.domain) {
@@ -628,7 +629,7 @@ class GalleryRepository(context: Context) {
                 inboxDisposition = disposition,
             )
             database.upsertMedia(saved)
-            synchronizeSeriesProjection(saved.libraryId, listOf(portable))
+            synchronizeSeriesProjection(saved.libraryId, listOf(portable), store.loadCatalog(saved.libraryId))
             refreshFromDatabase()
             saved
         }
@@ -646,7 +647,8 @@ class GalleryRepository(context: Context) {
                 require(items.all { it.libraryId == libraryId }) { "不能跨 Library 接受识别建议" }
                 if (items.isEmpty()) return@withPortableWrite 0
                 val storage = storageFor(requireLibrary(libraryId))
-                val portable = PortableMetadataStore(storage).saveItems(items).associateBy { it.id }
+                val store = PortableMetadataStore(storage)
+                val portable = store.saveItems(items).associateBy { it.id }
                 PortableInboxStore(storage).upsert(
                     libraryId,
                     items.map { item ->
@@ -665,7 +667,7 @@ class GalleryRepository(context: Context) {
                         ),
                     )
                 }
-                synchronizeSeriesProjection(libraryId, portable.values)
+                synchronizeSeriesProjection(libraryId, portable.values, store.loadCatalog(libraryId))
                 refreshFromDatabase()
                 items.size
             }
@@ -707,11 +709,12 @@ class GalleryRepository(context: Context) {
             } else {
                 emptyList()
             }
+            val store = PortableMetadataStore(storage)
             val portableById = if (prepared.isNotEmpty()) {
                 // Commit the Work before recording an accepted/classified decision. If the
                 // catalog write fails, Inbox remains pending instead of hiding an item whose
                 // manual classification never reached portable truth.
-                PortableMetadataStore(storage).saveItems(prepared).associateBy { it.id }
+                store.saveItems(prepared).associateBy { it.id }
             } else {
                 emptyMap()
             }
@@ -743,7 +746,7 @@ class GalleryRepository(context: Context) {
                         ),
                     )
                 }
-                synchronizeSeriesProjection(libraryId, portableById.values)
+                synchronizeSeriesProjection(libraryId, portableById.values, store.loadCatalog(libraryId))
             }
             // The portable document is the truth: mirror it, including clearing the
             // decisions that were removed and leaving pending rows untouched.
@@ -1177,7 +1180,8 @@ class GalleryRepository(context: Context) {
                 changed.copy(fieldSources = changed.withManualEdits(item))
             }
             val storage = storageFor(requireLibrary(libraryId))
-            val portable = PortableMetadataStore(storage).saveItems(updated).associateBy { it.id }
+            val store = PortableMetadataStore(storage)
+            val portable = store.saveItems(updated).associateBy { it.id }
             val pending = items.filter(MediaItem::inInbox)
             if (pending.isNotEmpty()) {
                 PortableInboxStore(storage).upsert(
@@ -1199,7 +1203,7 @@ class GalleryRepository(context: Context) {
                     ),
                 )
             }
-            synchronizeSeriesProjection(libraryId, portable.values)
+            synchronizeSeriesProjection(libraryId, portable.values, store.loadCatalog(libraryId))
             refreshFromDatabase()
             updated.size
         }
@@ -1409,9 +1413,14 @@ class GalleryRepository(context: Context) {
                 val storage = storageFor(requireLibrary(item.libraryId))
                 val result = imageSetOrder.reorder(item, pages, storage)
                 val updated = item.copy(coverPath = result.coverPath)
-                val portable = PortableMetadataStore(storage).saveItem(updated, updated.revision)
+                val store = PortableMetadataStore(storage)
+                val portable = store.saveItem(updated, updated.revision)
                 database.upsertMedia(updated.withPortableMetadata(portable).copy(inInbox = false))
-                synchronizeSeriesProjection(item.libraryId, listOf(portable))
+                synchronizeSeriesProjection(
+                    item.libraryId,
+                    listOf(portable),
+                    store.loadCatalog(item.libraryId),
+                )
                 refreshFromDatabase()
                 result
             }
@@ -1613,10 +1622,21 @@ class GalleryRepository(context: Context) {
         revision = portable.revision,
     )
 
+    /**
+     * Mirrors the Series that the portable catalog currently holds into the disposable index.
+     *
+     * The catalog is the owner of every Series entity, so this must run whenever a catalog write
+     * can have created, renamed or removed one — not only after a scan. Accepting an Inbox
+     * suggestion is the common case: it writes the Work, recognition writes the Series with it,
+     * and until the next scan the shelf had no entity to resolve, which left the chapter list
+     * without a Series target ("编辑系列" missing) and made it report the chapters as unassigned.
+     */
     private fun synchronizeSeriesProjection(
         libraryId: String,
         portable: Collection<PortableItemMetadata>,
+        catalog: PortableCatalog,
     ) {
+        syncSeries(libraryId, catalog.series)
         val canonical = portable.mapNotNull(PortableItemMetadata::series)
         if (canonical.isEmpty()) return
         val byId = canonical.associateBy { it.id }
