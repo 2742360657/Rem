@@ -140,6 +140,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 
@@ -1267,24 +1268,7 @@ internal fun ImageSetReader(
                 },
             ) {
                 when {
-                    imageRequest != null -> SubcomposeAsyncImage(
-                        model = imageRequest,
-                        contentDescription = "第 ${index + 1} 页",
-                        contentScale = ContentScale.FillWidth,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        val imageState by painter.state.collectAsState()
-                        when (imageState) {
-                            is AsyncImagePainter.State.Success -> SubcomposeAsyncImageContent()
-                            is AsyncImagePainter.State.Error -> ComicPageLoadError(message = "第 ${index + 1} 页加载失败")
-                            // Empty precedes Loading, including on cache hits. A zero-height
-                            // first measure lets LazyColumn clamp a jump against an empty book.
-                            else -> Box(
-                                modifier = Modifier.fillMaxWidth().height(240.dp),
-                                contentAlignment = Alignment.Center,
-                            ) { CircularProgressIndicator(color = Color.White) }
-                        }
-                    }
+                    imageRequest != null -> DirectComicPage(imageRequest, "第 ${index + 1} 页")
                     page.archiveEntry != null -> ArchiveComicPage(
                         item = item,
                         entryName = page.archiveEntry,
@@ -1416,41 +1400,66 @@ private fun ZoomableComicPage(
 }
 
 @Composable
+internal fun DirectComicPage(request: ImageRequest, description: String) {
+    SubcomposeAsyncImage(
+        model = request,
+        contentDescription = description,
+        contentScale = ContentScale.FillWidth,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        val imageState by painter.state.collectAsState()
+        when (imageState) {
+            is AsyncImagePainter.State.Success -> SubcomposeAsyncImageContent()
+            is AsyncImagePainter.State.Error -> ComicPageLoadError(
+                message = "$description 加载失败",
+                onRetry = painter::restart,
+            )
+            // Empty also needs height, otherwise a jump can be clamped against an empty book.
+            else -> ComicPageLoading()
+        }
+    }
+}
+
+@Composable
+private fun ComicPageLoading() {
+    Box(Modifier.fillMaxWidth().height(240.dp), contentAlignment = Alignment.Center) {
+        CircularProgressIndicator(color = Color.White)
+    }
+}
+
+@Composable
 private fun ArchiveComicPage(
     item: MediaItem,
     entryName: String,
     archivePath: String?,
     viewModel: GalleryViewModel,
 ) {
-    var retry by remember(item.id, entryName) { mutableIntStateOf(0) }
+    DecodedComicPage(
+        identity = listOf(item.libraryId, item.id, item.modifiedAt, item.size, entryName, archivePath),
+        description = entryName,
+    ) {
+        viewModel.archiveBitmap(item, entryName, COMIC_PAGE_TARGET_WIDTH, COMIC_PAGE_TARGET_HEIGHT,
+            archivePath = archivePath)
+    }
+}
+
+@Composable
+internal fun DecodedComicPage(identity: Any, description: String, load: suspend () -> android.graphics.Bitmap?) {
+    var retry by remember(identity) { mutableIntStateOf(0) }
+    var result by remember(identity, retry) { mutableStateOf<Result<android.graphics.Bitmap?>?>(null) }
+    val currentLoad by rememberUpdatedState(load)
+    LaunchedEffect(identity, retry) {
+        result = try { Result.success(currentLoad()) }
+        catch (cancelled: CancellationException) { throw cancelled }
+        catch (error: Exception) { Result.failure(error) }
+    }
     Box(modifier = Modifier.fillMaxWidth()) {
-        val result by produceState<Result<android.graphics.Bitmap?>?>(
-            null,
-            item.id,
-            item.modifiedAt,
-            entryName,
-            archivePath,
-            retry,
-        ) {
-            value = runCatching {
-                viewModel.archiveBitmap(
-                    item,
-                    entryName,
-                    COMIC_PAGE_TARGET_WIDTH,
-                    COMIC_PAGE_TARGET_HEIGHT,
-                    archivePath = archivePath,
-                )
-            }
-        }
         val bitmap = result?.getOrNull()
         when {
-            result == null -> Box(
-                modifier = Modifier.fillMaxWidth().height(240.dp),
-                contentAlignment = Alignment.Center,
-            ) { CircularProgressIndicator(color = Color.White) }
+            result == null -> ComicPageLoading()
             bitmap != null -> Image(
                 bitmap = bitmap.asImageBitmap(),
-                contentDescription = entryName,
+                contentDescription = description,
                 contentScale = ContentScale.FillWidth,
                 modifier = Modifier.fillMaxWidth(),
             )

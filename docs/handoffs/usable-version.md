@@ -15,6 +15,8 @@
 - 验收底线：产品要求不可缩减；不能以本轮测试通过宣称最终成熟。按模块中文提交，暂存审查与提交后状态核对；不推送、不改写历史。
 - 更新时间：2026-09-19。
 
+- 最新漫画页面恢复模块（基线 d1fae4c）：MediaDetail 的普通页新增原地重试，归档页按身份/重试次数隔离结果并传播取消，提取 DirectComicPage/DecodedComicPage 供实际组件测试。ComicPageRecoveryTest 三项 + ReaderPosition 两项通过；299 单测/lint/debug 与 test APK 通过。未跑本轮全量设备，布局解码前宽高比仍待处理。
+
 - 最新归档位图模块（基线 dba6837）：MediaContentService 原缓存缺 Library/size，已用两项失败像素测试证实并修复；合并 Edition 采用实际容器版本。ArchiveBitmapIdentityTest 三项，299 单测/lint/APK 与六项漫画/归档/预览设备测试通过，补缓存命中断言后三项再通过。无真实媒体变化。检查漫画布局时发现此问题而优先处理，解码前尺寸、固定 240dp 占位引起布局变化仍待做；本轮没有实现该部分。
 
 - 最新系统相册模块（基线 4c5d83a）：Screens.kt 增加类型/来源组合筛选、每筛选独立网格位置和定位，加载时保留选择并禁用导入；SystemGalleryPositionTest 两项 150 数据测试。299 单测、lint、APK 与 API 36 全部 63 项设备测试通过。系统相册定位不再待办。SaveableStateProvider 外层需要 key 隔离活跃组合状态，不能删除。继续其他长界面、漫画布局/真实手势与视频系列完整流程；总体目标未完成。
