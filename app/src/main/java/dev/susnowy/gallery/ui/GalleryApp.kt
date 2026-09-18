@@ -106,6 +106,7 @@ private val destinations = listOf(
 fun GalleryApp(viewModel: GalleryViewModel = viewModel()) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val attachment by viewModel.attachment.collectAsStateWithLifecycle()
+    val batchReport by viewModel.batchMetadataReport.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val drawerState = rememberDrawerState(DrawerValue.Closed)
@@ -139,6 +140,19 @@ fun GalleryApp(viewModel: GalleryViewModel = viewModel()) {
     }
 
     GalleryTheme {
+        batchReport?.let { report ->
+            androidx.compose.material3.AlertDialog(
+                onDismissRequest = viewModel::dismissBatchMetadataReport,
+                title = { Text("批量编辑结果") },
+                text = {
+                    Column(Modifier.verticalScroll(rememberScrollState())) {
+                        Text("已保存 ${report.updated} 项，未变化 ${report.unchanged} 项，冲突或错误 ${report.issues.size} 项")
+                        report.issues.forEach { issue -> Text("${issue.title}：${issue.reason}") }
+                    }
+                },
+                confirmButton = { TextButton(onClick = viewModel::dismissBatchMetadataReport) { Text("关闭") } },
+            )
+        }
         LibraryAttachmentStatus(
             state = attachment,
             onDismiss = viewModel::dismissAttachmentError,

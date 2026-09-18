@@ -33,6 +33,9 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -70,7 +73,11 @@ class PortableMetadataStore(
     fun saveItems(items: List<MediaItem>): List<PortableItemMetadata> =
         saveItemUpdates(items.map { it to it.revision })
 
-    private fun saveItemUpdates(updates: List<Pair<MediaItem, Long>>): List<PortableItemMetadata> {
+    /** Batch information edits cannot rewrite existing sources or relationships. */
+    fun saveBatchFields(items: List<MediaItem>): List<PortableItemMetadata> =
+        saveItemUpdates(items.map { it to it.revision }, batchFieldsOnly = true)
+
+    private fun saveItemUpdates(updates: List<Pair<MediaItem, Long>>, batchFieldsOnly: Boolean = false): List<PortableItemMetadata> {
         if (updates.isEmpty()) return emptyList()
         val libraryId = updates.first().first.libraryId
         require(updates.all { it.first.libraryId == libraryId }) { "不能跨 Library 批量修改元数据" }
@@ -80,6 +87,7 @@ class PortableMetadataStore(
         }
 
         val catalog = loadCatalog(libraryId)
+        val originalJson = if (batchFieldsOnly) read(CATALOG_PATH)?.let { json.parseToJsonElement(it).jsonObject } else null
         val previousItems = catalog.items
         val now = Instant.now().toString()
         val assets = catalog.assets.toMutableList()
@@ -95,6 +103,18 @@ class PortableMetadataStore(
                 )
             }
             val existingWork = previous?.let { old -> works.firstOrNull { it.id == old.id } }
+            if (batchFieldsOnly && existingWork != null) {
+                require(existingWork.id == item.id) { "作品身份与已有路径冲突" }
+                works.replaceById(existingWork.copy(
+                    authors = item.authors, tags = item.tags, collections = item.collections,
+                    domain = item.domain,
+                    fieldSources = existingWork.fieldSources + item.fieldSources.filterKeys {
+                        it in setOf("authors", "tags", "collections", "domain")
+                    },
+                    revision = existingWork.revision + 1, updatedAt = now,
+                ))
+                return@forEach
+            }
             val existingEdition = existingWork?.let { work ->
                 editions.firstOrNull { it.id == work.preferredEditionId }
                     ?: editions.filter { it.workId == work.id }.minByOrNull(PortableEdition::id)
@@ -154,9 +174,13 @@ class PortableMetadataStore(
         }
 
         val updatedIds = updates.mapTo(mutableSetOf()) { it.first.id }
+        val relationshipUpdates = if (batchFieldsOnly) updates.filter { update ->
+            catalog.works.none { it.id == update.first.id }
+        } else updates
+        val relationshipIds = relationshipUpdates.mapTo(mutableSetOf()) { it.first.id }
         val modifiedSeriesIds = mutableSetOf<String>()
         val series = catalog.series.map { sequence ->
-            val members = sequence.members.filterNot { it.workId in updatedIds }
+            val members = sequence.members.filterNot { it.workId in relationshipIds }
             if (members.size == sequence.members.size) {
                 sequence
             } else {
@@ -168,7 +192,7 @@ class PortableMetadataStore(
                 )
             }
         }.toMutableList()
-        updates.forEach { (item, _) ->
+        relationshipUpdates.forEach { (item, _) ->
             val assignment = item.series ?: return@forEach
             // Identity is the id, never the title: two Series may legitimately share a name, and
             // matching by title would silently merge their members, numbering and progress.
@@ -206,12 +230,32 @@ class PortableMetadataStore(
             assets = assets.sortedBy(PortableAsset::relativePath),
             works = works.sortedBy(PortableWork::id),
             editions = editions.sortedBy(PortableEdition::id),
-            series = series.filter { it.members.isNotEmpty() }
+            series = if (batchFieldsOnly && relationshipUpdates.isEmpty()) catalog.series else series.filter { it.members.isNotEmpty() }
                 .map { it.copy(members = it.members.sortedWith(seriesMemberOrder())) }
                 .sortedBy(PortableSeries::id),
         )
         validate(updated)
-        writeSafely(CATALOG_PATH, json.encodeToString(updated), "application/json")
+        val encoded = json.encodeToString(updated)
+        val output = if (originalJson == null) encoded else {
+            val before = json.parseToJsonElement(json.encodeToString(catalog)).jsonObject
+            val after = json.parseToJsonElement(encoded).jsonObject
+            val merged = (originalJson + after).toMutableMap()
+            for (key in listOf("assets", "works", "editions", "groups", "series")) {
+                val oldRaw = originalJson[key]?.jsonArray.orEmpty().associateBy { it.jsonObject["id"] }
+                val oldKnown = before.getValue(key).jsonArray.associateBy { it.jsonObject["id"] }
+                merged[key] = JsonArray(after.getValue(key).jsonArray.map { entry ->
+                    val id = entry.jsonObject["id"]
+                    val raw = oldRaw[id]?.jsonObject
+                    when {
+                        raw == null -> entry
+                        entry == oldKnown[id] -> raw
+                        else -> JsonObject(raw + entry.jsonObject)
+                    }
+                })
+            }
+            json.encodeToString(JsonObject(merged))
+        }
+        writeSafely(CATALOG_PATH, output, "application/json")
         return updated.items.filter { it.id in updatedIds }.sortedBy { item ->
             updates.indexOfFirst { it.first.id == item.id }
         }

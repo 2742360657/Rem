@@ -1386,10 +1386,10 @@ private fun PhotosScreen(items: List<MediaItem>, viewModel: GalleryViewModel) {
     }
     if (showBatchEditor) {
         BatchMetadataDialog(
-            count = selected.size,
+            items = selectedItems,
             onDismiss = { showBatchEditor = false },
-            onSave = { authors, tags, collections ->
-                viewModel.addBatchMetadata(selected, authors, tags, collections)
+            onSave = { baseline, edit ->
+                viewModel.editBatchMetadata(baseline, edit)
                 showBatchEditor = false
                 selectionMode = false
                 selected = emptySet()

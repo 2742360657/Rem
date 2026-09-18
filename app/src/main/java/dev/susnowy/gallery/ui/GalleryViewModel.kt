@@ -162,6 +162,8 @@ class GalleryViewModel(
     private var attachmentJob: Job? = null
     private val _attachment = MutableStateFlow(LibraryAttachmentState())
     val attachment: StateFlow<LibraryAttachmentState> = _attachment.asStateFlow()
+    private val _batchMetadataReport = MutableStateFlow<dev.susnowy.gallery.model.BatchMetadataReport?>(null)
+    val batchMetadataReport = _batchMetadataReport.asStateFlow()
     private var systemMediaJob: Job? = null
     private val progressClock = AtomicLong(System.currentTimeMillis())
 
@@ -755,27 +757,16 @@ class GalleryViewModel(
         }
     }
 
-    fun addBatchMetadata(
-        itemIds: Collection<String>,
-        authors: String,
-        tags: String,
-        collections: String,
-    ) {
-        val libraryId = activeLibraryId.value ?: return
-        if (itemIds.isEmpty()) return
-        viewModelScope.launch {
-            runCatching {
-                repository.updateMediaBatch(
-                    libraryId = libraryId,
-                    itemIds = itemIds,
-                    addAuthors = authors.splitValues(),
-                    addTags = tags.splitValues(),
-                    addCollections = collections.splitValues(),
-                )
-            }.onSuccess { count -> message.value = "已更新 $count 项媒体的作者 / Tag / Collection" }
+    fun editBatchMetadata(baselines: List<MediaItem>, edit: dev.susnowy.gallery.model.BatchMetadataEdit) {
+        if (baselines.isEmpty() || !edit.active) return
+        launchLongOperation {
+            runCatching { repository.editMetadataBatch(baselines, edit) }
+                .onSuccess { _batchMetadataReport.value = it }
                 .onFailure(::showError)
         }
     }
+
+    fun dismissBatchMetadataReport() { _batchMetadataReport.value = null }
 
     fun setBatchFavorite(itemIds: Collection<String>, favorite: Boolean) {
         val libraryId = activeLibraryId.value ?: return

@@ -10,6 +10,14 @@
 
 ---
 
+## 2026-09-19：R08 批量字段编辑与持续回归
+
+- 批量对话框固定打开时的选择及字段基线，作者/Tag/Collection 支持保持、追加、替换、清空，归属可统一设置。目标值或来源变化整项跳过，未操作字段采用当前值；明确清空已有空字段也写 manual。
+- 仓储按 Library 独立提交，catalog 先于 Inbox；目录离线不阻塞其他库，报告保存数与冲突。重新读取便携回收站，阻止编辑已移入回收站的条目。
+- 审查发现旧 saveItems 会重建 Asset、Edition 与 Series；新增 saveBatchFields 收窄已有 Work 写入，保留来源、关系及根/实体扩展字段，新增 Inbox Work 仍创建初始来源。回归覆盖来源哈希、系列关系、未知扩展、过期 revision 拒绝且无部分写入。
+- Windows / Java 17：testDebugUnitTest、lintDebug、assembleDebug、assembleDebugAndroidTest 通过。API 36 emulator-5556：BatchMetadataInteractionTest 两项及 BatchMetadataRepositoryTest 一项通过。测试 Provider 无系统持久授权，仓储 fixture 直接登记；跨 storage 实例读回重新打开，避免旧文档 URI 缓存影响测试。
+- 未涉及真实媒体或 Schema；未取得本轮真机字段编辑证据。批量草稿界面重建后重置，避免新基线套用旧草稿；多文档/多库非整体原子事务，外部写入者仍需互斥。
+
 ## 2026-09-18：接入目录返回无反馈的排查与可观测性修正
 
 - 用户报告两个入口均能选择并确认目录，但返回 Rem 后没有变化。API 36 模拟器上用系统 DocumentsUI 新建独立空目录完成授权，旧包正常进入 Inbox 并扫描 0 项；用户手机未连接，本轮没有取得真机故障日志，不能据此宣布原始问题已修复。

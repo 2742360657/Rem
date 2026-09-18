@@ -1210,6 +1210,72 @@ class GalleryRepository(context: Context) {
         decidedAt = java.time.Instant.now().toString(),
     )
 
+    suspend fun editMetadataBatch(
+        baselines: List<MediaItem>,
+        edit: dev.susnowy.gallery.model.BatchMetadataEdit,
+    ): dev.susnowy.gallery.model.BatchMetadataReport = runOperation("正在批量保存元数据…") {
+        var updatedCount = 0
+        var unchangedCount = 0
+        val issues = mutableListOf<dev.susnowy.gallery.model.BatchMetadataIssue>()
+        if (!edit.active) return@runOperation dev.susnowy.gallery.model.BatchMetadataReport(unchanged = baselines.size)
+        baselines.distinctBy { it.libraryId to it.id }.groupBy { it.libraryId }.forEach { (libraryId, selected) ->
+            try {
+                withPortableWrite {
+                    val storage = storageFor(requireLibrary(libraryId))
+                    val store = PortableMetadataStore(storage)
+                    val catalog = store.loadCatalog(libraryId)
+                    val portableById = catalog.items.associateBy { it.id }
+                    val trashedIds = store.loadState(libraryId).trash.mapTo(mutableSetOf()) { it.itemId }
+                    val changes = mutableListOf<MediaItem>()
+                    selected.forEach work@ { baseline ->
+                        val indexed = database.mediaItem(baseline.id)?.takeIf { it.libraryId == libraryId }
+                        val portable = portableById[baseline.id]
+                        if (indexed == null || (baseline.revision > 0 && portable == null)) {
+                            issues += dev.susnowy.gallery.model.BatchMetadataIssue(libraryId, baseline.id, baseline.displayTitle, "作品已不存在，请刷新后重试")
+                            return@work
+                        }
+                        if (portable != null && portable.relativePath != indexed.relativePath) {
+                            issues += dev.susnowy.gallery.model.BatchMetadataIssue(libraryId, baseline.id, baseline.displayTitle, "来源路径已变化，请重新接入或扫描后重试")
+                            return@work
+                        }
+                        val current = portable?.let { indexed.withPortableMetadata(it) } ?: indexed
+                        val merged = edit.merge(baseline, current)
+                        when {
+                            current.trashed || current.id in trashedIds -> issues += dev.susnowy.gallery.model.BatchMetadataIssue(libraryId, baseline.id, baseline.displayTitle, "作品已移入回收站")
+                            merged.conflicts.isNotEmpty() -> issues += dev.susnowy.gallery.model.BatchMetadataIssue(libraryId, baseline.id, baseline.displayTitle,
+                                "编辑期间字段已变化：${merged.conflicts.joinToString()}")
+                            merged.item == current -> unchangedCount++
+                            else -> changes += merged.item
+                        }
+                    }
+                    if (changes.isNotEmpty()) {
+                        val saved = store.saveBatchFields(changes).associateBy { it.id }
+                        // Catalog is committed before Inbox; an Inbox failure must not hide that partial success.
+                        updatedCount += changes.size
+                        changes.forEach { item -> database.upsertMedia(item.withPortableMetadata(saved.getValue(item.id))) }
+                        PortableInboxStore(storage).upsert(libraryId, changes.map { item ->
+                            mediaDecision(item, if (edit.domain != null) InboxDisposition.CLASSIFIED else InboxDisposition.ACCEPTED,
+                                domain = edit.domain, reason = "batch_edit")
+                        })
+                        changes.forEach { item -> database.upsertMedia(item.withPortableMetadata(saved.getValue(item.id)).copy(
+                            inInbox = false,
+                            inboxDisposition = if (edit.domain != null) InboxDisposition.CLASSIFIED else InboxDisposition.ACCEPTED,
+                        )) }
+                        synchronizeSeriesProjection(libraryId, saved.values, store.loadCatalog(libraryId))
+                    }
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                RemLog.failure("BatchMetadata", "批量编辑某个 Library 失败", error)
+                issues += dev.susnowy.gallery.model.BatchMetadataIssue(libraryId, "", libraryId,
+                    error.message ?: "保存失败；其他 Library 独立处理")
+            }
+        }
+        refreshFromDatabase()
+        dev.susnowy.gallery.model.BatchMetadataReport(updatedCount, unchangedCount, issues)
+    }
+
     suspend fun updateMediaBatch(
         libraryId: String,
         itemIds: Collection<String>,

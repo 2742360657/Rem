@@ -21,6 +21,57 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PortableMetadataStoreTest {
+    @Test
+    fun batchFieldsPreserveSourcesRelationshipsAndUnknownExtensions() {
+        val saved = store.saveItem(item.copy(series = SeriesRef("series-id", "Series")), 0)
+        val before = store.loadCatalog(item.libraryId)
+        val raw = access.read(PortableMetadataStore.CATALOG_PATH)!!
+            .replace("\"content_hash\": \"abc\"", "\"content_hash\": \"abc\", \"future_asset\": true")
+            .replace("\"display_title\": \"Work\"", "\"display_title\": \"Work\", \"future_work\": {\"v\": 7}")
+            .replace("\"schema_version\": 4", "\"schema_version\": 4, \"future_root\": [1,2]")
+        access.seed(PortableMetadataStore.CATALOG_PATH, raw)
+        store.saveBatchFields(listOf(item.copy(revision = saved.revision, tags = listOf("new"),
+            contentHash = "stale", fieldSources = mapOf("tags" to "manual"))))
+        val after = store.loadCatalog(item.libraryId)
+        assertEquals(before.assets, after.assets)
+        assertEquals(before.editions, after.editions)
+        assertEquals(before.series, after.series)
+        assertEquals(listOf("new"), after.works.single().tags)
+        val result = access.read(PortableMetadataStore.CATALOG_PATH)!!
+        assertTrue(result.contains("future_asset"))
+        assertTrue(result.contains("future_work"))
+        assertTrue(result.contains("future_root"))
+    }
+
+    @Test
+    fun batchClearOfEmptyFieldPersistsManualLockAndPreservesOtherWorkFields() {
+        val original = item.copy(authors = emptyList(), displayTitle = "Original")
+        val saved = store.saveItem(original, 0)
+        val baseline = original.copy(revision = saved.revision)
+        val edit = dev.susnowy.gallery.model.BatchMetadataEdit(
+            authors = dev.susnowy.gallery.model.BatchListEdit(dev.susnowy.gallery.model.BatchListMode.CLEAR),
+        )
+        val result = edit.merge(baseline, baseline)
+        store.saveBatchFields(listOf(result.item))
+        val reloaded = PortableMetadataStore(access).loadCatalog(original.libraryId).works.single()
+        assertTrue(reloaded.authors.isEmpty())
+        assertEquals("manual", reloaded.fieldSources["authors"])
+        assertEquals("Original", reloaded.displayTitle)
+        assertEquals(original.tags, reloaded.tags)
+    }
+
+    @Test
+    fun batchFieldsCreateNewInboxWorkAndRejectStaleRevisionWithoutPartialWrite() {
+        val saved = store.saveBatchFields(listOf(item)).single()
+        val before = access.read(PortableMetadataStore.CATALOG_PATH)
+        assertThrows(RevisionConflictException::class.java) {
+            store.saveBatchFields(listOf(item.copy(id = "new", relativePath = "new.cbz"), item.copy(revision = 0)))
+        }
+        assertEquals(before, access.read(PortableMetadataStore.CATALOG_PATH))
+        assertEquals(1L, saved.revision)
+        assertEquals(item.relativePath, store.loadCatalog(item.libraryId).assets.single().relativePath)
+    }
+
     private val access = MetadataMemoryAccess()
     private val store = PortableMetadataStore(access)
     private val item = MediaItem(

@@ -92,6 +92,8 @@ The converter is idempotent per document, so a stop after the catalog commit but
 
 ## Inbox decisions
 
+Batch information edits use `BatchMetadataEdit` with an opening selection snapshot. Target values and provenance are compared with freshly loaded portable metadata; any target conflict skips that Work. `saveBatchFields` changes only authors, tags, collections, domain and their provenance for existing Works, preserving source and relationship entities and unknown Work/catalog extensions. New Inbox Works are created with their initial source projection. Catalog commits precede Inbox decisions; libraries commit independently and the result reports partial failures. This is not a cross-document transaction or an external-writer lock.
+
 `.gallery/state/inbox.json` (`PortableInboxStore`) records what the user decided about a surfaced path:
 
 - `accepted` — the suggestion stands, the Work joins the normal views;
