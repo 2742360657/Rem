@@ -1,6 +1,6 @@
 # Rem architecture
 
-This document describes the implementation that exists now. Product semantics and roadmap live in `Gallery_Project_Guide.md`; historical investigations live in `docs/DEV_LOG.md`.
+This document describes the implementation that exists now. Product semantics and acceptance criteria live in [PRODUCT](PRODUCT.md); portable contracts in [PORTABLE_FORMAT](PORTABLE_FORMAT.md); current verification and remaining work in [STATUS](STATUS.md); historical investigations in [DEV_LOG](DEV_LOG.md).
 
 ## Application shape
 
@@ -258,9 +258,23 @@ Editor drafts survive configuration restoration; leaving a dirty Group/Series as
 
 `DocumentTreeStorage.openOutput` invalidates the written path and its parent listing on close, including failure, while retaining unrelated subtree caches. Its stream wrapper delegates bulk writes directly. Detail navigation builds one ID lookup for the current media snapshot instead of searching the full table for every contextual ID.
 
-The scanner avoids repeated provider queries and byte reads, but `refreshFromDatabase()` still materializes all media rows. Real testing with the approximately 76,000-file sample determines whether the next change should be top-level inventory checkpoints, paged database queries, or both.
+The scanner avoids repeated provider queries and byte reads, but `refreshFromDatabase()` still materializes all media rows. Inventory checkpoints and paging remain open implementation choices; sample scale and evidence are maintained only in [STATUS](STATUS.md).
 
-## Verification baseline
+## Engineering constraints retained from prior investigations
+
+- Every service reading archives takes the repository-owned `ArchiveCache` as a required dependency. An optional or second cache can silently fall back to streaming and break supported archive layouts.
+- Wrap SAF and `ZipFile` entry streams in `BufferedInputStream` for BitmapFactory bounds probes, which need rewind support; failed decoding logs the entry and reason through scrubbed diagnostics.
+- One gesture layer owns tap, double tap, long press and pinch. Rebuilding a container must not erase a measurement produced by that container.
+- `snapshotFlow` observes snapshot state reads, not plain captured parameters. Settled/initialized parameters affecting its result must also key the surrounding `LaunchedEffect`.
+- Initialization has an exclusive expiring lease and commits identity last. The stable recovery slot is required on every read path, including Library identity inspection; provider-qualified names are not successful commits.
+- Fake providers must reproduce naming conflicts and backing sizes/timestamps; output stream wrappers retain bulk writes and invalidate caches even after partial failure.
+- Detail/reader code must retain catalog-only rows and guard empty video sources before creating a player. The current projection separates `missingMedia` from `needsRepair`; it does not serialize either into catalog truth.
+
+## Generated Library instructions
+
+`PortableLibraryManager.libraryGuide` and `schemaDocument` currently embed the Library instructions and v4 summary in Kotlin. Existing user guides are retained on ordinary adoption; conversion explicitly rewrites its backed-up documents. The repository's [Library Agent contract](LIBRARY_AGENT.md) is broader than the embedded guide, and there is not yet an independent complete editor/validator distribution. This gap is tracked as R10 in STATUS; documentation changes alone do not update existing Libraries.
+
+## Verification commands
 
 For ordinary changes, pick the command that matches the current host — this repository is developed on both Windows and Linux:
 

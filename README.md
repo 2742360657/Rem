@@ -29,16 +29,31 @@ Series   有顺序的作品序列
 
 Android 界面通过可重建投影使用这些实体。Group/Series 手动编辑、Edition 快速/深度比较与虚拟合并已经接通；虚拟合并只写页计划，不改动任何来源文件。
 
-## 文档
+## 文档与需求入口
 
-- [产品与便携格式规范](Gallery_Project_Guide.md)
-- [开发 Agent 规则](AGENTS.md)
-- [当前架构](docs/ARCHITECTURE.md)
-- [使用说明](docs/USER_GUIDE.md)
-- [开发记录](docs/DEV_LOG.md)
-- [版本变化](CHANGELOG.md)
+开发从 [AGENTS.md](AGENTS.md) 开始，再读 [产品与需求验收](docs/PRODUCT.md) 和 [当前状态](docs/STATUS.md)。六类媒体及观看习惯已登记为 R01–R11；**正式需求不等于当前功能已全部实现**。
+
+| 要做的事 | 入口 |
+| --- | --- |
+| 补充需求或理解产品取舍 | [PRODUCT](docs/PRODUCT.md)：需求编号、语义与验收 |
+| 查看已实现程度、验证证据与下一步 | [STATUS](docs/STATUS.md) |
+| 修改便携数据或编写编辑工具 | [PORTABLE_FORMAT](docs/PORTABLE_FORMAT.md) |
+| 整理媒体 Library | [LIBRARY_AGENT](docs/LIBRARY_AGENT.md)，以及库内 GALLERY_LIBRARY.md |
+| 理解代码 | [ARCHITECTURE](docs/ARCHITECTURE.md) |
+| 使用当前 App | [USER_GUIDE](docs/USER_GUIDE.md) |
+| 追溯问题或版本 | [DEV_LOG](docs/DEV_LOG.md)、[CHANGELOG](CHANGELOG.md) |
+| 跨会话 / 多 Agent 交接 | [handoffs](docs/handoffs/README.md) |
+
+后续你只需说明场景、希望的行为和限制；Agent 负责将要求写入对应需求、补验收、记录实现差距，并按统一流程执行。旧 [Gallery_Project_Guide](Gallery_Project_Guide.md) 只保留跳转。
 
 Library 接入后还会在根目录生成 `GALLERY_LIBRARY.md`，供本地 Agent 在整理该 Library 前阅读。它说明 Schema v4 实体、人工字段保护、来源标签、备份和文件安全边界。
+
+## 工作目录
+
+- `app/`：应用及测试；`gradle/`、wrapper 和构建配置留在根目录。
+- `docs/`：唯一现行文档；`docs/handoffs/` 仅保存活动交接，不再维护平行的文档草案树。
+- `dist/`：本机构建产物；`build/`、`.gradle/`、`.gradle-user/`、`.kotlin/` 为忽略的构建目录，不属于规范来源。
+- 文件名注明 AI 忽略的用户维护文档由用户维护，Agent 不读取或整理其内容。
 
 ## 构建与检查
 

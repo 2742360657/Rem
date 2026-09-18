@@ -1,225 +1,89 @@
-# Rem development memory
+# Rem 开发协作协议
 
-This file applies to the whole repository. It is the short operational handoff for a coding agent, not a duplicate product specification.
+适用于整个仓库、所有 Coding Agent 和模型。这里只保存长期规则；产品目标、当前状态和历史各有唯一归属。
 
-Read in this order:
+## 1. 开始任务
 
-1. `AGENTS.md` — constraints and current work;
-2. `Gallery_Project_Guide.md` — product semantics and portable format;
-3. `docs/ARCHITECTURE.md` — code that actually exists;
-4. the latest entry in `docs/DEV_LOG.md`;
-5. the relevant user-facing section in `docs/USER_GUIDE.md`.
+1. 读取本文件、[产品规范](docs/PRODUCT.md)、[当前状态](docs/STATUS.md)。
+2. 涉及便携数据读 [格式契约](docs/PORTABLE_FORMAT.md)，按任务读 [架构](docs/ARCHITECTURE.md) 和 [用户指南](docs/USER_GUIDE.md)。
+3. 查看 [活动交接](docs/handoffs/README.md)、运行 git status --short 并检查最近提交，识别用户或其他 Agent 的修改。
+4. 只在需要历史证据时搜索 [开发日志](docs/DEV_LOG.md)，不从整本日志重新推导当前结论。
+5. 开工声明：需求编号、一个有边界的目标、范围与非目标、拥有文件、便携影响（无 / 元数据 / Schema / 原媒体）、验收及验证方法。小任务一段话即可。
 
-## Mission and user preferences
+文件名注明“AI需要忽略”的用户维护文档不读取、不修改、不删除。检测当前主机和工具，不假设历史挂载点仍有效。
 
-Rem is an Android, local-first library for large image, comic, photo-set, and video collections on removable storage. Media remains ordinary user-owned files. Portable truth travels in `.gallery/`; Android databases, logs, enrichment queues, and previews are disposable projections.
+## 2. 新要求如何落地
 
-Current priorities:
+- 用户明确要求直接纳入 PRODUCT 对应需求，不能降成“设想”；Agent 自己提出的扩展才标为候选。
+- 先检索现有需求编号，扩充已有条目或新增稳定编号，补可观察的验收条件；STATUS 同步记录差距与优先级。不能只写日志或口头答应。
+- 用户授权 Agent 判断的歧义，按产品优先级选择最小、可逆、符合便携模型的方案，记录结论及理由，不反复询问常规设计。
+- 仅在缺少关键输入、互斥要求无法合理消解或具体物理操作尚未确认时提问，同时继续独立工作。
+- 新的明确用户决定优先于旧项目文档；某次操作授权不自动变成长期授权。产品规范决定目标，代码和测试决定当前实现程度；存在差距时登记差距，不反向缩减需求。
+- 改变既有语义时修改唯一权威位置，记录替代原因；不静默删除未完成需求或复用旧编号。
 
-1. a clean portable logical model;
-2. a complete Series/reader flow and predictable viewing gestures;
-3. real-device testing with the large E-drive Library when the user chooses to run it;
-4. interaction polish inspired by EhViewer and MT Manager.
+## 3. 不可破坏的边界
 
-The project is pre-release. Prefer the cleanest current design over compatibility layers for formats that were never stable. Schema v4 is current; v3 has one explicit backup-first conversion path only. Do not add support for older experiments unless the user explicitly asks.
+- .gallery/ 是便携真相；SQLite、URI、队列、日志、预览和缓存可重建。用户决定不能只存本机。
+- Android 只做弱识别，重点是批量管理和编辑；单项和批量共享领域规则。复杂整理交给 [Library Agent](docs/LIBRARY_AGENT.md)。
+- 扫描、识别、普通元数据或关系编辑不移动、改名、覆盖或删除媒体；检测产生带证据的建议。
+- 物理变更必须明确范围、预览、冲突检查、用户确认、可恢复事务及结果验证。已有授权不重复索取；永久删除的重试不代表能恢复已删字节。
+- 缺失媒体不能删除 Work / Edition / Group / Series 或人工决定。正常 missingMedia 与异常 needsRepair 分开。
+- 稳定 ID 才是身份，不按标题合并实体；关系只有一个拥有者。
+- manual 逐字段保护，包括人工清空；来源值与写入边界以格式契约为准。
+- 便携路径仅用 Library 相对路径和 /，不存 URI、盘符、绝对路径、. 或 ..。
+- 凭据不进入 Library、日志、fixture、诊断导出或 Git。
+- Schema v4 当前有效；v3 只有备份优先的一次转换。不扩展更早实验，不写未知更高版本。
+- Schema 变更前定义备份、迁移顺序、失败、中断、重试、回滚与新版拒绝；存储、迁移、数据丢失缺陷先补失败测试。
+- 真实 Library 批量操作前把 .gallery/ 备份到介质之外；不为了文档整理访问真实媒体库。
+- 保留无关修改，不用破坏性 Git 命令，不顺手格式化任务外文件。
 
-Use Chinese commit messages.
+## 4. 实现约束
 
-Design philosophy (user-stated, load-bearing):
+- UI 可基于快照编辑，提交时重读当前状态，只合并本动作真正改变的字段，保留后来出现的人工锁。扫描和补全不得回写过时快照。
+- 重建便携投影要清除过时记录；新建便携实体在同一动作中进入本机投影。
+- 进度事件在入队前打时间戳，旧事件不覆盖新事件；成功写入通知当前界面。
+- 打开、所在页和完成分别建模，页 0 是有效位置，恢复末页不表示完成。
+- 破坏性确认随所属 Library / 对象变化而清空，异步预览不得跨库或跨任务复用。
+- SAF 查询与目录树规模成比例；完整哈希等重内容操作显式限定范围、可取消、复用结果。
+- 归档、手势、写入恢复等技术约束见 ARCHITECTURE，不因实现方便改变产品语义。
 
-- The single source of truth is `.gallery/`; device databases, logs, enrichment queues, and previews are disposable. Every rule and default exists to serve the portable layer.
-- Android does **basic, weak recognition** only. Its differentiators are **batch management and batch editing**: apply one decision across a whole selection, at a scale hand-driven work cannot match.
-- A local Agent must stay able to organise a Library unaided, with fixed rules and its own fixed instruction document. Android must not grow a competing "smarter" recognizer.
-- The load-bearing promise: **moving a Library, or opening it on another Android device, is fast and lossless.** Structure and human decisions appear from `.gallery/` alone, before any media is touched; missing or unreachable files must never destroy a Work, Edition, Group, Series membership, or decision.
+## 5. 多 Agent / 不同模型协作
 
-## Non-negotiable safety
+默认单 Agent；并行只用于独立可验收、文件归属清晰的子任务。不同模型遵守同一协议，不另建规则。
 
-- Scanning, recognition, metadata edits, grouping, and view changes never move, rename, rewrite, merge, or delete media.
-- Physical changes require an explicit preview, user confirmation, conflict checks, and the recoverable transaction pattern.
-- `.gallery/` is portable truth. A user decision must not live only in SQLite.
-- Portable paths use `/` and are relative to the Library root. Never persist Android URIs, drive letters, absolute paths, `.`, or `..`.
-- `manual` field provenance wins. Automatic recognition, providers, and agents merge field by field.
-- Detection produces a suggestion with evidence/confidence, never an irreversible classification.
-- Duplicate or Edition comparison never deletes automatically.
-- Credentials, cookies, and tokens never enter Library files, logs, fixtures, commits, or diagnostic exports.
-- Keep SAF round-trips proportional to the tree; hash large content only for an explicit operation.
-- Back up portable documents before Schema conversion or a high-risk batch operation.
-- Never write an unknown newer Schema.
-- Disposable previews are not originals and never enter portable truth.
-- Preserve unrelated user changes. Do not use destructive Git commands.
+- 主 Agent 负责需求解释、拆分、接口、整合、最终验证和权威文档回写。
+- 分派写清需求编号、基线提交、目标、非目标、拥有文件、输入输出接口、验收与验证要求；子 Agent 先读本协议。
+- 同一文件同一时间只有一个写入者。共享模型、Schema、依赖及权威文档由主 Agent 或明确指定的唯一负责人修改；越界先协调。
+- 子任务交回变更清单、验证命令和结果、未决问题；子任务完成不等于整体完成，主 Agent 核对集成结果及原始需求。
+- 跨会话任务或并行文件归属写入 docs/handoffs/<task-id>.md；小任务不制造空交接。完成后结论归档到对应文档，再删除临时交接。
+- 新会话先核对 Git 状态和交接的基线，不能用过期交接覆盖最新规范。独立 checkout 的修改由主 Agent 审查后整合。
 
-## Current portable model
+## 6. 文档唯一归属
 
-Schema v4 normalizes `.gallery/items/catalog.json`:
+| 内容 | 权威位置 |
+| --- | --- |
+| 产品目标、媒体语义、需求编号和验收 | docs/PRODUCT.md |
+| 便携字段、关系、来源、迁移与写入协议 | docs/PORTABLE_FORMAT.md |
+| 当前代码结构与工程约束 | docs/ARCHITECTURE.md |
+| 需求进度、验证基线、缺口与下一步 | docs/STATUS.md |
+| 用户现在能执行的操作 | docs/USER_GUIDE.md |
+| 整理 Library 的 Agent 流程 | docs/LIBRARY_AGENT.md |
+| 历史证据、排障过程和取舍 | docs/DEV_LOG.md |
+| 用户可见版本变化 | CHANGELOG.md |
+| 活动任务、负责人和断点 | docs/handoffs/ |
 
-- **Asset** — physical file, directory, archive, or imported source;
-- **Work** — user-facing logical content and editable metadata;
-- **Edition** — one acquired version of a Work, referencing ordered Assets;
-- **Group** — Works browsed together, such as a photo set or mixed image/video set;
-- **Series** — ordered Works with optional sort, season/episode, or volume/chapter positions.
+其他位置只做摘要与链接，不复制整段。Gallery_Project_Guide.md 仅为旧入口跳转，不保留长期并行的 v2 文档树。
 
-Relationships have one owner:
+## 7. 验证与交付
 
-```text
-Edition -> Work, Asset
-Group   -> Work
-Series  -> Work
-State   -> Work
-```
+代码修改先跑聚焦检查，通常再运行：
 
-Do not use Series for “same author”, Group for edition identity, or path layout as permanent classification. A creator shelf can be a query without creating a relationship.
+Windows：`.\gradlew.bat testDebugUnitTest lintDebug assembleDebug assembleDebugAndroidTest`
 
-`.gallery/state/inbox.json` holds the user's Inbox decisions (`accepted`, `classified`, `ignored`, `handled`) keyed by Library-relative path plus `work_id` when the target is a Work. It is portable truth: deleting the device database must not bring ignored content back, and an old client that ignores the document still reads `catalog.json` and `state.json` safely.
+Linux/macOS：`./gradlew testDebugUnitTest lintDebug assembleDebug assembleDebugAndroidTest`
 
-The current Android runtime still consumes a `MediaItem` projection. `PortableMetadataStore` joins v4 entities into that projection and `PortableInboxStore` joins Inbox decisions; new portable behavior must update normalized entities first rather than reintroducing a serialized `items` array.
+涉及 SAF、Provider、迁移、解码、导航生命周期或真实手势时运行设备测试。纯文档修改检查链接、字段/代码一致性、需求覆盖与差异，不重跑 Android 全套。
 
-## Recognition and real Library facts
+区分：代码已实现、单测通过、模拟器验证、真机验证、真实库切片验证、全量真实介质验证；记录日期、环境、规模和证据。历史测试数字不能冒充本轮结果，环境不具备时明确缺口。
 
-Discovery and classification stay separate. Unsupported user-visible entries remain reviewable in Inbox; known internals and sidecars do not become cards.
-
-Useful signals include ComicInfo, stable downloader IDs, EhViewer markers, Pixiv IDs, episode/chapter naming, and parent folders. A folder named `JM` is not authoritative.
-
-The read-only sample observed on 2026-09-17 was approximately 464.92 GiB and 76,517 files, including about 69,494 JPG, 2,984 WebP, 1,610 CBZ, 1,011 GIF, 796 PNG, 466 MP4, and 272 image-set directories with direct child videos. These values are evidence, never constants.
-
-### Locating the real test Library
-
-The removable SSD is mounted on Linux under `/run/media/<user>/<volume-label>/`; the label and user name are **not** stable, so never treat a path as fixed:
-
-- current mount point: `/run/media/susnowy/闪迪-2T/` (volume label `闪迪-2T`);
-- current Library root inside it: `/run/media/susnowy/闪迪-2T/Rem-lib` (`.gallery/`, `Comics/`, `Works/`);
-- find it after a re-plug: `lsblk -f` or `ls /run/media/$USER/`, then look for `<mount>/Rem-lib/.gallery/library.json`.
-
-On Android there is no path at all: the Library is always whatever directory the user grants through SAF, so scripts and docs must talk about the Library root, never a host path. Before any batch operation against the real Library, copy `.gallery/` off the drive (the drive is the only copy).
-
-A second, always-available test target is the phone's own storage (`/storage/emulated/0/<user folder>/`), which can hold a small curated Library for repeatable checks while ADB stays connected.
-
-## Implemented foundation
-
-- Library identity, provider-exclusive initialization lease, Schema protection, backups, and generated Library guide;
-- SAF storage abstraction with projected directory queries and cache invalidation;
-- byte-free inventory followed by a resumable local enrichment queue;
-- Inbox confirmation, weak recognizers, provenance, and visible unsupported/ambiguous discoveries;
-- image, directory/ZIP/CBZ reader, video player, system album import, search, metadata editing, and progress;
-- logical trash, protected permanent deletion, and recoverable Organizer/page-order transactions;
-- derived Series shelf and mixed image/video presentation;
-- bounded device-private offline previews;
-- normalized Schema v4 plus idempotent v3-to-v4 conversion after snapshots;
-- portable Inbox decisions in `.gallery/state/inbox.json` (accept, classify, ignore, handle, undo), mirrored into a disposable device index;
-- editable Groups: explicit save of a derived mixed folder with a stable id, plus create/rename/member/order/cover/delete operations written through `catalog.json` and projected into a disposable `groups` table (database v8);
-- batch Series editing: atomic `upsertSeries`/`deleteSeries`, rename, batch add/remove, reorder (`sort_index`) and numbering reset, with `field_sources.series = manual` stamped on every touched Work so recognition cannot re-assign it; projected into a disposable `series` table (database v9);
-- card context actions for "add to Group", "add to Series" and Edition comparison, backed by the pure `MembershipRules` (order preserved, duplicates dropped, Works in another Series reported instead of moved);
-- `SelectableMediaGrid` gives the image/video and works lists the same selection mode and batch actions (add to Group/Series, favourite, append metadata, trash), with `BatchMetadataDialog` shared instead of duplicated.
-- recoverable portable-document commits: every previous revision uses a stable `.<name>.rem-backup` slot that the next read restores after a process stop, including Library identity inspection;
-- repository-wide serialization for catalog/state/Inbox read-modify-write operations, with scanning reloading portable truth after the long inventory before projecting it into SQLite;
-- an App-private `ArchiveCache` settings entry with size/clear, plus protection that keeps the archive currently being opened from evicting itself when it exceeds the nominal 512 MiB budget.
-
-## State invariants worth stating before writing UI
-
-- A UI action is planned against a snapshot. On commit, re-read the row and merge **only the fields the action changed**; provenance is recomputed from the row that is on disk, so an older snapshot can never delete a `manual` lock that appeared meanwhile.
-- `.gallery/` is the complete truth. Rebuilding the device index replaces the projection (clearing entries the document no longer has) instead of only upserting into it, in one transaction.
-- Identity is the stable portable id. Titles are for display and sorting only: never match, merge, project, edit or navigate by title.
-- Async progress writes carry a stamp chosen **before** the task is queued, and the repository drops a write older than the stored one. A successful save is observable through a revision flow, so the current screen refreshes without being re-entered.
-- "Opened" and "finished" are facts separate from "which page is showing": page 0 is a real position, restoring the last page is not completion, and re-reading a finished chapter starts at its first page.
-- One gesture layer owns tap, double tap, long press and pinch. Rebuilding a container must not erase a measurement that container produced.
-- Auto-scroll changes the logical order, not only pixels: the distance the list actually consumed feeds the same arithmetic as a finger drag, and the finger position used for the edge speed moves only when the finger moves.
-- Evidence is graded: verified by test/emulator, inferred from code, or still needing a real device. Documentation may only claim the first kind.
-- A portable entity that a user action creates has to reach the device projection in the same action. Only mirroring it after a scan leaves the UI describing a series, group or state that the catalog already owns.
-- `snapshotFlow` re-runs only when snapshot state it read changes. A value that arrives as a parameter (a settled flag, an initialised flag) must also be a key of the surrounding `LaunchedEffect`, or the flow keeps reporting the value it started with.
-- A state that drives a destructive or irreversible outcome (permanent deletion, physical move) must not be reachable from a stale screen: clear it when its owner changes, and make the UI text match what the code actually does.
-
-## Known gaps
-
-- 2026-09-18 readiness pass: startup trash auto-purge removed. Retention is a review reminder only; current/all-Library trash is explicit. Permanent deletion validates the confirmed row and portable state, refuses shared/nested/multi-source deletion, backs up metadata, and journals per-source completion. Explicit retry resumes remaining work; it never restores deleted bytes or deletes a replacement at an already completed path. A partially deleted directory with changed size is refused for manual review.
-- Group/Series drafts now survive configuration restoration and back asks to discard rather than saving silently. Detail/editor error messages are visible. Organizer preview generations prevent late results crossing Library/template changes; long UI jobs reject duplicate starts until cancellation completes.
-- Drag geometry correction: the new layout position already includes completed swaps, so visual translation is the unconsumed remainder, not cumulative travel. Pointer input must not be keyed by the mutable index. Keep fixed row geometry free of extra external spacing. The former cumulative-offset unit assertions were wrong; see the current DEV_LOG entry. A complete Compose pointer stream now verifies multi-row dragging and actual edge scrolling on API 36; sustained real-finger behavior still needs a phone.
-- Readiness-pass verification: 279 unit tests and 25 API 36 emulator instrumented tests passed; lint has 0 errors, debug and test APK builds pass. The full removable Library was not accessed.
-- SAF output close invalidates the affected cached entry and parent listing even after partial write failure. Bulk writes must remain bulk when wrapping streams. The test Provider reports real backing-file sizes/timestamps and removes fixture bytes on reset/delete.
-
-- 2026-09-18 readiness pass: startup trash auto-purge removed. Retention is a review reminder only; current/all-Library trash is explicit. Permanent deletion validates the confirmed row and portable state, refuses shared/nested/multi-source deletion, backs up metadata, and journals per-source completion. Explicit retry resumes remaining work; it never restores deleted bytes or deletes a replacement at an already completed path. A partially deleted directory with changed size is refused for manual review.
-- Group/Series drafts now survive configuration restoration and back asks to discard rather than saving silently. Detail/editor error messages are visible. Organizer preview generations prevent late results crossing Library/template changes; long UI jobs reject duplicate starts until cancellation completes.
-- Drag geometry correction: the new layout position already includes completed swaps, so visual translation is the unconsumed remainder, not cumulative travel. Pointer input must not be keyed by the mutable index. Keep fixed row geometry free of extra external spacing. The former cumulative-offset unit assertions were wrong; see the current DEV_LOG entry.
-- SAF output close invalidates the affected cached entry and parent listing even after partial write failure. Bulk writes must remain bulk when wrapping streams. The test Provider reports real backing-file sizes/timestamps and removes fixture bytes on reset/delete.
-
-- Edition comparison and virtual merge are wired end to end (quick/deep comparison, report, page-plan Edition, `.gallery/imports/` evidence, reader follows the plan) and were walked through on a device on 2026-09-17; pixel-level (re-encode) matching is deliberately not implemented.
-- Initial inventory is still one atomic traversal; only enrichment is resumable.
-- `refreshFromDatabase()` still materializes the full media table.
-- Real E-drive scanning and mass video-preview behavior have not been validated with the latest build.
-- A few decoder formats can display through Coil but cannot generate the BitmapFactory-based offline JPEG.
-- Archive cache size/clear was walked through on the Android 16 emulator on 2026-09-18 (16-byte private fixture: 1 file/16 B -> clear -> 0/0 with snackbar). The real-device feel of long page-by-page archive reading is still unverified.
-- Device walkthroughs done on 2026-09-17 (Xiaomi 23127PN0CC, curated Library on phone storage): Inbox accept, derived-Group save, Group reorder, Series reorder with `manual` stamping, card actions, batch add-to-Series/add-to-Group, deep comparison, virtual merge, and reading the merged plan. Those runs found and fixed the missing `@Serializable` on projection types, the empty comparison candidate list and the unreachable merge button.
-- Also verified on a device (2026-09-17): Series drag handle, "clear numbering" (positions cleared, manual order kept) and rename.
-- Also verified on a device (2026-09-17, second pass): the Group editor's drag / set-cover / remove-member / rename (all in one save) and Series "remove member".
-- Verified on the emulator (Android 16 AVD, 2026-09-18): archive page decoding after the `ArchiveCache` ownership fix; the zoom container through injected gestures (`pinch`, `doubleClick`, `swipe`), including the width-filled comic placement; and the full Series flow on a 5-chapter fixture — chapter list with per-chapter progress, continue entry, automatic advance into the next chapter, end-of-chapter footer when advance is off, and a directory ImageSet chapter that used to fall out of its series.
-- Enrichment now commits by merging into the row re-read at commit time (`MediaItem.mergeEnrichment`) with media I/O outside the portable write mutex, and `updateMedia` merges the other way (`mergeEdit`), so a finished batch can no longer roll the projection back over an edit made while it ran. Locked by `EnrichmentMergeTest` and the batch re-read case in `GalleryDatabaseEnrichmentInstrumentedTest`.
-- Still unverified on a device: drag auto-scroll on very long lists (implemented and unit-tested for the geometry, felt only on the emulator), and the full ~465 GiB E-drive inventory, which is the one step that needs the drive attached to the phone (the user has decided not to run it on the phone for now).
-
-## Next implementation order
-
-1. When the user is ready, test the current build against the actual removable Library (device + real E-drive), then decide whether inventory checkpoints and database paging are required. This is the only remaining item that needs the drive attached to the phone.
-2. Continue interaction polish: density options, back behaviour, and reading-readiness details surfaced by real use (for example knowing a page's aspect ratio before it loads, so a comic page does not resize once decoded).
-3. Validate the reader and reader-adjacent flows on the real device with the removable Library attached.
-
-Do not start a broad UI rewrite before portable semantics are usable.
-
-## Working procedure
-
-Before editing:
-
-1. Run `git status --short`, inspect recent commits, and identify unrelated changes.
-2. State one bounded goal and whether it changes portable data.
-3. For a Schema change, define backup, failure, retry, rollback, and newer-version refusal before writing code.
-4. Add or update a failing test for storage, migration, or data-loss defects.
-
-Before handoff:
-
-1. Run focused tests, then normally. This repository is developed on both Windows and Linux, so
-   detect the current host instead of assuming one platform:
-
-   Windows (PowerShell):
-
-   ```powershell
-   .\gradlew.bat testDebugUnitTest lintDebug assembleDebug assembleDebugAndroidTest
-   ```
-
-   Linux/macOS (the wrapper keeps its executable bit; `bash gradlew` is equivalent):
-
-   ```bash
-   ./gradlew testDebugUnitTest lintDebug assembleDebug assembleDebugAndroidTest
-   ```
-
-2. Run device tests when SAF, provider behavior, migration, decoding, or navigation changed.
-3. Inspect `git diff --check`, staged scope, and final status.
-4. Update only the documents whose responsibility changed:
-   - product/format decision → `Gallery_Project_Guide.md`;
-   - implementation architecture → `docs/ARCHITECTURE.md`;
-   - current user behavior → `docs/USER_GUIDE.md`;
-   - evidence and remaining risk → `docs/DEV_LOG.md`;
-   - user-visible release change → `CHANGELOG.md`;
-   - durable agent rule/current status → this file.
-5. Report implementation, inference, and unverified real-device behavior separately.
-
-## Lessons already paid for
-
-- Emulator UI walkthroughs must swipe a long distance slowly: a short or fast synthetic swipe is
-  often not recognised as a scroll. `uiautomator dump` only exports what is currently on screen, so a
-  "missing" element usually means "not scrolled to" — enumerate screen by screen before concluding a
-  rendering defect.
-- `adb push` truncates the last code point of a non-ASCII destination directory name
-  (`218.花柒Hana` becomes `218.花柒H`). Create the parent directory on the device first and push into
-  it, or rename from inside the guest shell. The media files themselves are unaffected.
-- A Catalog-only Work (present in `.gallery/`, no local media) must enter the device projection with
-  `needsRepair = true` and `size = 0`. Dropping it silently deletes Work, Edition, Group and Series
-  decisions from the UI even though the portable documents are intact.- Removable-storage performance is dominated by provider/Binder query count, not only bytes.
-- `DocumentFile` convenience calls can hide repeated queries.
-- A provider may qualify a conflicting name with ` (1)`; a successful rename result does not prove the requested path was committed.
-- A unique temporary name is not enough for crash recovery: the old live revision needs a stable, discoverable recovery path, and every read path (especially `library.json` inspection) must use it.
-- Library identity must be committed last and initialization needs an expiring exclusive lease.
-- A temporarily unreadable subtree is not proof that its indexed contents were deleted.
-- Fake providers must reproduce real conflict semantics.
-- Logs need URI/path scrubbing and remain device-private.
-- Every intermediate state of a migration or physical transaction must be attachable or safely resumable.
-- Tests have repeatedly found storage bugs faster than inspection alone.
-- The current phone and removable drive can reach roughly 360 MB/s for a large sequential video copy. Do not use the earlier 20 MB/s estimate as a hardware limit: full-Library work can still be dominated by SAF/provider round-trips, many small files, archive handling and hashing. Whole-payload operations such as deep duplicate hashing must therefore remain opt-in, scoped, cancellable and cached.
-- Archive reading goes through `ArchiveCache` + `ZipFile` (central directory): `ZipInputStream` cannot seek and rejects STORED entries that carry an extended data descriptor, which is a layout real downloaders produce. Cache copies are keyed by (library, path, size, modified time), budgeted (512 MiB) and trimmed oldest-first; the file currently being opened must be passed as the protected entry so an oversized archive remains readable.
-- The archive cache is a **required** constructor dependency of every reader service, and the repository is its only owner. An optional/second instance looks harmless but silently degrades to the streaming fallback — that is exactly how "a comic opens as 此页无法解码" shipped. When adding a service that reads archives, take `ArchiveCache` as a parameter instead of defaulting it.
-- Streams handed to `BitmapFactory` must be markable: wrap `ZipFile.getInputStream` and SAF streams in `BufferedInputStream` (or read the entry into memory) because the bounds probe rewinds the stream. A page that cannot decode must log the entry and the reason, not just fail silently in the UI.
+交付前检查 git diff --check、最终差异及 git status；按职责更新文档和需求状态，说明改变、验证及剩余限制。只在用户要求时提交；提交消息用中文。

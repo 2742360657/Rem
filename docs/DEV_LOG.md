@@ -6,9 +6,26 @@
 
 条目按时间倒序。同一问题的后续进展追加到原条目，不另起新条。
 
-旧条目保留当时的版本号和判断，仅用于追溯；当前产品与格式以 `Gallery_Project_Guide.md`、`AGENTS.md` 和 `docs/ARCHITECTURE.md` 为准。
+旧条目保留当时的版本号和判断，仅用于追溯；当前产品与格式以 [PRODUCT](PRODUCT.md)、[PORTABLE_FORMAT](PORTABLE_FORMAT.md) 为准，代码结构见 [ARCHITECTURE](ARCHITECTURE.md)，当前验证及缺口见 [STATUS](STATUS.md)。旧记录中的 needsRepair、同名系列及历史路径不自动成为现行规范。
 
 ---
+
+## 2026-09-18 · 文档职责迁移与需求闭环
+
+**范围**：落实用户确认的六类媒体、观看习惯、弱识别/批量管理/独立 Agent/可移动 Library 主线；只改文档，不改应用、Schema、媒体或生成器。代码核对基线为 3dc0a76。
+
+采用 Rem-docs-v2 的文档分工，并校正其内容：PRODUCT 登记 R01–R11 及验收，STATUS 独立保存实现差距与旧验证证据，PORTABLE_FORMAT 补现有字段/枚举/引用/来源/最小示例，LIBRARY_AGENT 保存外部整理流程。旧 Gallery_Project_Guide 保留跳转，迁移后的草案树删除，避免两套权威。
+
+用户明确授权 Agent 处理歧义：章节沿用 Work + Series，作者为查询维度，相册层级不强制暴露 Work，混合一期优先沿用 Group，随机页浏览保留完整一期来源，批量追加/替换/清空分别验收。随机浏览等是正式未完成需求，不再标为未确认设想。
+
+修正规范漂移：catalog-only 使用 missingMedia 而非旧 needsRepair；字段来源 provider:<id> 与 Inbox.by 的 agent:<id> 分开；物理操作不只 Organizer；永久删除重试不承诺恢复字节；跨进程写入不受 Android 进程内 mutex 保护。真实库容量 GB/GiB 口径冲突留待复核，不用草案数字制造新证据。
+
+AGENTS 定义补需求→编号/验收→状态→有边界任务→验证→回写流程，及多 Agent 单文件唯一写入者、主 Agent 整合、交接失效检查。原 AGENTS 的工程约束迁到 ARCHITECTURE；具体调试经验仍由既有日志承载。
+
+**验证范围**：本轮核对 Markdown 本地链接、R01–R11 对应状态、JSON 示例、来源字段及差异；不重跑 Android 构建或设备测试。279 单测/28 设备测试是迁移的历史证据，不属于本轮。
+
+**剩余风险**：文档协议不能替代执行者遵守和代码验收。生成的库内说明尚未自动同步完整 Library Agent 规则，独立编辑/校验工具链待 R10 实现；本次没有触碰已有 Library 的定制说明。目录中的构建缓存和 dist 未清除，用户维护文档未读取或改动。
+
 
 ## 2026-09-18 · 视频路径：缺失媒体不再黑屏；一次自我误导的排查
 
