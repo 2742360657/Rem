@@ -9,6 +9,7 @@ import dev.susnowy.gallery.model.PortableGroupMember
 import dev.susnowy.gallery.model.SourceKind
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -74,7 +75,18 @@ class PortableGroupStoreTest {
         val reloaded = store.loadCatalog("library-id").groups.single()
         assertEquals("改名后的写真集", reloaded.title)
         assertEquals(listOf("work-2"), reloaded.members.map(PortableGroupMember::workId))
+        assertNull(reloaded.coverWorkId)
         assertEquals(1, store.loadCatalog("library-id").groups.size)
+    }
+
+    @Test
+    fun rejectsCoverOutsideMembersWithoutChangingCatalog() {
+        store.saveItems(listOf(item("work-1", "Inbox/A"), item("work-2", "Inbox/B")))
+        val before = store.loadCatalog("library-id")
+        assertThrows(IllegalArgumentException::class.java) {
+            store.upsertGroup("library-id", group(workIds = listOf("work-2")))
+        }
+        assertEquals(before, store.loadCatalog("library-id"))
     }
 
     @Test

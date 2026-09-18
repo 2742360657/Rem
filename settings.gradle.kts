@@ -16,3 +16,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "Rem"
 include(":app")
+include(":library-tool")

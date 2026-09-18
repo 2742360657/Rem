@@ -131,15 +131,8 @@ class PortableInboxStore(
         return updated
     }
 
-    private fun validate(inbox: PortableInbox) {
-        require(inbox.schemaVersion == CURRENT_SCHEMA_VERSION) { "Inbox 决策必须使用当前 Schema v4" }
-        requireUnique("Inbox 决策目标", inbox.decisions.map(PortableInboxDecision::key))
-        requireUnique("Inbox 决策路径", inbox.decisions.map(PortableInboxDecision::relativePath))
-        inbox.decisions.forEach { decision ->
-            requirePortablePath(decision.relativePath)
-            decision.workId?.let { require(it.isNotBlank()) { "Inbox 决策的 Work ID 不能为空" } }
-        }
-    }
+    private fun validate(inbox: PortableInbox) =
+        dev.susnowy.gallery.portable.PortableValidation.validate(inbox)
 
     private fun declaredSchema(text: String): Int? = runCatching {
         json.parseToJsonElement(text).jsonObject["schema_version"]?.jsonPrimitive?.intOrNull
@@ -155,19 +148,6 @@ class PortableInboxStore(
                 },
             )
         }
-    }
-
-    private fun requirePortablePath(path: String) {
-        require(path.isNotBlank() && !path.startsWith('/') && '\\' !in path && ':' !in path) {
-            "媒体路径必须是 Library 内的相对路径：$path"
-        }
-        require(path.split('/').none { it.isBlank() || it == "." || it == ".." }) {
-            "媒体路径包含无效片段：$path"
-        }
-    }
-
-    private fun requireUnique(label: String, values: List<String>) {
-        require(values.distinct().size == values.size) { "$label 必须唯一" }
     }
 
     private fun String.replacePathPrefix(source: String, target: String): String = when {

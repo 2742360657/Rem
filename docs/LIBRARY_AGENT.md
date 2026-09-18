@@ -3,11 +3,11 @@
 > 本文件面向“整理用户媒体 Library 的本地 Agent”，不是开发 Rem 代码的 Agent。
 > 目标是：让 Agent 能独立、高质量、可审计地整理 Library，同时不与 Android 弱识别争夺职责。
 
-本文件规定整理流程，格式与字段唯一权威为 [PORTABLE_FORMAT](PORTABLE_FORMAT.md)。产品需求见 [PRODUCT](PRODUCT.md) 的 R10。本文不表示独立编辑工具链已经完成；当前缺口见 [STATUS](STATUS.md)。
+本文件规定整理流程，格式与字段唯一权威为 [PORTABLE_FORMAT](PORTABLE_FORMAT.md)。产品需求见 [PRODUCT](PRODUCT.md) 的 R10。当前桌面工具支持 v4 校验与已有 Work 的批量元数据编辑；新建实体、关系整理和物理操作仍需后续工具支持，不能宣称完整无人值守整理已完成。
 
 ### 与库内说明的关系
 
-只有 Library 的 Agent 应先读库内 `GALLERY_LIBRARY.md`；它必须能脱离仓库使用。当前由 `PortableLibraryManager.libraryGuide` 生成精简说明，已有库接入不覆盖用户定制。本仓库规则的完整分发与同步仍待 R10 实现，不能要求用户每次联网找仓库补规则，也不能在普通扫描时偷偷覆盖旧说明。
+只有 Library 的 Agent 应先读库内 `GALLERY_LIBRARY.md`，不依赖 Android 数据库或仓库。App 与桌面工具在构建时打包本文件及 PORTABLE_FORMAT 全文，新建库自动生成带 Library 身份的说明；已有库接入不覆盖用户定制。构建产物中仓库相对链接转换为文本，格式契约附在同一文件后部。
 
 若现有库内规则与当前格式不一致，保留原文件，先报告冲突和生成更新计划。仅在用户授权范围内更新；不忽略库中特定用户限制。
 
@@ -24,6 +24,8 @@ Agent 不应要求 Android 先把所有内容识别正确。
 
 ## 2. 开始前
 
+### Agent 开始前必须读取
+
 1. 找到 Library root：存在 `.gallery/library.json`。
 2. 读取：
    - `GALLERY_LIBRARY.md`
@@ -39,6 +41,10 @@ Agent 不应要求 Android 先把所有内容识别正确。
 6. 与 Android 及其他写入 Agent 保持同库单写入者；提交前复读基线，有冲突重新合并。高风险真实库备份必须位于原介质之外。
 
 绝不把主机盘符或当前挂载点写入便携数据。
+
+任何来源为 `manual` 的字段都不得修改、清空、追加、翻译、规范化或去重。
+`field_sources.tags` 为 `manual`，整组标签必须原样保留；人工空值同样保护。
+Group 只表达一起浏览；Series 只表达顺序；Edition 表达同一 Work 的取得版本。
 
 ## 3. 识别层级
 
@@ -243,7 +249,7 @@ Agent 新写字段的 `field_sources` 使用：
 
 `provider:<stable-agent-id>`
 
-Inbox 决定的 `by` 使用 `agent:<stable-agent-id>`。二者是不同字段，不能混为统一来源值。保留已有来源标签，人工锁定的 tags 整组保护。revision / 时间戳由遵守协议的编辑器维护，不能随手重置；当前工具链未就绪时，遇到无法证明安全的写入先交付差异计划和校验结果。
+Inbox 决定的 `by` 使用 `agent:<stable-agent-id>`。二者是不同字段，不能混为统一来源值。保留已有来源标签，人工锁定的 tags 整组保护。revision / 时间戳由遵守协议的编辑器维护，不能随手重置。工具尚未支持的操作先交付差异计划和校验结果，不用手写整份 JSON 绕过保护。
 
 不要伪装成 `manual`。
 如果用户随后在 App 中手改，对应字段升级为 `manual`，以后 Agent 不覆盖。
@@ -259,3 +265,42 @@ Inbox 决定的 `by` 使用 `agent:<stable-agent-id>`。二者是不同字段，
 - 保留媒体到 Work 的来源，支持后续 App 随机浏览回溯（不宣称当前随机浏览已实现）；
 - 批量编辑后不会被下一次扫描“改回去”；
 - 所有真实文件变更都有可审计记录。
+
+## 13. 桌面校验与安全编辑工具
+
+运行环境 Java 17+；Windows 使用 `library-tool.bat`，Linux/macOS 使用 `library-tool`。开发者从仓库执行 `:library-tool:installDist`，分发 `library-tool/build/install/library-tool/` 整个目录后无需 Android SDK、Gradle 或本机数据库即可运行。
+
+```text
+library-tool validate ROOT
+library-tool preview ROOT PLAN.json
+library-tool apply ROOT PLAN.json EXISTING_BACKUP_DIRECTORY --exclusive
+library-tool recover-catalog ROOT --exclusive
+library-tool export-guide ROOT GALLERY_LIBRARY.next.md
+```
+
+- ROOT 是 Library 根目录，含已存在的 v4 catalog；工具不会初始化、扫描、打开或哈希媒体。
+- validate 校验四份便携文档（state/inbox 未创建可缺省）、身份、引用、路径及 Schema，输出 catalog_sha256；结构合法不表示媒体可达。
+- preview 不写 Library，报告变更字段及 skipped_manual；结合计划中的目标值审阅。
+- apply 仅编辑现有 Work，支持 display_title、original_title、domain、authors、tags、collections、favorite、cover_path、preferred_edition_id。列表是显式替换；追加时先合并旧值，清空用 [] 或可空字段的 null。人工锁会跳过并报告；稳定来源 Tag 不能移除；新结果标 provider:<agent_id>。
+- `--exclusive` 表示已经断开/停止 Android 和其他写入者。工具只防同一主机工具并发，不与 Android 或别的主机形成分布式锁；不要同时运行 App 写入。
+- expected_catalog_sha256 必须来自同一份未改动文档；提交前还核对 identity/state/inbox/schema/guide 未变化。冲突时拒绝，不自动刷新哈希绕过冲突。
+- EXISTING_BACKUP_DIRECTORY 必须已存在且位于 Library 外。真实库使用另一介质并先完整备份 .gallery；工具另建唯一子目录保存本次读取的身份、catalog、state、Inbox、Schema 及库内说明，校验后才提交。
+- 单次只提交 catalog，一次提升 catalog 和变更 Work 的 revision，保留其他字段及未知扩展；不改 state、Inbox、媒体、关系实体或 Library 身份。
+- 目录里存在物理事务 JSON 时，此版工具保守拒绝编辑，不能判定历史/活动事务。不要为绕过检查删除事务；此限制待独立事务诊断支持。
+- 文件系统必须支持同卷原子 rename；不支持则拒绝。中断后 live catalog 优先，否则从 .catalog.json.rem-backup 恢复旧版；recover-catalog 是显式恢复，正常 validate 不暗中修复。恢复后重新 validate/preview；新 revision 已提交时旧计划应被拒绝。
+- export-guide 创建新文件且拒绝覆盖，不替换 GALLERY_LIBRARY.md；审阅并合并库内用户规则后再按显式授权更新原说明。新说明分发不修改 Schema。
+
+计划示例（先用 validate 获取实际 ID 与 SHA-256）：
+
+```json
+{
+  "library_id": "实际 Library UUID",
+  "expected_catalog_sha256": "validate 输出的 catalog_sha256",
+  "agent_id": "local-organizer",
+  "edits": [
+    {"work_id": "稳定 Work ID", "set": {"authors": ["作者"], "collections": ["写真"]}}
+  ]
+}
+```
+
+不要把用户要求的明确清空误解为未填写，也不能让工具把 Agent 决定伪装为 manual。App 内人工批量编辑与此工具的自动字段保护是不同的授权语境。
