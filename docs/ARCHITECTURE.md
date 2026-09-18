@@ -200,7 +200,7 @@ Reading media bytes happens outside the portable-write mutex, so a long batch ne
 
 ## Selection and batch actions
 
-- `ui.components.SelectableMediaGrid` wraps a grid with selection mode and the Library's batch actions (add to Group, add to Series, favourite, append metadata, trash). The image/video and works views both use it, so batch behaviour cannot drift between screens; the album screen keeps its own toolbar because it also offers image-set derivation.
+- `ui.components.SelectableMediaGrid` wraps a grid with selection mode and the Library's batch actions (add to Group, add to Series, favourite, append metadata, trash). The image/video and works views both use it, so batch behaviour cannot drift between screens; the album screen keeps its own toolbar because it also offers image-set derivation. Suppressing `showSelectButton` removes the entry point, not just the button: a view that passes `false` has no way to start a selection, so the works list must keep it enabled.
 - The grid owns only ids: every action is one repository call (one portable write), and long-press still opens the per-card panel while selection mode is off. Back exits selection before it leaves the screen.
 - `ui.components.BatchMetadataDialog` is the single append-only metadata editor shared by all selection toolbars.
 

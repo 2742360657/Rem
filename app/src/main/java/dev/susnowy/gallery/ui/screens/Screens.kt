@@ -849,7 +849,6 @@ private fun WorksLibraryScreen(
                 viewModel = viewModel,
                 onOpen = { viewModel.open(it, shown) },
                 modifier = Modifier.weight(1f),
-                showSelectButton = false,
             )
         }
     }
