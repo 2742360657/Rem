@@ -1,10 +1,12 @@
 # Rem 当前状态
 
-更新日期：2026-09-19。代码核对基线：d9f2324 加本轮 R08 批量字段编辑。本文是当前进度入口；产品要求见 [PRODUCT](PRODUCT.md)，历史证据见 [DEV_LOG](DEV_LOG.md)。
+更新日期：2026-09-19。代码核对基线：8eeca30 加本轮 R07 漫画位置修复。本文是当前进度入口；产品要求见 [PRODUCT](PRODUCT.md)，历史证据见 [DEV_LOG](DEV_LOG.md)。
 
-本轮接续中断的 R10 实现，未改 Schema、未访问真实 Library。当前验证与历史证据分列如下。
+本轮接续 R07 阅读体验与 R11 加载性能，未改 Schema、未访问真实 Library。真机已由用户移除，当前仅模拟器在线；当前验证与历史证据分列如下。
 
 ## 1. 版本与验证基线
+
+- 最新本轮：Windows / Java 17，298 单测、lint、debug/test APK 构建及 API 36 模拟器全部 48 项设备测试通过。新增实际漫画组件场景覆盖像素偏移重建、同页跳转、末页不误完成、真实滑动完成及自动下一话；冷归档并发测试覆盖离线预览让路。未验证本轮真机、真实介质或完整产品验收。
 
 - 一个 Android module 加独立 JVM library-tool；release com.susnowy.rem，debug com.susnowy.rem.debug。
 - 本轮 Windows / Temurin Java 17：桌面工具 12 单测、Android 281 单测通过；lint 0 error、31 warnings、1 hint；debug/test APK 及 installDist 构建通过。说明补回凭据保护后，桌面 12 单测和 LibraryManager 13 单测再次通过，API 36 模拟器 SAF 类 9 测试通过（含 Agent 字段编辑读回）。独立 Windows 启动脚本在 1 Work / 1 缺失 Asset 的合成小库完成 validate、preview、apply、export-guide 和读回；未做本轮真机或真实库验证。
@@ -35,6 +37,8 @@
 | R11 | 便携 v4、恢复写入、catalog-only 投影、missingMedia 拆分有测试/切片证据 | 无媒体遍历前的冷接入可用性及耗时单独验证；全库跨设备和可移动介质性能待用户安排 |
 
 ## 3. 已知工程边界
+
+- R07 漫画恢复现在使用已初始化列表的精确位置，修复 Coil 初始 Empty 零高度导致跳页落错位置；末页跳转按实际钳制布局结束，完成基线与跳转隔离。两项聚焦设备测试及完整 48 项模拟器回归通过。测试退出曾卡在模拟器 GPU 管道，改软件后端/关闭 Vulkan 并等待滑动动画结束后通过，过程见 DEV_LOG；未外推真机体验。
 
 - R07/R11 前台页列表、归档及超大图片解码现可暂停离线预览，前台结束后预览重试，用户取消不重试。2026-09-19 Windows 完整单测/lint/debug 与 test APK 构建、API 36 模拟器全部 46 项设备测试通过；冷归档并发回归验证取消后让出复制锁、预览恢复与半成品清理。尚未调度扫描/补全及 Coil 直接读取，同步 Provider 调用仍需返回后才能响应取消；未作真机或真实介质验证。
 

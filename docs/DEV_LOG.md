@@ -6,6 +6,20 @@
 
 条目按时间倒序。同一问题的后续进展追加到原条目，不另起新条。
 
+## 2026-09-19：漫画位置恢复、末页跳转与初始布局
+
+- 实际 ImageSetReader 设备测试复现初始化位置第 9 页被 startPage 拉回第 1 页；代码虽传入 positionInitialized，却未在定位时使用。现保留已初始化的 LazyListState 和像素偏移，显式跳页才重设位置。
+- 20 张合成短图片场景中，跳第 20 页曾落在首项索引 7。Coil 的 Empty 状态没有占位，首次测量零高度使列表错误钳制；Empty 与 Loading 现在共用占位。靠近末尾不再等待目标页必须成为首项，而读取实际布局位置。
+- 跳转期间隔离旧的完成基线，只有活动滚动或明确确认能完成，图片加载引起的位置调整不能独自触发完成。进度事件从阅读组件回调至原 ViewModel 写入入口，未更改便携协议。
+- API 36 两项聚焦设备测试通过：精确偏移及状态重建、同页定位、末页可见且不误完成、随后真实 swipe 完成并触发下一话。使用合成 PNG 和实际阅读组件，不包含真实介质/SAF 进度写回验收。
+- 排障中三次设备运行在 Activity 退出阶段卡住，主动终止，不计为通过。线程栈显示主线程等 HardwareRenderer，RenderThread 等 qemu_pipe 的 rcCreateSyncKHR；测试断言已结束。测试 AVD 改为 swiftshader_indirect、禁用 Vulkan，滑动测试在关闭 Activity 前推进 Compose 时钟并等待动画结束，之后整类测试正常结束。临时 adbd root 仅用于读取模拟器线程栈，已恢复非 root。
+
+## 2026-09-19：前台阅读为离线预览抢占
+
+- 8eeca30：MediaReadPriority 对页列表及归档/超大图片解码提升优先级，取消可重建预览并等前台结束后恢复；显式用户取消不重试，OfflinePreviewStore 传播取消异常。
+- 冷归档并发测试用阻塞 Provider 模拟同步调用返回后让出复制锁，验证前台打开、后台重试及半成品清理。Windows 298 单测、lint、debug/test APK 构建、API 36 全部 46 项设备测试通过。
+- 未覆盖扫描/补全、Coil 直接读取的整体调度；无法强制中断 Provider 同步调用，不能据此关闭真实库长时间转圈反馈。
+
 旧条目保留当时的版本号和判断，仅用于追溯；当前产品与格式以 [PRODUCT](PRODUCT.md)、[PORTABLE_FORMAT](PORTABLE_FORMAT.md) 为准，代码结构见 [ARCHITECTURE](ARCHITECTURE.md)，当前验证及缺口见 [STATUS](STATUS.md)。旧记录中的 needsRepair、同名系列及历史路径不自动成为现行规范。
 
 ---

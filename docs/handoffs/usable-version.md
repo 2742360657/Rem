@@ -1,28 +1,14 @@
-# 可用版本持续开发
+﻿# 可用版本持续开发
 
-- 需求 / 目标：按 PRODUCT 推进可用版本；当前 R08 批量编辑及 R11 接入故障。
-- 基线：d9f2324，开工工作区干净。后续提交 69f8e6a 批量字段、de2e620 批量移出关系。主负责人：当前主 Agent，单 Agent。
-- 拥有文件：model 批量规则及测试、Repository/ViewModel 批量接口、共享 BatchMetadataDialog 和调用入口、相关设备测试；权威文档由主 Agent 回写。
-- 接口：UI 保存编辑基线；批量提交重读当前元数据，逐字段保护并发变化，按 Library 独立提交并报告。
-- 便携影响：v4 元数据；无 Schema 或原媒体修改。
-- 已知证据：真机旧包日志 22:52 identity missing，23:16 成功扫描 16 项；d9f2324 新包已于 2026-09-19 00:00 覆盖安装。当前 ADB 无在线设备，不能声称真机故障已关闭。
-- 本轮：R08 追加/替换/清空/归属和冲突报告已实现。全套单测/lint/APK 构建通过，API 36 emulator-5556 三项新增批量测试通过。新增 saveBatchFields 避免已有来源/关系被字段操作重写；测试 Provider 直接登记，跨 storage 写入后重新打开读回。
-- 验收：人工空值锁、后来人工修改保留、无关字段保留、跨库独立结果；共享 UI 设备测试及完整 Gradle 检查。真实库物理操作不在本轮授权范围。
-- 最新：R08 两模块后全量 36 设备测试通过。R07 视频五秒阈值误判完成已修，改播放结束事件；完整单测/lint/构建通过，另一个一秒 WAV ExoPlayer 实播测试通过，尚无真视频解码验收。
-- 剩余：按 STATUS 场景验收 R03/R04/R05/R02、R06/R07，视频剧集连播尚未实现验收，MediaDetail.kt 的 VideoViewer 没有队列衔接。R10 新实体/关系工具与 R11 真库性能仍保留。
+- 需求 / 目标：按 PRODUCT 持续完成可用版本；当前优先 R07 漫画体验、R11 前台读取、所有长界面快速定位。避免复杂低频功能。
+- 基线与归属：本次接续自 70a1fea；前台读取模块已提交 8eeca30。当前漫画位置修复由主 Agent 独占 MediaDetail.kt、ReaderPositionTest.kt 和权威文档；默认单 Agent。
+- 便携影响：本次无 Schema、便携字段或原媒体变更；进度仍经原 ViewModel/Repository 写入。真实 Library 未访问。
+- 已完成：批量字段和关系操作、视频完成判定/系列队列/横屏全屏、混合目录视频导航、共享网格和漫画页码定位、页列表 IO 与取消重试、缓存锁拆分、离线预览为前台页读取让路。具体证据以 STATUS 和 DEV_LOG 为准。
+- 不要重复：GalleryApp 已有 SaveableStateHolder；视频队列已实现。虚拟 Edition 页解析已移 IO。不能照旧交接再次添加这些功能。
+- 最新阅读修复：initialized 精确偏移保留、同页跳转归零、短末页实际布局定位、Coil Empty 占位，避免零高度把末页跳转拉到前面；完成只由活动滚动或明确确认驱动。两个实际阅读组件设备测试及完整工程检查、48 项模拟器设备测试已通过。
+- 最新验证：Windows 298 单测、lint、debug/test APK 和 API 36 全部 48 项设备测试通过，包含实际 swipe、状态重建、跳末页不自动完成。设备测试退出曾卡在模拟器 GPU qemu_pipe 帧提交，三次主动终止不计为通过；已改 swiftshader_indirect、禁用 Vulkan，并让测试时钟等待滑动动画结束。
+- 工具：ADB C:/Users/Susnowy/AppData/Local/Android/Sdk/platform-tools/adb.exe；emulator-5556 / Rem_API_36 / API 36。当前启动参数 -no-window -no-audio -no-snapshot -gpu swiftshader_indirect -feature -Vulkan。adbd 已恢复非 root。Gradle 前设置 DEBUG 为空，设备测试指定 ANDROID_SERIAL=emulator-5556。
+- 用户真机已主动移除，旧真机安装包为 d9f2324，不能说最新修复已真机验收。旧日志补全 1261 项失败 1259，Provider 单次最慢 51 秒；S: 曾可由 Get-PSDrive 发现，不因 Get-Volume 无结果断言不存在。不要为整理文档访问原库。
+- 下一步：扩展 Series 章节、作品/关系选择器及其他长列表的快速定位并验证返回锚点；进一步覆盖解码前尺寸与缩放/翻页协调。调度尚未覆盖扫描/补全和 Coil 直接读取，Provider 同步调用不能立即取消。视频实解码与真实多集、R03/R04/R05 场景、R06 随机发现、R10 新实体关系工具和 R11 真介质验收均仍未完成。
+- 验收边界：合成 PNG 实际阅读组件测试不等于 SAF 进度写回、真机手势或全量真实介质验证；当前不可称最终成熟版本。
 - 更新时间：2026-09-19。
-
-- 最新加载模块：PageLoading.kt 提供状态、重试、取消异常传播；ImageSetReaderScreen 已接入。完整工程检查+2项模拟器重试/取消设备测试通过。初次审批超时后一次重试成功。下一优先仍是后台预览整包缓存复制为前台让路；MediaGrid.MediaThumbnail 每张卡调用 offlinePreview，OfflinePreviewStore 对 ARCHIVE 调用 content.imageSetPages 会触发冷缓存复制，已有代码证据。
-
-- 最新：Repository.pages/EditionPageResolver 已将虚拟计划 listing 移到 IO，修复根目录路径并传播错误；全套工程检查+两个 API36 解析测试通过。当前仍缺冷归档前台优先、后台任务让路、打开阶段/取消/重试完整体验。ArchiveCache 上轮只修缓存命中受慢复制阻塞。
-
-- 加载调度进展：ArchiveCache 已拆慢复制锁/短缓存锁，295 单测和10项SAF/预览设备回归通过。未缓存请求仍串行，前台优先未完成。Repository.pages 的 Edition plan 分支直接 storage.list，下一步应核查 IO 调度；后台预览使用同一个 ArchiveCache，前台打开可能还需取消/暂停后台未缓存复制。勿将这些待查项冒充已解决。
-
-- 最新视频模块：VideoPlayerSurface 同一播放器切换全屏 Dialog，横屏请求及退出方向恢复；MainActivity configChanges 避免方向导致播放器重建。完整工程检查和42项模拟器设备回归通过，新增实际 Activity 全屏位置/方向测试。真视频解码与后台/前台生命周期仍需后续场景，真机已断开。
-
-- 新验证：GridReturnPositionTest 在 API 36 通过；150 项 MediaGrid 定位到第100项、详情往返、空快照期间重建后恢复相同行首。共享网格正常，不代表用户所有页面返回问题已解决；下一步重点测实际漫画跳页不误完成、真实导航层保存状态与视频横屏。
-
-- 最新续作：共享 PositionJumpDialog 已用于漫画底部页码点击跳转及媒体网格定位。完整工程检查通过，2 项位置输入设备测试通过；待补实际跳页末尾完成语义/返回列表位置回归，并扩展其他长列表。用户进一步明确 EhViewer 同类漫画体验、高成熟度且避免复杂无用功能；真机已主动移除，继续 emulator-5556。下一优先：视频横屏/全屏、前台读取优先与 Provider 慢读诊断。不要把当前零散设备测试称为最终验收。
-
-- 新进展：66535e8 视频系列衔接已提交，37 项模拟器设备回归通过；真多集视频尚无验收证据。用户新增横屏、快速滚动/页码定位、返回位置、前台加载优先级、混合目录视频误跳要求，已入 PRODUCT/STATUS。真机 baff50eb 已连接，旧包 00:00:23；S: 可由 Get-PSDrive 看到（Get-Volume 无结果），未访问其媒体。旧日志补全 1261 项失败 1259，Provider 最慢 51 秒；不能仅归因缩略图。
-- 当前模块：混合目录内层 MediaDetail 不再向全局 selectDetailItem 发事件，新增 ReadinessInteractionTest 覆盖打开视频/原目录身份/返回，3 项该类设备测试通过。主列表已有 screenStateHolder；“返回顶部”根因仍待复现，不应重复添加同类机制。MediaGrid 空列表时提前 return，检查异步状态恢复时可关注；漫画已存在页工具但用户不易发现，需显式定位控件。

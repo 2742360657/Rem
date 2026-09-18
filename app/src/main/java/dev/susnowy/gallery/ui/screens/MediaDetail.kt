@@ -106,6 +106,7 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import coil3.compose.AsyncImage
+import coil3.compose.AsyncImagePainter
 import coil3.compose.SubcomposeAsyncImage
 import coil3.compose.SubcomposeAsyncImageContent
 import coil3.request.CachePolicy
@@ -882,6 +883,7 @@ private fun ImageSetReaderScreen(
                             viewModel = viewModel,
                             onToggleControls = { controlsVisible = !controlsVisible },
                             onPageChanged = { currentPage = it },
+                            onProgress = { page, finished -> viewModel.saveProgress(item, page = page, finished = finished) },
                             onLongPressPage = { page ->
                                 currentPage = page
                                 controlsVisible = true
@@ -1083,12 +1085,13 @@ private fun ImageSetReaderScreen(
 
 @OptIn(kotlinx.coroutines.FlowPreview::class)
 @Composable
-private fun ImageSetReader(
+internal fun ImageSetReader(
     item: MediaItem,
     pages: List<ImagePage>,
     viewModel: GalleryViewModel,
     onToggleControls: () -> Unit,
     onPageChanged: (Int) -> Unit,
+    onProgress: (Int, Boolean) -> Unit,
     onLongPressPage: (Int) -> Unit,
     nextChapter: MediaItem? = null,
     autoAdvance: Boolean = false,
@@ -1107,6 +1110,8 @@ private fun ImageSetReader(
     val imageLoader = remember(context) { SingletonImageLoader.get(context) }
     var zoomedPageKey by remember(item.id) { mutableStateOf<String?>(null) }
     var restored by remember(item.id) { mutableStateOf(false) }
+    var appliedJump by remember(item.id) { mutableStateOf<Pair<Int, Int>?>(null) }
+    val positionReady = restored && appliedJump == jumpRequest
     var restoredIndex by remember(item.id) { mutableIntStateOf(0) }
     var restoredOffset by remember(item.id) { mutableIntStateOf(0) }
     var advancedAfterRestore by remember(item.id) { mutableStateOf(false) }
@@ -1119,59 +1124,56 @@ private fun ImageSetReader(
         val target = (jumpRequest?.first ?: restorePage)?.coerceIn(pages.indices) ?: return@LaunchedEffect
         restored = false
         advancedAfterRestore = false
-        if (listState.firstVisibleItemIndex != target) {
+        if (jumpRequest != null || !positionInitialized) {
             listState.scrollToItem(target)
-            // The scroll must be applied before the restored position is read back. Reading it in
-            // the same frame captured the pre-scroll position, so "did the reader move forward"
-            // was compared against the wrong baseline and reopening a chapter at page 1 looked
-            // like an arrival at the end — which re-marked it read and could hand over again.
-            snapshotFlow { listState.firstVisibleItemIndex }.first { it == target }
         }
+        // Near the end, a short target page cannot be the first visible item. Await layout,
+        // not an impossible index equality; an initialized list keeps its saved pixel offset.
+        snapshotFlow { listState.layoutInfo.visibleItemsInfo.isNotEmpty() }.first { it }
         // Reached either way: on a first open the saved position, after a configuration change the
         // position the list already restored. Measuring after the list is settled is what matters.
         onPositionInitialized()
         restoredIndex = listState.firstVisibleItemIndex
         restoredOffset = listState.firstVisibleItemScrollOffset
         advancedAfterRestore = false
+        appliedJump = jumpRequest
         restored = true
     }
-    LaunchedEffect(listState, item.id, pages.size, restored) {
-        if (!restored || pages.isEmpty()) return@LaunchedEffect
-        snapshotFlow { listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset }
+    LaunchedEffect(listState, item.id, pages.size, positionReady) {
+        if (!positionReady || pages.isEmpty()) return@LaunchedEffect
+        snapshotFlow { Triple(listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset, listState.isScrollInProgress) }
             .distinctUntilChanged()
-            .collect { (index, offset) ->
-                if (index > restoredIndex || index == restoredIndex && offset > restoredOffset) {
+            .collect { (index, offset, scrolling) ->
+                if (scrolling && (index > restoredIndex || index == restoredIndex && offset > restoredOffset)) {
                     advancedAfterRestore = true
                 }
             }
     }
-    LaunchedEffect(listState, item.id, pages.size, restored, completedThisSession) {
-        if (!restored || pages.isEmpty()) return@LaunchedEffect
+    LaunchedEffect(listState, item.id, pages.size, positionReady, completedThisSession) {
+        if (!positionReady || pages.isEmpty()) return@LaunchedEffect
         snapshotFlow { listState.firstVisibleItemIndex }
             .distinctUntilChanged()
             .collect { page ->
                 val visiblePage = page.coerceIn(pages.indices)
                 onPageChanged(visiblePage)
-                viewModel.saveProgress(item, page = visiblePage, finished = completedThisSession)
+                onProgress(visiblePage, completedThisSession)
             }
     }
-    // Completion is recorded when the reader reaches the physical end after moving forward, or
-    // when the whole chapter fits on screen so no forward movement exists. Only the first case
-    // hands over automatically: an end that was already visible when the chapter opened is not an
-    // arrival, and a single-page chapter would otherwise jump onward before it was read.
+    // Completion requires forward scrolling to the physical end or explicit confirmation.
+    // A restored/jumped-to end, or one already visible at opening, must never auto-advance.
     // `positionInitialized` is a key, not just an argument: a snapshotFlow block only re-evaluates
     // when snapshot state it read changes, so a settled flag arriving as a parameter would leave
     // the flow reporting the pre-restore value forever.
     LaunchedEffect(
         listState,
         pages.size,
-        restored,
+        positionReady,
         advancedAfterRestore,
         completedThisSession,
         positionInitialized,
         chapterConfirmed,
     ) {
-        if (!restored || pages.isEmpty() || completedThisSession) return@LaunchedEffect
+        if (!positionReady || pages.isEmpty() || completedThisSession) return@LaunchedEffect
         snapshotFlow {
             val visible = listState.layoutInfo.visibleItemsInfo
             chapterEndState(
@@ -1187,7 +1189,7 @@ private fun ImageSetReader(
             .collect { state ->
                 if (state.reachedEnd && !completedThisSession) {
                     completedThisSession = true
-                    viewModel.saveProgress(item, page = pages.lastIndex, finished = true)
+                    onProgress(pages.lastIndex, true)
                     when {
                         state.arrivedByScrolling && autoAdvance -> nextChapter?.let(onOpenNextChapter)
                         // Explicit confirmation: the reader asked to finish, so the final chapter
@@ -1271,19 +1273,19 @@ private fun ImageSetReader(
                         contentDescription = "第 ${index + 1} 页",
                         contentScale = ContentScale.FillWidth,
                         modifier = Modifier.fillMaxWidth(),
-                        loading = {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(240.dp),
+                    ) {
+                        val imageState by painter.state.collectAsState()
+                        when (imageState) {
+                            is AsyncImagePainter.State.Success -> SubcomposeAsyncImageContent()
+                            is AsyncImagePainter.State.Error -> ComicPageLoadError(message = "第 ${index + 1} 页加载失败")
+                            // Empty precedes Loading, including on cache hits. A zero-height
+                            // first measure lets LazyColumn clamp a jump against an empty book.
+                            else -> Box(
+                                modifier = Modifier.fillMaxWidth().height(240.dp),
                                 contentAlignment = Alignment.Center,
                             ) { CircularProgressIndicator(color = Color.White) }
-                        },
-                        error = {
-                            ComicPageLoadError(message = "第 ${index + 1} 页加载失败")
-                        },
-                        success = { SubcomposeAsyncImageContent() },
-                    )
+                        }
+                    }
                     page.archiveEntry != null -> ArchiveComicPage(
                         item = item,
                         entryName = page.archiveEntry,

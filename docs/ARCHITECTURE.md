@@ -225,6 +225,8 @@ Reading media bytes happens outside the portable-write mutex, so a long batch ne
 
 ## Reader interaction
 
+- The reader preserves an initialized LazyListState including pixel offset. Explicit jumps establish a fresh completion baseline and accept the list's actual clamped position near the end. Only active scrolling past the baseline or explicit confirmation can finish; image remeasurement alone cannot. Coil's initial Empty state keeps the same placeholder as Loading so a jump cannot be clamped against zero-height pages.
+
 - `ui.components.ZoomMath` is the pure geometry of a viewer: clamping (a fitted dimension is pinned to the centre, an overflowing one may move only within its overflow), centroid-anchored zoom (the content under the fingers stays there), double-tap targets, fitted sizing, the resting transform per placement, and the visible-slice pan rule. Unit tested without a device.
 - Two placements share it: `ZoomPlacement.FIT` (a photo rests with its whole frame visible) and `ZoomPlacement.WIDTH` (a comic page rests filling the window width, anchored at the top). The resting scale is therefore not always 1, and `ZoomState.isZoomed` compares against the resting scale of the current placement instead of a literal 1.
 - Continuous comic reading puts every page in a scrolling list, so a page can be several times taller than the window. `panWithinWindow` clamps a pan to the part of the page that is currently on screen (`visibleSliceOf` derives it from `LazyListState.layoutInfo`), which is what stops a zoomed page from being dragged into empty space above or below the visible slice.
