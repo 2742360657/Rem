@@ -200,7 +200,16 @@ Before handoff:
 
 ## Lessons already paid for
 
-- Removable-storage performance is dominated by provider/Binder query count, not only bytes.
+- Emulator UI walkthroughs must swipe a long distance slowly: a short or fast synthetic swipe is
+  often not recognised as a scroll. `uiautomator dump` only exports what is currently on screen, so a
+  "missing" element usually means "not scrolled to" — enumerate screen by screen before concluding a
+  rendering defect.
+- `adb push` truncates the last code point of a non-ASCII destination directory name
+  (`218.花柒Hana` becomes `218.花柒H`). Create the parent directory on the device first and push into
+  it, or rename from inside the guest shell. The media files themselves are unaffected.
+- A Catalog-only Work (present in `.gallery/`, no local media) must enter the device projection with
+  `needsRepair = true` and `size = 0`. Dropping it silently deletes Work, Edition, Group and Series
+  decisions from the UI even though the portable documents are intact.- Removable-storage performance is dominated by provider/Binder query count, not only bytes.
 - `DocumentFile` convenience calls can hide repeated queries.
 - A provider may qualify a conflicting name with ` (1)`; a successful rename result does not prove the requested path was committed.
 - A unique temporary name is not enough for crash recovery: the old live revision needs a stable, discoverable recovery path, and every read path (especially `library.json` inspection) must use it.
