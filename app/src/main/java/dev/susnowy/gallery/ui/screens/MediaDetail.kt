@@ -98,7 +98,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.MediaItem as PlayerMediaItem
-import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.common.Player
 import androidx.media3.ui.PlayerView
 import androidx.core.net.toUri
@@ -1696,7 +1695,7 @@ private fun VideoViewer(
         }
         return
     }
-    val player = remember(item.libraryId, item.id, uri) { ExoPlayer.Builder(context).build() }
+    val player = remember(item.libraryId, item.id, uri) { dev.susnowy.gallery.media.createVideoPlayer(context) }
     val session = remember(player) { dev.susnowy.gallery.ui.VideoPlaybackSession() }
     val currentOnEnded by rememberUpdatedState(onEnded)
     val saved by produceState<PlaybackProgress?>(null, player) {

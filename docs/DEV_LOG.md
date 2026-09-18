@@ -6,6 +6,12 @@
 
 条目按时间倒序。同一问题的后续进展追加到原条目，不另起新条。
 
+## 2026-09-19：视频音频焦点及耳机断开处理
+
+- R07：现有裸 ExoPlayer.Builder 未启用焦点处理。提取 createVideoPlayer，声明媒体/电影用途，开启 Media3 音频焦点与 noisy 处理，不添加后台播放。
+- 合成 30 秒 WAV 实播，AudioManager 新永久焦点请求得到授权，原播放器暂停并发出 AUDIO_FOCUS_LOSS。完整 299 单测/lint/debug 与 test APK 构建、API 36 五项播放器设备回归通过。
+- 最初耳机断开测试试图由 App 发送受保护 AUDIO_BECOMING_NOISY 广播，被 Android 拒绝；改为真实焦点竞争测试，不把耳机拔插算作已测。电话、蓝牙切换及真实视频仍待专项验证。
+
 ## 2026-09-19：视频前后台暂停与恢复
 
 - R07：VideoViewer 之前仅由 active 设置 playWhenReady，没有生命周期暂停。新增 VideoPlaybackLifecycle，ON_PAUSE 保存初始化后的位置并暂停，ON_RESUME 仅恢复先前播放意图；手动暂停及非活动页不被自动启动。绑定位于全屏视图之外，维持已有同一播放器切换行为。

@@ -4,6 +4,8 @@ This document describes the implementation that exists now. Product semantics an
 
 ## Application shape
 
+`createVideoPlayer` configures Media3 with USAGE_MEDIA / CONTENT_TYPE_MOVIE, automatic audio focus, and audio-becoming-noisy handling. The same factory is used by the viewer and the real-audio focus regression test.
+
 `VideoPlaybackLifecycle` pauses on the owning lifecycle's ON_PAUSE and submits initialized playback progress through the existing repository path. ON_RESUME resumes only playback it paused; manual pauses remain paused. Inactive pager pages stay paused. This binding lives outside the fullscreen surface so swapping inline/fullscreen views does not reset its playback intent.
 
 `MainActivity` handles orientation/screen-size configuration changes so entering video fullscreen does not recreate the player. Compose observes the new configuration for layout. `VideoPlayerSurface` attaches the same Player to its inline or fullscreen view, requests sensor landscape only while fullscreen, and restores the previous orientation on exit. Other configuration changes and process recreation still follow normal saved-state restoration.
