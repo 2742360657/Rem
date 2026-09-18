@@ -62,6 +62,12 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.key
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import dev.susnowy.gallery.ui.components.PositionJumpDialog
+import kotlinx.coroutines.launch
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -203,7 +209,7 @@ fun GalleryScreenContent(
 }
 
 @Composable
-private fun SystemGalleryScreen(
+internal fun SystemGalleryScreen(
     state: GalleryUiState,
     viewModel: GalleryViewModel,
     onRequestAccess: () -> Unit,
@@ -211,18 +217,25 @@ private fun SystemGalleryScreen(
     onOpenAppSettings: () -> Unit,
 ) {
     var selected by rememberSaveable { mutableStateOf(emptySet<String>()) }
-    var sourceFilter by remember { mutableStateOf<String?>(null) }
+    var sourceFilter by rememberSaveable { mutableStateOf<String?>(null) }
+    var typeFilter by rememberSaveable { mutableStateOf<SystemMediaType?>(null) }
+    val positions = rememberSaveableStateHolder()
     var showImportChoices by remember { mutableStateOf(false) }
     var showImageSetTitle by remember { mutableStateOf(false) }
     var imageSetTitle by remember { mutableStateOf("导入图集") }
     val availableUris = remember(state.systemMedia) { state.systemMedia.mapTo(mutableSetOf()) { it.uri } }
-    LaunchedEffect(availableUris) { selected = selected.intersect(availableUris) }
+    LaunchedEffect(availableUris, state.systemMediaLoading) {
+        if (!state.systemMediaLoading) selected = selected.intersect(availableUris)
+    }
 
     val sources = remember(state.systemMedia) {
         state.systemMedia.map(SystemMediaEntry::sourceLabel).distinct().sortedWith(String.CASE_INSENSITIVE_ORDER)
     }
-    val visible = remember(state.systemMedia, sourceFilter) {
-        state.systemMedia.filter { sourceFilter == null || it.sourceLabel() == sourceFilter }
+    val visible = remember(state.systemMedia, sourceFilter, typeFilter) {
+        state.systemMedia.filter {
+            (sourceFilter == null || it.sourceLabel() == sourceFilter) &&
+                (typeFilter == null || it.mediaType == typeFilter)
+        }
     }
     val selectedMedia = state.systemMedia.filter { it.uri in selected }
     val canCreateImageSet = selectedMedia.size >= 2 &&
@@ -256,137 +269,174 @@ private fun SystemGalleryScreen(
         return
     }
 
-    Column(Modifier.fillMaxSize()) {
-        Column(
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Text(
-                when (state.systemMediaAccess) {
-                    SystemMediaAccess.FULL -> "已获得系统相册访问权限"
-                    SystemMediaAccess.PARTIAL -> "当前仅显示系统授权的媒体（可能只含图片、视频或指定项目）"
-                    SystemMediaAccess.NONE -> "未授权"
-                },
-                style = MaterialTheme.typography.titleMedium,
-            )
-            Text(
-                "${state.systemMedia.size} 项可访问媒体 · 导入会复制原始文件并保留来源目录关系",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = viewModel::refreshSystemMedia) {
-                    Icon(Icons.Rounded.Refresh, contentDescription = null)
-                    Spacer(Modifier.width(6.dp))
-                    Text("刷新")
-                }
-                OutlinedButton(
-                    onClick = if (state.systemMediaAccess == SystemMediaAccess.PARTIAL) {
-                        onRequestAccess
-                    } else {
-                        onOpenAppSettings
-                    },
+    val filterKey = "${typeFilter?.name ?: "ALL"}:${sourceFilter?.let { "source:$it" } ?: "ALL"}"
+    key(filterKey) {
+        positions.SaveableStateProvider(filterKey) {
+            val gridState = rememberLazyGridState()
+            val scope = rememberCoroutineScope()
+            var showJump by remember { mutableStateOf(false) }
+            Column(Modifier.fillMaxSize()) {
+                Column(
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     Text(
-                        if (state.systemMediaAccess == SystemMediaAccess.PARTIAL) {
-                            "调整授权范围"
-                        } else {
-                            "系统权限设置"
+                        when (state.systemMediaAccess) {
+                            SystemMediaAccess.FULL -> "已获得系统相册访问权限"
+                            SystemMediaAccess.PARTIAL -> "当前仅显示系统授权的媒体（可能只含图片、视频或指定项目）"
+                            SystemMediaAccess.NONE -> "未授权"
                         },
+                        style = MaterialTheme.typography.titleMedium,
                     )
-                }
-            }
-        }
-
-        LazyRow(
-            contentPadding = PaddingValues(horizontal = 16.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            item {
-                FilterChip(
-                    selected = sourceFilter == null,
-                    onClick = { sourceFilter = null },
-                    label = { Text("全部") },
-                )
-            }
-            items(sources, key = { it }) { source ->
-                FilterChip(
-                    selected = sourceFilter == source,
-                    onClick = { sourceFilter = source },
-                    label = { Text(source, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                )
-            }
-        }
-
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            TextButton(onClick = { selected = selected + visible.map(SystemMediaEntry::uri) }) {
-                Text("全选当前 ${visible.size} 项")
-            }
-            if (selected.isNotEmpty()) {
-                TextButton(onClick = { selected = emptySet() }) { Text("清空") }
-            }
-            Spacer(Modifier.weight(1f))
-            Button(
-                onClick = { showImportChoices = true },
-                enabled = selected.isNotEmpty() && state.operation == null,
-            ) { Text("导入 ${selected.size} 项") }
-        }
-
-        when {
-            state.systemMediaLoading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator()
-            }
-            visible.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text("当前授权范围内没有可访问的照片或视频")
-            }
-            else -> LazyVerticalGrid(
-                columns = GridCells.Adaptive(132.dp),
-                contentPadding = PaddingValues(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.weight(1f),
-            ) {
-                gridItems(visible, key = SystemMediaEntry::uri) { media ->
-                    val checked = media.uri in selected
-                    Card(onClick = {
-                        selected = if (checked) selected - media.uri else selected + media.uri
-                    }) {
-                        Box {
-                            AsyncImage(
-                                model = media.uri,
-                                contentDescription = media.displayName,
-                                contentScale = ContentScale.Crop,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .aspectRatio(1f),
-                            )
-                            Checkbox(
-                                checked = checked,
-                                onCheckedChange = { value ->
-                                    selected = if (value) selected + media.uri else selected - media.uri
+                    Text(
+                        "${state.systemMedia.size} 项可访问媒体 · 导入会复制原始文件并保留来源目录关系",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(onClick = viewModel::refreshSystemMedia) {
+                            Icon(Icons.Rounded.Refresh, contentDescription = null)
+                            Spacer(Modifier.width(6.dp))
+                            Text("刷新")
+                        }
+                        OutlinedButton(
+                            onClick = if (state.systemMediaAccess == SystemMediaAccess.PARTIAL) {
+                                onRequestAccess
+                            } else {
+                                onOpenAppSettings
+                            },
+                        ) {
+                            Text(
+                                if (state.systemMediaAccess == SystemMediaAccess.PARTIAL) {
+                                    "调整授权范围"
+                                } else {
+                                    "系统权限设置"
                                 },
-                                modifier = Modifier.align(Alignment.TopEnd),
                             )
                         }
-                        Text(
-                            media.displayName,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                        )
-                        Text(
-                            if (media.mediaType == SystemMediaType.VIDEO) "视频 · ${media.sourceLabel()}" else media.sourceLabel(),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                    }
+                }
+
+                LazyRow(
+                    contentPadding = PaddingValues(horizontal = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    item {
+                        FilterChip(
+                            selected = sourceFilter == null,
+                            onClick = { sourceFilter = null },
+                            label = { Text("全部来源") },
                         )
                     }
+                    items(sources, key = { it }) { source ->
+                        FilterChip(
+                            selected = sourceFilter == source,
+                            onClick = { sourceFilter = source },
+                            label = { Text(source, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                        )
+                    }
+                }
+
+                Row(
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    listOf(null, SystemMediaType.IMAGE, SystemMediaType.VIDEO).forEach { type ->
+                        FilterChip(
+                            selected = typeFilter == type,
+                            onClick = { typeFilter = type },
+                            label = { Text(when (type) {
+                                null -> "全部媒体"
+                                SystemMediaType.IMAGE -> "照片"
+                                SystemMediaType.VIDEO -> "视频"
+                            }) },
+                        )
+                    }
+                }
+                if (visible.size > 1 && !state.systemMediaLoading) {
+                    TextButton(onClick = { showJump = true }) {
+                        Text("${gridState.firstVisibleItemIndex + 1} / ${visible.size} · 定位")
+                    }
+                }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    TextButton(onClick = { selected = selected + visible.map(SystemMediaEntry::uri) }) {
+                        Text("全选当前 ${visible.size} 项")
+                    }
+                    if (selected.isNotEmpty()) {
+                        TextButton(onClick = { selected = emptySet() }) { Text("清空") }
+                    }
+                    Spacer(Modifier.weight(1f))
+                    Button(
+                        onClick = { showImportChoices = true },
+                        enabled = selectedMedia.isNotEmpty() && !state.systemMediaLoading && state.operation == null,
+                    ) { Text("导入 ${selected.size} 项") }
+                }
+
+                when {
+                    state.systemMediaLoading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator()
+                    }
+                    visible.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text("当前授权范围内没有可访问的照片或视频")
+                    }
+                    else -> LazyVerticalGrid(
+                        state = gridState,
+                        columns = GridCells.Adaptive(132.dp),
+                        contentPadding = PaddingValues(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        gridItems(visible, key = SystemMediaEntry::uri) { media ->
+                            val checked = media.uri in selected
+                            Card(onClick = {
+                                selected = if (checked) selected - media.uri else selected + media.uri
+                            }) {
+                                Box {
+                                    AsyncImage(
+                                        model = media.uri,
+                                        contentDescription = media.displayName,
+                                        contentScale = ContentScale.Crop,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .aspectRatio(1f),
+                                    )
+                                    Checkbox(
+                                        checked = checked,
+                                        onCheckedChange = { value ->
+                                            selected = if (value) selected + media.uri else selected - media.uri
+                                        },
+                                        modifier = Modifier.align(Alignment.TopEnd),
+                                    )
+                                }
+                                Text(
+                                    media.displayName,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                )
+                                Text(
+                                    if (media.mediaType == SystemMediaType.VIDEO) "视频 · ${media.sourceLabel()}" else media.sourceLabel(),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (showJump && visible.isNotEmpty() && !state.systemMediaLoading) {
+                PositionJumpDialog(visible.size, gridState.firstVisibleItemIndex, "项", { showJump = false }) { index ->
+                    showJump = false
+                    scope.launch { gridState.scrollToItem(index) }
                 }
             }
         }
