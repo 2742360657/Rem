@@ -1711,24 +1711,12 @@ class GalleryRepository(context: Context) {
     suspend fun oversizedBitmap(item: MediaItem, relativePath: String): Bitmap? =
         content.decodeOversizedImage(relativePath, storageFor(requireLibrary(item.libraryId)))
 
-    suspend fun pages(item: MediaItem): List<ImagePage> {
+    suspend fun pages(item: MediaItem): List<ImagePage> = onIo {
         val storage = storageFor(requireLibrary(item.libraryId))
         val plan = _editionPlans.value[planKey(item.libraryId, item.id)]
-            ?: return content.imageSetPages(item, storage)
-        val parents = plan.mapNotNull { page ->
-            page.relativePath?.takeIf { page.archiveEntry == null }?.substringBeforeLast('/')
-        }.distinct()
-        val listings = parents.associateWith { parent ->
-            runCatching { storage.list(parent) }.getOrDefault(emptyList())
-                .associate { it.relativePath to it.uri }
-        }
-        return plan.map { page ->
-            val path = page.relativePath
-            if (page.archiveEntry != null || path == null) {
-                page
-            } else {
-                page.copy(uri = listings[path.substringBeforeLast('/')]?.get(path))
-            }
+            ?: return@onIo content.imageSetPages(item, storage)
+        dev.susnowy.gallery.media.resolveEditionPages(plan) { parent ->
+            storage.list(parent).associate { it.relativePath to it.uri }
         }
     }
 

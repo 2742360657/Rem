@@ -12,6 +12,8 @@
 
 ## 2026-09-19：R08 批量字段编辑与持续回归
 
+- Repository.pages 的虚拟 Edition 分支此前直接从调用者执行 storage.list，且无斜杠路径把文件名当父目录；现统一 onIo 并抽取 EditionPageResolver，根父目录为空字符串，查询错误保留给阅读错误界面，不吞成空页列表。完整工程检查及两个 API 36 测试通过；测试明确从 Main 发起并校验 listing 在后台，保留页序和压缩包引用、父目录去重。
+
 - 加载调度审查：ArchiveCache 原全局锁覆盖整个 Provider 复制，导致其他已缓存作品也排队。拆成复制锁与短缓存锁；缓存命中、统计不等慢读，清理仍等复制完成后删除，保留临时文件计数/清理语义。新增阻塞输入并发测试，295 单测及完整工程检查、10 项 SAF/预览设备回归通过。仅修复缓存命中阻塞，冷打开优先级仍有缺口。
 
 - 视频横屏模块：抽取 VideoPlayerSurface 复用同一 Player，在全屏 Dialog 请求 sensor landscape，退出恢复原方向，解绑旧 PlayerView；MainActivity 处理方向/屏幕尺寸变化避免旋转重建播放器。完整单测/lint/debug/test APK 构建及 API 36 全部 42 项设备回归通过。全屏测试使用未准备媒体的 seek 位置验证实例/位置保持，不声称验证了真实视频解码。
