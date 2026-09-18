@@ -52,6 +52,14 @@ class LibraryAttachValidationTest {
             val pending = projected.copy(id = "pending-${identity.libraryId}", relativePath = "pending.cbz", inInbox = true)
             database.upsertMedia(stale)
             database.upsertMedia(pending)
+            database.upsertLibrary(requireNotNull(database.library(identity.libraryId)).copy(name = "Before failed attach"))
+            database.writableDatabase.execSQL("CREATE TRIGGER fail_attach_projection BEFORE UPDATE ON media BEGIN SELECT RAISE(ABORT, 'injected attach failure'); END")
+            try {
+                assertTrue(runCatching { repository.attach(root) }.isFailure)
+                assertEquals("Before failed attach", database.library(identity.libraryId)?.name)
+                assertNotNull("Failed attach must restore obsolete rows too", database.mediaItem(stale.id))
+                assertEquals("content://fixture/known", database.mediaItem(work.id)?.uri)
+            } finally { database.writableDatabase.execSQL("DROP TRIGGER fail_attach_projection") }
             repository.attach(root)
             assertNull(database.mediaItem(stale.id))
             assertNotNull(database.mediaItem(pending.id))

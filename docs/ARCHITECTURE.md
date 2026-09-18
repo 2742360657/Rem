@@ -25,7 +25,7 @@ Debug and release can coexist. Device-local SQLite data, logs, previews, and SAF
 
 ## Data ownership
 
-Attach projects accepted catalog Works before media traversal, preserving same-path local media facts on the same tree and marking new catalog-only rows missingMedia. Portable projection replacement removes obsolete accepted rows while retaining pending Inbox rows. Reclaiming the same Library/tree updates its registration without cascading index deletion; changing trees still invalidates old URI-backed rows. This does not make the entire attach operation one database transaction.
+Attach projects accepted catalog Works before media traversal, preserving same-path local media facts on the same tree and marking new catalog-only rows missingMedia. Portable projection replacement removes obsolete accepted rows while retaining pending Inbox rows. Reclaiming the same Library/tree updates its registration without cascading index deletion; changing trees still invalidates old URI-backed rows. Registration and local media/Inbox/state/group/series projections share one database transaction. Progress notifications, Edition-plan publication and UI refresh follow commit; portable initialization/migration remains governed by its separate recovery protocol.
 
 Archive entry streams check coroutine cancellation before/after underlying read and skip operations. Bounds cancellation propagates without being logged as a decode failure; checks between bounds, pixel decoding and memory-cache insertion prevent cancelled work progressing to the next stage. Native decoding and synchronous Provider calls still must return before cancellation can be observed.
 

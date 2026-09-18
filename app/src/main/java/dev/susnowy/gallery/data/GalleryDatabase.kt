@@ -337,6 +337,18 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
         }
     }
 
+    /** All local attach projections commit together; callers must not publish state in [block]. */
+    @Synchronized
+    internal fun <T> attachTransaction(block: () -> T): T {
+        val database = writableDatabase
+        database.beginTransaction()
+        try {
+            val result = block()
+            database.setTransactionSuccessful()
+            return result
+        } finally { database.endTransaction() }
+    }
+
     @Synchronized
     fun upsertMedia(item: MediaItem) {
         upsertMediaRow(writableDatabase, item)

@@ -199,30 +199,33 @@ class GalleryRepository(context: Context) {
                     schemaVersion = migrated.schemaVersion,
                     lastScanAt = database.library(migrated.libraryId)?.lastScanAt,
                 )
-                database.claimLibraryTree(registration)
-                val previous = database.media(migrated.libraryId).associateBy { it.id }
-                val projected = catalog.items.map { metadata ->
-                    val local = previous[metadata.id]?.takeIf { it.relativePath == metadata.relativePath }
-                    val base = local ?: MediaItem(
-                        id = metadata.id, libraryId = migrated.libraryId, relativePath = metadata.relativePath,
-                        uri = "", kind = metadata.type, sourceKind = metadata.source,
-                        displayTitle = metadata.displayTitle, missingMedia = true,
-                    )
-                    val trash = state.trash.firstOrNull { it.itemId == metadata.id }
-                    base.withPortableMetadata(metadata).copy(
-                        kind = metadata.type, sourceKind = metadata.source, inInbox = false,
-                        inboxDisposition = inbox.forWork(metadata.id, metadata.relativePath)?.disposition,
-                        trashed = trash != null,
-                        deletedAt = trash?.deletedAt?.let(java.time.Instant::parse)?.toEpochMilli(),
-                    )
+                database.attachTransaction {
+                    database.claimLibraryTree(registration)
+                    val previous = database.media(migrated.libraryId).associateBy { it.id }
+                    val projected = catalog.items.map { metadata ->
+                        val local = previous[metadata.id]?.takeIf { it.relativePath == metadata.relativePath }
+                        val base = local ?: MediaItem(
+                            id = metadata.id, libraryId = migrated.libraryId, relativePath = metadata.relativePath,
+                            uri = "", kind = metadata.type, sourceKind = metadata.source,
+                            displayTitle = metadata.displayTitle, missingMedia = true,
+                        )
+                        val trash = state.trash.firstOrNull { it.itemId == metadata.id }
+                        base.withPortableMetadata(metadata).copy(
+                            kind = metadata.type, sourceKind = metadata.source, inInbox = false,
+                            inboxDisposition = inbox.forWork(metadata.id, metadata.relativePath)?.disposition,
+                            trashed = trash != null,
+                            deletedAt = trash?.deletedAt?.let(java.time.Instant::parse)?.toEpochMilli(),
+                        )
+                    }
+                    database.replacePortableMedia(migrated.libraryId, projected)
+                    // Portable Inbox decisions are the truth; mirror them into the fresh index
+                    // immediately so a re-attached Library does not look undecided.
+                    database.applyInboxDecisions(migrated.libraryId, inbox.decisions)
+                    syncPortableState(migrated.libraryId, state, notify = false)
+                    syncGroups(migrated.libraryId, catalog.groups)
+                    syncSeries(migrated.libraryId, catalog.series)
                 }
-                database.replacePortableMedia(migrated.libraryId, projected)
-                // Portable Inbox decisions are the truth; mirror them into the fresh index
-                // immediately so a re-attached Library does not look undecided.
-                database.applyInboxDecisions(migrated.libraryId, inbox.decisions)
-                syncPortableState(migrated.libraryId, state)
-                syncGroups(migrated.libraryId, catalog.groups)
-                syncSeries(migrated.libraryId, catalog.series)
+                _progressRevision.value += 1
                 refreshEditionPlans(migrated.libraryId, catalog)
                 refreshFromDatabase()
                 registration
@@ -1640,7 +1643,7 @@ class GalleryRepository(context: Context) {
     }
 
     /** Mirrors the whole portable state, including removals, into the disposable index. */
-    private fun syncPortableState(libraryId: String, state: PortableState) {
+    private fun syncPortableState(libraryId: String, state: PortableState, notify: Boolean = true) {
         database.replacePortableState(
             libraryId = libraryId,
             progress = state.progress.map { progress ->
@@ -1659,7 +1662,7 @@ class GalleryRepository(context: Context) {
                 entry.itemId to java.time.Instant.parse(entry.deletedAt).toEpochMilli()
             },
         )
-        _progressRevision.value += 1
+        if (notify) _progressRevision.value += 1
     }
 
     /**
