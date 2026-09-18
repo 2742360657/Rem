@@ -106,6 +106,17 @@ A second, always-available test target is the phone's own storage (`/storage/emu
 - repository-wide serialization for catalog/state/Inbox read-modify-write operations, with scanning reloading portable truth after the long inventory before projecting it into SQLite;
 - an App-private `ArchiveCache` settings entry with size/clear, plus protection that keeps the archive currently being opened from evicting itself when it exceeds the nominal 512 MiB budget.
 
+## State invariants worth stating before writing UI
+
+- A UI action is planned against a snapshot. On commit, re-read the row and merge **only the fields the action changed**; provenance is recomputed from the row that is on disk, so an older snapshot can never delete a `manual` lock that appeared meanwhile.
+- `.gallery/` is the complete truth. Rebuilding the device index replaces the projection (clearing entries the document no longer has) instead of only upserting into it, in one transaction.
+- Identity is the stable portable id. Titles are for display and sorting only: never match, merge, project, edit or navigate by title.
+- Async progress writes carry a stamp chosen **before** the task is queued, and the repository drops a write older than the stored one. A successful save is observable through a revision flow, so the current screen refreshes without being re-entered.
+- "Opened" and "finished" are facts separate from "which page is showing": page 0 is a real position, restoring the last page is not completion, and re-reading a finished chapter starts at its first page.
+- One gesture layer owns tap, double tap, long press and pinch. Rebuilding a container must not erase a measurement that container produced.
+- Auto-scroll changes the logical order, not only pixels: the distance the list actually consumed feeds the same arithmetic as a finger drag, and the finger position used for the edge speed moves only when the finger moves.
+- Evidence is graded: verified by test/emulator, inferred from code, or still needing a real device. Documentation may only claim the first kind.
+
 ## Known gaps
 
 - Edition comparison and virtual merge are wired end to end (quick/deep comparison, report, page-plan Edition, `.gallery/imports/` evidence, reader follows the plan) and were walked through on a device on 2026-09-17; pixel-level (re-encode) matching is deliberately not implemented.
