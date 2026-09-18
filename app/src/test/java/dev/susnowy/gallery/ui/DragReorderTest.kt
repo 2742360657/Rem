@@ -10,6 +10,17 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class DragReorderTest {
+    @Test
+    fun visualPositionIncludesTheRowsNewLayoutPositionOnlyOnce() {
+        val state = DragReorderState().apply {
+            rowHeightPx = 100f
+            itemCount = 10
+            start(index = 0, pointerInViewport = 50f)
+        }
+        state.drag(250f) { _, _ -> }
+        val laidOutTopAfterReorder = state.draggingIndex!! * state.rowHeightPx
+        assertEquals(250f, laidOutTopAfterReorder + state.dragRowOffset, 0.001f)
+    }
     private fun moves(index: Int, offset: Float, rowHeight: Float = 100f, count: Int = 5) =
         reorderStep(index, offset, rowHeight, count)
 
@@ -149,7 +160,7 @@ class DragReorderTest {
         assertEquals(3, state.draggingIndex)
         // The visual offset keeps the row under the finger; the two completed swaps are already
         // expressed by its new position in the list, so only the 30px remainder is left over.
-        assertEquals(230f, state.dragRowOffset, 0.001f)
+        assertEquals(30f, state.dragRowOffset, 0.001f)
     }
 
     /**
@@ -170,8 +181,8 @@ class DragReorderTest {
 
         assertEquals(listOf(2 to 3, 3 to 4, 4 to 5, 5 to 6, 6 to 7), moves)
         assertEquals(7, state.draggingIndex)
-        // 500px of list scroll is 500px of visual displacement and exactly five rows of order.
-        assertEquals(500f, state.dragRowOffset, 0.001f)
+        // Five rows of new layout position consume the entire 500px displacement.
+        assertEquals(0f, state.dragRowOffset, 0.001f)
     }
 
     @Test
@@ -187,7 +198,7 @@ class DragReorderTest {
 
         assertEquals(listOf(0 to 1, 1 to 2), moves)
         assertEquals(2, state.draggingIndex)
-        assertEquals(250f, state.dragRowOffset, 0.001f)
+        assertEquals(50f, state.dragRowOffset, 0.001f)
         assertEquals(750f, state.pointerY, 0.001f)
     }
 

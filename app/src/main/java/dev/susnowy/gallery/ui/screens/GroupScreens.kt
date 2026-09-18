@@ -304,8 +304,9 @@ fun GroupDetail(
     onBack: () -> Unit,
 ) {
     val itemsById = remember(items) { items.associateBy(MediaItem::id) }
-    var memberIds by remember(group.id, group.revision) { mutableStateOf(group.memberIds) }
-    var coverWorkId by remember(group.id, group.revision) { mutableStateOf(group.coverWorkId) }
+    var memberIds by androidx.compose.runtime.saveable.rememberSaveable(group.id, group.revision) { mutableStateOf(group.memberIds) }
+    var coverWorkId by androidx.compose.runtime.saveable.rememberSaveable(group.id, group.revision) { mutableStateOf(group.coverWorkId) }
+    var confirmDiscard by remember(group.id) { mutableStateOf(false) }
     var showPicker by remember { mutableStateOf(false) }
     var renameOpen by remember { mutableStateOf(false) }
     var deleteOpen by remember { mutableStateOf(false) }
@@ -317,9 +318,20 @@ fun GroupDetail(
         memberIds = memberIds.toMutableList().apply { add(to, removeAt(from)) }
     }
 
-    BackHandler(enabled = true) {
-        if (dirty) viewModel.updateGroup(group, memberIds, coverWorkId = coverWorkId)
-        onBack()
+    fun requestBack() {
+        if (dirty) confirmDiscard = true else onBack()
+    }
+    BackHandler(enabled = !showPicker && !renameOpen && !deleteOpen && !confirmDiscard) {
+        requestBack()
+    }
+    if (confirmDiscard) {
+        AlertDialog(
+            onDismissRequest = { confirmDiscard = false },
+            title = { Text("放弃未保存的修改？") },
+            text = { Text("返回不会自动保存。可以继续编辑并点保存。") },
+            confirmButton = { TextButton(onClick = { confirmDiscard = false; onBack() }) { Text("放弃修改") } },
+            dismissButton = { TextButton(onClick = { confirmDiscard = false }) { Text("继续编辑") } },
+        )
     }
 
     Scaffold(
@@ -336,12 +348,7 @@ fun GroupDetail(
                     }
                 },
                 navigationIcon = {
-                    IconButton(onClick = {
-                        if (dirty) {
-                            viewModel.updateGroup(group, memberIds, coverWorkId = coverWorkId)
-                        }
-                        onBack()
-                    }) {
+                    IconButton(onClick = ::requestBack) {
                         Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回")
                     }
                 },
@@ -436,7 +443,6 @@ fun GroupDetail(
                             }
                         },
                     )
-                    HorizontalDivider()
                 }
             }
             if (dirty) {

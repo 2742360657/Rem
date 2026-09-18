@@ -71,6 +71,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.viewmodel.compose.viewModel
 import dev.susnowy.gallery.model.MediaKind
+import dev.susnowy.gallery.model.MediaItem
 import dev.susnowy.gallery.model.visibleInLibrary
 import dev.susnowy.gallery.ui.screens.EmptyLibraryScreen
 import dev.susnowy.gallery.ui.screens.GalleryScreenContent
@@ -145,9 +146,11 @@ fun GalleryApp(viewModel: GalleryViewModel = viewModel()) {
     GalleryTheme {
         if (state.selectedItem != null) {
             val selected = state.selectedItem!!
-            val contextualItems = state.detailItemIds.mapNotNull { id ->
-                state.allMedia.firstOrNull { it.id == id }
-            }.filter { it.libraryId == selected.libraryId && !it.trashed }
+            val mediaById = remember(state.allMedia) { state.allMedia.associateBy(MediaItem::id) }
+            val contextualItems = remember(state.detailItemIds, mediaById, selected.libraryId) {
+                state.detailItemIds.mapNotNull(mediaById::get)
+                    .filter { it.libraryId == selected.libraryId && it.visibleInLibrary }
+            }
             val browsingItems = contextualItems.ifEmpty {
                 when (selected.kind) {
                     MediaKind.PHOTO, MediaKind.PHOTO_VIDEO, MediaKind.LIVE_PHOTO -> state.media
@@ -163,43 +166,52 @@ fun GalleryApp(viewModel: GalleryViewModel = viewModel()) {
                     else -> listOf(selected)
                 }
             }
-            MediaDetail(
-                item = selected,
-                browsingItems = browsingItems,
-                libraryWorks = state.allMedia.filter {
-                    it.libraryId == selected.libraryId && it.visibleInLibrary
-                },
-                readerQueue = state.readerQueue,
-                autoAdvanceChapters = state.autoAdvanceChapters,
-                viewModel = viewModel,
-                onBack = viewModel::closeDetail,
-            )
+            Box(Modifier.fillMaxSize()) {
+                MediaDetail(
+                    item = selected,
+                    browsingItems = browsingItems,
+                    libraryWorks = state.allMedia.filter {
+                        it.libraryId == selected.libraryId && it.visibleInLibrary
+                    },
+                    readerQueue = state.readerQueue,
+                    autoAdvanceChapters = state.autoAdvanceChapters,
+                    viewModel = viewModel,
+                    onBack = viewModel::closeDetail,
+                )
+                SnackbarHost(snackbarHostState, Modifier.align(Alignment.BottomCenter))
+            }
             return@GalleryTheme
         }
 
         val selectedSeries = state.selectedSeries
         if (selectedSeries != null) {
-            SeriesEditor(
-                series = selectedSeries,
-                works = state.allMedia.filter {
-                    !it.trashed && !it.inInbox && it.libraryId == selectedSeries.libraryId
-                },
-                viewModel = viewModel,
-                onBack = viewModel::closeSeries,
-            )
+            Box(Modifier.fillMaxSize()) {
+                SeriesEditor(
+                    series = selectedSeries,
+                    works = state.allMedia.filter {
+                        !it.trashed && !it.inInbox && it.libraryId == selectedSeries.libraryId
+                    },
+                    viewModel = viewModel,
+                    onBack = viewModel::closeSeries,
+                )
+                SnackbarHost(snackbarHostState, Modifier.align(Alignment.BottomCenter))
+            }
             return@GalleryTheme
         }
 
         val selectedGroup = state.selectedGroup
         if (selectedGroup != null) {
-            GroupDetail(
-                group = selectedGroup,
-                items = state.allMedia.filter {
-                    it.libraryId == selectedGroup.libraryId && it.visibleInLibrary
-                },
-                viewModel = viewModel,
-                onBack = viewModel::closeGroup,
-            )
+            Box(Modifier.fillMaxSize()) {
+                GroupDetail(
+                    group = selectedGroup,
+                    items = state.allMedia.filter {
+                        it.libraryId == selectedGroup.libraryId && it.visibleInLibrary
+                    },
+                    viewModel = viewModel,
+                    onBack = viewModel::closeGroup,
+                )
+                SnackbarHost(snackbarHostState, Modifier.align(Alignment.BottomCenter))
+            }
             return@GalleryTheme
         }
 

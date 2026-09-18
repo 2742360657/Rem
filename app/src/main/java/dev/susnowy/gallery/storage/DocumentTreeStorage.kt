@@ -191,9 +191,23 @@ class DocumentTreeStorage(
         StorageMetrics.measure { resolver.openInputStream(document.resolveUri()) }
             ?: throw FileNotFoundException(document.key)
 
-    override fun openOutput(document: LibraryDocument, truncate: Boolean): OutputStream =
-        resolver.openOutputStream(document.resolveUri(), if (truncate) "rwt" else "wa")
+    override fun openOutput(document: LibraryDocument, truncate: Boolean): OutputStream {
+        val stream = resolver.openOutputStream(document.resolveUri(), if (truncate) "rwt" else "wa")
             ?: throw FileNotFoundException(document.key)
+        return object : java.io.FilterOutputStream(stream) {
+            // FilterOutputStream's default bulk write loops byte by byte. Keep large copies bulk.
+            override fun write(bytes: ByteArray, offset: Int, length: Int) = out.write(bytes, offset, length)
+
+            override fun close() {
+                try {
+                    super.close()
+                } finally {
+                    // Even a failed/partial write changes size and mtime. Keep unrelated subtrees.
+                    forgetSubtrees(document.key)
+                }
+            }
+        }
+    }
 
     override fun rename(document: LibraryDocument, displayName: String): Boolean {
         val sourceUri = document.resolveUri()

@@ -196,7 +196,7 @@ fun GalleryScreenContent(
             query = state.searchQuery,
             viewModel = viewModel,
         )
-        AppScreen.TRASH -> TrashScreen(state.media.filter(MediaItem::trashed), viewModel)
+        AppScreen.TRASH -> TrashScreen(state, viewModel)
         AppScreen.ORGANIZER -> OrganizerScreen(viewModel)
         AppScreen.SETTINGS -> SettingsScreen(state, viewModel)
     }
@@ -1649,38 +1649,59 @@ private fun SearchScreen(
 }
 
 @Composable
-private fun TrashScreen(items: List<MediaItem>, viewModel: GalleryViewModel) {
-    var pendingPurge by remember { mutableStateOf<MediaItem?>(null) }
-    if (items.isEmpty()) {
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text("回收站为空。普通删除不会移动或删除真实文件。")
+internal fun TrashScreen(state: GalleryUiState, viewModel: GalleryViewModel) {
+    var allLibraries by rememberSaveable { mutableStateOf(false) }
+    var pendingPurge by remember(state.activeLibraryId, allLibraries) { mutableStateOf<MediaItem?>(null) }
+    val items = remember(state.allMedia, state.activeLibraryId, allLibraries) {
+        state.allMedia.filter {
+            it.trashed && (allLibraries || it.libraryId == state.activeLibraryId)
+        }.sortedByDescending { it.deletedAt }
+    }
+    Column(Modifier.fillMaxSize()) {
+        Row(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilterChip(selected = !allLibraries, onClick = { allLibraries = false }, label = { Text("当前库") })
+            FilterChip(selected = allLibraries, onClick = { allLibraries = true }, label = { Text("全部库") })
         }
-    } else {
-        LazyColumn(contentPadding = PaddingValues(16.dp), modifier = Modifier.fillMaxSize()) {
-            items(items, key = MediaItem::id) { item ->
-                ListItem(
-                    headlineContent = { Text(item.displayTitle, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                    supportingContent = { Text(item.relativePath, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                    leadingContent = {
-                        MediaThumbnail(
-                            item = item,
-                            viewModel = viewModel,
-                            modifier = Modifier
-                                .size(72.dp)
-                                .clip(MaterialTheme.shapes.medium),
-                        )
-                    },
-                    trailingContent = {
-                        Row {
-                            IconButton(onClick = { viewModel.setTrashed(item, false) }) {
-                                Icon(Icons.Rounded.Restore, contentDescription = "恢复")
+        Text("${items.size} 项 · 不会自动删除原文件", modifier = Modifier.padding(horizontal = 16.dp))
+        if (items.isEmpty()) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text("回收站为空。普通删除不会移动或删除真实文件。")
+            }
+        } else {
+            LazyColumn(contentPadding = PaddingValues(16.dp), modifier = Modifier.fillMaxSize()) {
+                items(items, key = MediaItem::id) { item ->
+                    ListItem(
+                        headlineContent = { Text(item.displayTitle, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                        supportingContent = {
+                            Column {
+                                Text(state.libraries.firstOrNull { it.libraryId == item.libraryId }?.name ?: "未知库")
+                                Text(item.relativePath, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                if (dev.susnowy.gallery.model.TrashRules.needsReview(
+                                        item, state.trashRetentionDays, System.currentTimeMillis(),
+                                    )) Text("已到清理提醒时间，可恢复或手动删除")
                             }
-                            IconButton(onClick = { pendingPurge = item }) {
-                                Icon(Icons.Rounded.DeleteForever, contentDescription = "永久删除")
+                        },
+                        leadingContent = {
+                            MediaThumbnail(
+                                item = item,
+                                viewModel = viewModel,
+                                modifier = Modifier
+                                    .size(72.dp)
+                                    .clip(MaterialTheme.shapes.medium),
+                            )
+                        },
+                        trailingContent = {
+                            Row {
+                                IconButton(enabled = state.operation == null, onClick = { viewModel.setTrashed(item, false) }) {
+                                    Icon(Icons.Rounded.Restore, contentDescription = "恢复")
+                                }
+                                IconButton(enabled = state.operation == null, onClick = { pendingPurge = item }) {
+                                    Icon(Icons.Rounded.DeleteForever, contentDescription = "永久删除")
+                                }
                             }
-                        }
-                    },
-                )
+                        },
+                    )
+                }
             }
         }
     }
@@ -1688,9 +1709,14 @@ private fun TrashScreen(items: List<MediaItem>, viewModel: GalleryViewModel) {
         AlertDialog(
             onDismissRequest = { pendingPurge = null },
             title = { Text("永久删除？") },
-            text = { Text("这会真实删除 ${item.relativePath}，操作不可撤销。") },
+            text = {
+                val libraryName = state.libraries.firstOrNull { it.libraryId == item.libraryId }?.name.orEmpty()
+                Text("媒体库：$libraryName\n真实删除：${item.relativePath}" +
+                    (item.secondaryPath?.let { "\n附属文件：$it" } ?: "") +
+                    "\n${item.size.formatBytes()} · 文件夹会连同内部文件删除。操作不可撤销。")
+            },
             confirmButton = {
-                TextButton(onClick = {
+                TextButton(enabled = state.operation == null && items.any { it == item }, onClick = {
                     viewModel.purge(item)
                     pendingPurge = null
                 }) { Text("永久删除") }
@@ -1704,7 +1730,7 @@ private fun TrashScreen(items: List<MediaItem>, viewModel: GalleryViewModel) {
 private fun OrganizerScreen(viewModel: GalleryViewModel) {
     val plan by viewModel.organizationPlan.collectAsStateWithLifecycle()
     var template by remember { mutableStateOf(OrganizerTemplate.AUTHOR_FIRST) }
-    var confirmExecution by remember { mutableStateOf(false) }
+    var confirmExecution by remember(plan) { mutableStateOf(false) }
     Column(Modifier.fillMaxSize()) {
         Column(
             modifier = Modifier.padding(16.dp),
@@ -1833,7 +1859,7 @@ private fun SettingsScreen(state: GalleryUiState, viewModel: GalleryViewModel) {
             )
         }
         item {
-            Text("回收站保留期限", style = MaterialTheme.typography.titleMedium)
+            Text("回收站清理提醒", style = MaterialTheme.typography.titleMedium)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 listOf(7, 30, 90, 0).forEach { days ->
                     FilterChip(
@@ -1842,18 +1868,17 @@ private fun SettingsScreen(state: GalleryUiState, viewModel: GalleryViewModel) {
                             viewModel.setRetentionDays(days)
                             daysText = days.takeIf { it > 0 }?.toString().orEmpty()
                         },
-                        label = { Text(if (days == 0) "永久" else "$days 天") },
+                        label = { Text(if (days == 0) "不提醒" else "$days 天") },
                     )
                 }
             }
             OutlinedTextField(
                 value = daysText,
                 onValueChange = { daysText = it.filter(Char::isDigit).take(4) },
-                label = { Text("回收站保留天数") },
+                label = { Text("移入回收站多少天后提醒") },
                 supportingText = {
                     Text(
-                        "到期项会在下次启动 Rem 时直接真删除并提示数量，不会再次询问；" +
-                            "填 0 或选“永久”则永久保留，只能手动删除。",
+                        "到期只在回收站标记，不会自动删除。永久删除始终需要手动确认；填 0 则不提醒。",
                     )
                 },
                 singleLine = true,

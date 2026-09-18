@@ -1216,6 +1216,9 @@ class GalleryRepository(context: Context) {
             val item = database.mediaItem(itemId) ?: return@withPortableWrite
             val deletedAt = if (trashed) System.currentTimeMillis() else null
             val storage = storageFor(requireLibrary(item.libraryId))
+            check(!dev.susnowy.gallery.library.PermanentDeletion(storage).hasStarted(item)) {
+                "永久删除事务已开始，不能恢复；请在回收站重试永久删除以完成事务"
+            }
             PortableMetadataStore(storage).setTrashed(item, trashed, deletedAt ?: 0)
             database.upsertMedia(item.copy(trashed = trashed, deletedAt = deletedAt))
             refreshFromDatabase()
@@ -1239,9 +1242,9 @@ class GalleryRepository(context: Context) {
             }
         }
 
-    suspend fun purge(itemId: String) = runOperation("正在永久删除…") {
+    suspend fun purge(confirmed: MediaItem) = runOperation("正在永久删除…") {
         withPortableWrite {
-            purgeInternal(itemId)
+            purgeInternal(confirmed)
         }
     }
 
@@ -1367,20 +1370,6 @@ class GalleryRepository(context: Context) {
                 organizer.recoverInterrupted(libraryId, storageFor(requireLibrary(libraryId)))
             }
         }
-
-    suspend fun cleanupExpired(retentionDays: Int): Int = withPortableWrite {
-        if (retentionDays <= 0) return@withPortableWrite 0
-        val threshold = System.currentTimeMillis() - retentionDays.coerceAtLeast(1) * 86_400_000L
-        val expired = database.media().filter {
-            it.trashed && (it.deletedAt ?: Long.MAX_VALUE) <= threshold
-        }
-        var deleted = 0
-        expired.forEach { item ->
-            runCatching { purgeInternal(item.id) }.onSuccess { deleted++ }
-        }
-        if (deleted > 0) refreshFromDatabase()
-        deleted
-    }
 
     suspend fun deriveImage(itemId: String): String = runOperation("正在复制派生图片…") {
         onIo {
@@ -1659,30 +1648,45 @@ class GalleryRepository(context: Context) {
     private fun storageFor(registration: LibraryRegistration) =
         DocumentTreeStorage(appContext, registration.treeUri.toUri())
 
-    private fun purgeInternal(itemId: String) {
-        val item = database.mediaItem(itemId) ?: return
+    private fun purgeInternal(confirmed: MediaItem) {
+        val item = database.mediaItem(confirmed.id) ?: error("媒体已不存在")
+        dev.susnowy.gallery.model.TrashRules.requireUnchanged(confirmed, item)
         check(item.trashed) { "只能永久删除回收站中的项目" }
         val storage = storageFor(requireLibrary(item.libraryId))
-        val entry = storage.entry(item.relativePath)
-            ?: throw FileNotFoundException("文件已不存在，请先重新扫描")
-        val secondaryEntry = item.secondaryPath?.let { path ->
-            storage.entry(path) ?: throw FileNotFoundException("Live Photo motion 文件已不存在")
+        val metadata = PortableMetadataStore(storage)
+        val deletion = dev.susnowy.gallery.library.PermanentDeletion(storage)
+        val mediaRemoved = deletion.mediaRemoved(item)
+        val catalog = metadata.loadCatalog(item.libraryId)
+        val portable = catalog.items.firstOrNull { it.id == item.id }
+        if (portable != null) dev.susnowy.gallery.model.TrashRules.requireExclusiveSource(item, catalog)
+        check((portable == null && mediaRemoved) ||
+            (portable?.revision == item.revision && portable.relativePath == item.relativePath)) {
+            "便携元数据已变化，请先重建索引再确认删除"
         }
-        val currentSize = (if (entry.isDirectory) storage.treeStats(item.relativePath).totalBytes else entry.size) +
-            (secondaryEntry?.size ?: 0)
-        if (item.size > 0 && currentSize != item.size) {
-            error("媒体内容大小已变化，为避免误删已停止操作")
+        val trash = metadata.loadState(item.libraryId).trash.firstOrNull { it.itemId == item.id }
+        check((trash == null && mediaRemoved) ||
+            (trash != null && java.time.Instant.parse(trash.deletedAt).toEpochMilli() == item.deletedAt)) {
+            "回收站状态已变化，请先重建索引再确认删除"
         }
-        val document = storage.find(item.relativePath)
-            ?: throw FileNotFoundException(item.relativePath)
-        item.secondaryPath?.let { path ->
-            val secondaryDocument = storage.find(path) ?: throw FileNotFoundException(path)
-            check(storage.delete(secondaryDocument)) { "Provider 拒绝删除 Live Photo motion 文件" }
-        }
-        check(storage.delete(document)) { "Provider 拒绝删除 ${item.relativePath}" }
-        PortableMetadataStore(storage).removeItem(item)
-        PortableInboxStore(storage).removeWorks(item.libraryId, setOf(item.id))
-        database.removeMedia(item.id)
+        if (!deletion.hasStarted(item)) metadata.createBackup("purge-${java.util.UUID.randomUUID()}")
+        deletion.execute(item, inspect = { path ->
+            storage.entry(path)?.let { entry ->
+                dev.susnowy.gallery.library.DeletionSource(
+                    path, if (entry.isDirectory) storage.treeStats(path).totalBytes else entry.size,
+                    entry.lastModified, entry.isDirectory,
+                )
+            }
+        }, delete = { path ->
+            val document = storage.find(path) ?: throw FileNotFoundException(path)
+            check(storage.delete(document)) { "Provider 拒绝删除 $path" }
+        }, finish = {
+            metadata.removeItem(item)
+            PortableInboxStore(storage).removeWorks(item.libraryId, setOf(item.id))
+            val latest = metadata.loadCatalog(item.libraryId)
+            syncGroups(item.libraryId, latest.groups)
+            syncSeries(item.libraryId, latest.series)
+            database.removeMedia(item.id)
+        })
         refreshFromDatabase()
     }
 

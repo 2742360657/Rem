@@ -24,6 +24,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
@@ -53,19 +54,12 @@ class DragReorderState internal constructor() {
 
     /**
      * How far the dragged row is displaced from its laid-out position. This is what the user sees,
-     * so it accumulates every movement: a finger drag and an auto-scroll both move the row.
+     * after completed swaps have already moved its layout position.
      */
     var dragRowOffset by mutableFloatStateOf(0f)
         internal set
 
-    /**
-     * Distance already converted into member swaps.
-     *
-     * Kept apart from [dragRowOffset] on purpose: each swap moves the row by exactly one row
-     * height, so the pixels that produced a swap must not be applied a second time as a visual
-     * translation. Mixing the two is what made a long auto-scroll look like it moved the row while
-     * the member order barely changed.
-     */
+    /** Unconsumed distance; completed swaps already moved the row's layout position. */
     private var reorderOffset = 0f
 
     var rowHeightPx by mutableFloatStateOf(0f)
@@ -105,11 +99,11 @@ class DragReorderState internal constructor() {
 
     private fun applyDelta(delta: Float, onMove: (from: Int, to: Int) -> Unit) {
         val index = draggingIndex ?: return
-        dragRowOffset += delta
         val result = reorderStep(index, reorderOffset + delta, rowHeightPx, itemCount)
         result.moves.forEach { (from, to) -> onMove(from, to) }
         draggingIndex = result.index
         reorderOffset = result.offset
+        dragRowOffset = result.offset
     }
 
     fun finish() {
@@ -211,21 +205,27 @@ fun rememberDragReorderState(rowHeight: Dp): DragReorderState {
  * from the row's layout position would make the finger look like it is drifting back to the middle
  * of the list and the auto-scroll would slow itself down.
  */
+@Composable
 fun Modifier.dragReorderHandle(
     state: DragReorderState,
     index: Int,
     onMove: (from: Int, to: Int) -> Unit,
     rowViewportTop: () -> Float,
-): Modifier = pointerInput(index) {
-    detectDragGesturesAfterLongPress(
-        onDragStart = { offset -> state.start(index, rowViewportTop() + offset.y) },
-        onDragEnd = { state.finish() },
-        onDragCancel = { state.finish() },
-        onDrag = { change, dragAmount ->
-            change.consume()
-            state.drag(dragAmount.y, onMove)
-        },
-    )
+): Modifier {
+    val currentIndex by rememberUpdatedState(index)
+    val currentMove by rememberUpdatedState(onMove)
+    val currentTop by rememberUpdatedState(rowViewportTop)
+    return pointerInput(state) {
+        detectDragGesturesAfterLongPress(
+            onDragStart = { offset -> state.start(currentIndex, currentTop() + offset.y) },
+            onDragEnd = { state.finish() },
+            onDragCancel = { state.finish() },
+            onDrag = { change, dragAmount ->
+                change.consume()
+                state.drag(dragAmount.y, currentMove)
+            },
+        )
+    }
 }
 
 /** Default row height for the editors; fixed so drag arithmetic stays predictable. */

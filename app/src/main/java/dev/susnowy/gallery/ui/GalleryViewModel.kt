@@ -143,6 +143,7 @@ class GalleryViewModel(
     private val systemMediaAccess = MutableStateFlow(repository.systemMediaAccess())
     private val systemMediaLoading = MutableStateFlow(false)
     private val _organizationPlan = MutableStateFlow<OrganizationPlan?>(null)
+    private var organizationRequest = 0L
     val organizationPlan: StateFlow<OrganizationPlan?> = _organizationPlan
     private val _duplicateGroups = MutableStateFlow<List<List<MediaItem>>>(emptyList())
     val duplicateGroups: StateFlow<List<List<MediaItem>>> = _duplicateGroups
@@ -262,11 +263,6 @@ class GalleryViewModel(
                 }
         }
         viewModelScope.launch {
-            delay(1_500)
-            runCatching { repository.cleanupExpired(retentionDays.value) }
-                .onSuccess { if (it > 0) message.value = "已安全清理 $it 个到期回收站项目" }
-        }
-        viewModelScope.launch {
             _offlinePreviewStats.value = repository.offlinePreviewStats()
             _archiveCacheStats.value = repository.archiveCacheStats()
         }
@@ -291,7 +287,7 @@ class GalleryViewModel(
 
     fun scan(libraryId: String? = activeLibraryId.value) {
         if (libraryId == null) return
-        longOperationJob = viewModelScope.launch {
+        launchLongOperation {
             runCatching { repository.scan(libraryId) }
                 .onSuccess { result ->
                     message.value = buildString {
@@ -308,7 +304,7 @@ class GalleryViewModel(
 
     fun rebuildIndex() {
         val libraryId = activeLibraryId.value ?: return
-        longOperationJob = viewModelScope.launch {
+        launchLongOperation {
             runCatching { repository.rebuildIndex(libraryId) }
                 .onSuccess { message.value = "本机索引已从 Library 重建" }
                 .onFailure(::showError)
@@ -789,7 +785,7 @@ class GalleryViewModel(
 
     fun purge(item: MediaItem) {
         viewModelScope.launch {
-            runCatching { repository.purge(item.id) }
+            runCatching { repository.purge(item) }
                 .onSuccess { message.value = "文件及其 Rem 元数据已永久删除" }
                 .onFailure(::showError)
         }
@@ -902,16 +898,30 @@ class GalleryViewModel(
 
     fun previewOrganization(template: OrganizerTemplate) {
         val libraryId = activeLibraryId.value ?: return
-        longOperationJob = viewModelScope.launch {
+        val request = ++organizationRequest
+        _organizationPlan.value = null
+        launchLongOperation {
             runCatching { repository.previewOrganization(libraryId, template) }
-                .onSuccess { _organizationPlan.value = it }
+                .onSuccess {
+                    if (request == organizationRequest && activeLibraryId.value == libraryId) {
+                        _organizationPlan.value = it
+                    }
+                }
                 .onFailure(::showError)
         }
     }
 
     fun executeOrganization(plan: OrganizationPlan) {
-        longOperationJob = viewModelScope.launch {
+        if (plan != _organizationPlan.value || plan.steps.isEmpty() ||
+            plan.steps.any { it.item.libraryId != activeLibraryId.value } ||
+            longOperationJob?.isActive == true
+        ) return
+        launchLongOperation {
             runCatching {
+                check(plan == _organizationPlan.value &&
+                    plan.steps.all { it.item.libraryId == activeLibraryId.value }) {
+                    "整理计划已失效，请重新生成预览"
+                }
                 repository.executeOrganization(plan)
                 repository.scan(plan.steps.first().item.libraryId)
             }.onSuccess {
@@ -922,13 +932,14 @@ class GalleryViewModel(
     }
 
     fun clearOrganizationPlan() {
+        organizationRequest++
         _organizationPlan.value = null
     }
 
     fun importSystemMedia(uris: List<Uri>) {
         val libraryId = activeLibraryId.value ?: return
         if (uris.isEmpty()) return
-        longOperationJob = viewModelScope.launch {
+        launchLongOperation {
             runCatching {
                 val result = repository.importSystemMedia(libraryId, uris)
                 repository.scan(libraryId)
@@ -943,7 +954,7 @@ class GalleryViewModel(
     fun importSystemImageSet(uris: List<Uri>, title: String) {
         val libraryId = activeLibraryId.value ?: return
         if (uris.size < 2 || title.isBlank()) return
-        longOperationJob = viewModelScope.launch {
+        launchLongOperation {
             runCatching {
                 val result = repository.importSystemImageSet(libraryId, uris, title.trim())
                 repository.scan(libraryId)
@@ -959,7 +970,7 @@ class GalleryViewModel(
     fun importSystemWorks(uris: List<Uri>, kind: WorkImportKind) {
         val libraryId = activeLibraryId.value ?: return
         if (uris.isEmpty()) return
-        longOperationJob = viewModelScope.launch {
+        launchLongOperation {
             runCatching {
                 val result = repository.importSystemWorks(libraryId, uris, kind)
                 repository.scan(libraryId)
@@ -1002,7 +1013,7 @@ class GalleryViewModel(
     }
 
     fun deriveImage(item: MediaItem) {
-        longOperationJob = viewModelScope.launch {
+        launchLongOperation {
             runCatching {
                 val target = repository.deriveImage(item.id)
                 repository.scan(item.libraryId)
@@ -1013,7 +1024,7 @@ class GalleryViewModel(
     }
 
     fun derivePage(item: MediaItem, pageNumber: Int) {
-        longOperationJob = viewModelScope.launch {
+        launchLongOperation {
             runCatching {
                 val target = repository.derivePage(item.id, pageNumber - 1)
                 repository.scan(item.libraryId)
@@ -1025,7 +1036,7 @@ class GalleryViewModel(
 
     fun createImageSet(itemIds: List<String>, title: String) {
         val libraryId = activeLibraryId.value ?: return
-        longOperationJob = viewModelScope.launch {
+        launchLongOperation {
             runCatching {
                 val target = repository.createImageSet(libraryId, itemIds, title)
                 repository.scan(libraryId)
@@ -1040,7 +1051,7 @@ class GalleryViewModel(
 
     fun reorderImageSet(item: MediaItem, pages: List<ImagePage>) {
         if (pages.size < 2) return
-        longOperationJob = viewModelScope.launch {
+        launchLongOperation {
             runCatching {
                 repository.reorderImageSet(item.id, pages)
                 repository.scan(item.libraryId)
@@ -1052,7 +1063,7 @@ class GalleryViewModel(
 
     fun findDuplicates() {
         val libraryId = activeLibraryId.value ?: return
-        longOperationJob = viewModelScope.launch {
+        launchLongOperation {
             runCatching { repository.findDuplicates(libraryId) }
                 .onSuccess {
                     _duplicateGroups.value = it
@@ -1069,11 +1080,18 @@ class GalleryViewModel(
     fun cancelLongOperation() {
         if (longOperationJob?.isActive == true) {
             longOperationJob?.cancel()
-            longOperationJob = null
             message.value = "操作已取消；已提交的事务步骤保留在恢复日志中"
         } else {
             message.value = "当前操作已进入不可取消的短提交阶段"
         }
+    }
+
+    private fun launchLongOperation(block: suspend () -> Unit) {
+        if (longOperationJob?.isCompleted == false) {
+            message.value = "已有任务正在运行或结束中，请稍后再试"
+            return
+        }
+        longOperationJob = viewModelScope.launch { block() }
     }
 
     private fun showError(error: Throwable) {
@@ -1090,7 +1108,10 @@ class GalleryViewModel(
             // A plan describes real paths inside one Library. Keeping it across a Library switch
             // would let the Organizer offer to move files of a Library the user is no longer
             // looking at, under a template chip that no longer describes that plan.
-            _organizationPlan.value = null
+            clearOrganizationPlan()
+            selectedGroupId.value = null
+            selectedSeriesId.value = null
+            readerQueueIds.value = emptyList()
         }
         activeLibraryId.value = libraryId
         preferences.edit {

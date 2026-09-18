@@ -27,6 +27,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -55,7 +56,7 @@ fun SelectableMediaGrid(
     showSelectButton: Boolean = true,
 ) {
     var selectionMode by rememberSaveable { mutableStateOf(false) }
-    var selected by remember { mutableStateOf(emptySet<String>()) }
+    var selected by rememberSaveable(stateSaver = GridSelectionSaver) { mutableStateOf(emptySet<String>()) }
     var showBatchEditor by remember { mutableStateOf(false) }
     var confirmTrash by remember { mutableStateOf(false) }
     var groupPicker by remember { mutableStateOf(false) }
@@ -65,7 +66,10 @@ fun SelectableMediaGrid(
     val canJoinGroup = selectedItems.any { it.kind in GROUPABLE_KINDS }
     val canJoinSeries = selectedItems.any { it.kind in SERIES_KINDS }
 
-    BackHandler(enabled = selectionMode) { selectionMode = false }
+    BackHandler(enabled = selectionMode && !showBatchEditor && !confirmTrash && !groupPicker && !seriesPicker) {
+        selectionMode = false
+        selected = emptySet()
+    }
     // A grid whose items changed (a scan, a filter) must not keep ids that are gone.
     LaunchedEffect(items) {
         selected = selected.intersect(items.mapTo(mutableSetOf(), MediaItem::id))
@@ -88,7 +92,7 @@ fun SelectableMediaGrid(
                         items.mapTo(mutableSetOf(), MediaItem::id)
                     }
                 }) { Text(if (selected.size == items.size) "取消全选" else "全选") }
-                TextButton(onClick = { selectionMode = false }) { Text("完成") }
+                TextButton(onClick = { selectionMode = false; selected = emptySet() }) { Text("完成") }
             }
             Row(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -227,4 +231,7 @@ fun SelectableMediaGrid(
 }
 
 private val GROUPABLE_KINDS = setOf(MediaKind.IMAGE_SET, MediaKind.VIDEO, MediaKind.IMAGE)
+private val GridSelectionSaver = Saver<Set<String>, ArrayList<String>>(
+    save = { ArrayList(it) }, restore = { it.toSet() },
+)
 private val SERIES_KINDS = setOf(MediaKind.IMAGE_SET, MediaKind.VIDEO)

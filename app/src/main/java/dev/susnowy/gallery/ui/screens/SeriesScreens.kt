@@ -75,8 +75,9 @@ fun SeriesEditor(
     onBack: () -> Unit,
 ) {
     val worksById = remember(works) { works.associateBy(MediaItem::id) }
-    var memberIds by remember(series.id, series.revision) { mutableStateOf(series.memberIds) }
-    var clearPositions by remember(series.id, series.revision) { mutableStateOf(false) }
+    var memberIds by androidx.compose.runtime.saveable.rememberSaveable(series.id, series.revision) { mutableStateOf(series.memberIds) }
+    var clearPositions by androidx.compose.runtime.saveable.rememberSaveable(series.id, series.revision) { mutableStateOf(false) }
+    var confirmDiscard by remember(series.id) { mutableStateOf(false) }
     var renameOpen by remember { mutableStateOf(false) }
     var addOpen by remember { mutableStateOf(false) }
     var deleteOpen by remember { mutableStateOf(false) }
@@ -97,9 +98,20 @@ fun SeriesEditor(
         )
     }
 
-    BackHandler(enabled = true) {
-        if (dirty) save()
-        onBack()
+    fun requestBack() {
+        if (dirty) confirmDiscard = true else onBack()
+    }
+    BackHandler(enabled = !renameOpen && !addOpen && !deleteOpen && relocateIndex == null && !confirmDiscard) {
+        requestBack()
+    }
+    if (confirmDiscard) {
+        AlertDialog(
+            onDismissRequest = { confirmDiscard = false },
+            title = { Text("放弃未保存的修改？") },
+            text = { Text("返回不会自动保存。可以继续编辑并点保存。") },
+            confirmButton = { TextButton(onClick = { confirmDiscard = false; onBack() }) { Text("放弃修改") } },
+            dismissButton = { TextButton(onClick = { confirmDiscard = false }) { Text("继续编辑") } },
+        )
     }
 
     Scaffold(
@@ -116,10 +128,7 @@ fun SeriesEditor(
                     }
                 },
                 navigationIcon = {
-                    IconButton(onClick = {
-                        if (dirty) save()
-                        onBack()
-                    }) {
+                    IconButton(onClick = ::requestBack) {
                         Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回系列书架")
                     }
                 },
@@ -230,7 +239,6 @@ fun SeriesEditor(
                             }
                         },
                     )
-                    HorizontalDivider()
                 }
             }
             if (dirty) {

@@ -123,7 +123,7 @@ Derived folder groups stay presentation-only inference until saved; after that t
 - UI: `漫画 / 阅读 → 系列书架 → 编辑系列` (`SeriesEditor`) does rename, batch add/remove, reordering and numbering reset, committed by one explicit save. The picker is the shared `WorkPickerDialog`.
 - `ui.components.DragReorder` provides long-press drag reordering for fixed-height rows (`ReorderableRow`): the step arithmetic (`reorderStep`) is pure and unit-tested, the gesture only edits the editor's local list, and the up/down plus move-to-index paths stay available and produce the same order.
 - `DragReorderState` also carries the auto-scroll: while a row is dragged, `dragAutoScrollSpeed`/`dragAutoScrollDelta` (pure, unit-tested) scroll the enclosing `LazyListState` when the finger is held near an edge. The consumed scroll is fed into the logical drag distance, so rows crossed by auto-scroll participate in reordering instead of producing a visual-only displacement, while the finger position used for the edge speed moves only when the finger moves — auto-scroll must not slow itself down by pretending the finger drifted back to the middle.
-- The dragged row's visual offset and the distance already converted into swaps are two separate quantities: each swap already moves the row by one row height, so pixels that produced a swap must not be applied a second time as a translation.
+- A swap changes the row's layout position; only the unconsumed drag remainder is applied as translation. Handle pointer input is keyed by the stable drag state, with updated index/callbacks, so reordering does not cancel the held gesture. Editor row spacing matches the fixed height used by the geometry.
 
 ## Series reading
 
@@ -234,6 +234,10 @@ No cache is portable truth.
 
 ## Safety invariants
 
+`TrashRules` validates the confirmed trash event and all Edition source references, including nested and secondary paths. `PermanentDeletion` snapshots source sizes/timestamps in a versioned `purge-*.json` journal through `PortableDocumentWriter`. Explicit retry skips completed sources and resumes metadata cleanup; changed remaining sources are refused. Metadata is backed up before the first deletion. No startup task performs permanent deletion. Trash retention settings control review badges only.
+
+Editor drafts survive configuration restoration; leaving a dirty Group/Series asks whether to discard instead of saving implicitly. Organizer preview requests have generations so results cannot repopulate a cleared or switched Library plan. Long-running UI jobs reject duplicate starts while a previous job is active or cancelling. Detail/editor surfaces share the snackbar host so failures remain visible.
+
 - classification and logical relationships never move files;
 - ordinary deletion writes portable logical trash;
 - permanent deletion re-resolves the path and verifies current identity/size;
@@ -248,6 +252,8 @@ No cache is portable truth.
 - `.nomedia` prevents Library copies from being duplicated into the system album.
 
 ## Known scaling boundary
+
+`DocumentTreeStorage.openOutput` invalidates the written path and its parent listing on close, including failure, while retaining unrelated subtree caches. Its stream wrapper delegates bulk writes directly. Detail navigation builds one ID lookup for the current media snapshot instead of searching the full table for every contextual ID.
 
 The scanner avoids repeated provider queries and byte reads, but `refreshFromDatabase()` still materializes all media rows. Real testing with the approximately 76,000-file sample determines whether the next change should be top-level inventory checkpoints, paged database queries, or both.
 

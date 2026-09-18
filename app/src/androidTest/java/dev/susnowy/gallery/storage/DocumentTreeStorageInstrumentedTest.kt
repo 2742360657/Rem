@@ -33,6 +33,50 @@ class DocumentTreeStorageInstrumentedTest {
     }
 
     @Test
+    fun outputCloseRefreshesCachedFileSize() {
+        val storage = DocumentTreeStorage(context, treeUri)
+        val document = storage.createFile("size.jpg", "image/jpeg")
+        assertEquals(0L, storage.entry("size.jpg")?.size)
+        storage.openOutput(document).use { it.write(byteArrayOf(1, 2, 3)) }
+        assertEquals(3L, storage.entry("size.jpg")?.size)
+    }
+
+    @Test
+    fun deletionJournalSurvivesReopeningSafAndDoesNotDeleteReplacement() {
+        val storage = DocumentTreeStorage(context, treeUri)
+        val document = storage.createFile("fixture.jpg", "image/jpeg")
+        storage.openOutput(document).use { it.write(byteArrayOf(1, 2, 3)) }
+        val item = dev.susnowy.gallery.model.MediaItem(
+            id = "purge-fixture", libraryId = "test", relativePath = "fixture.jpg", uri = "",
+            kind = dev.susnowy.gallery.model.MediaKind.IMAGE,
+            sourceKind = dev.susnowy.gallery.model.SourceKind.FILE, displayTitle = "fixture",
+            size = 3, trashed = true, deletedAt = 1,
+        )
+        fun inspect(access: DocumentTreeStorage, path: String) = access.entry(path)?.let {
+            dev.susnowy.gallery.library.DeletionSource(path, it.size, it.lastModified, it.isDirectory)
+        }
+        assertTrue(runCatching {
+            dev.susnowy.gallery.library.PermanentDeletion(storage).execute(item,
+                inspect = { inspect(storage, it) },
+                delete = { check(storage.delete(requireNotNull(storage.find(it)))) },
+                finish = { error("模拟元数据提交中断") },
+            )
+        }.isFailure)
+        assertNull(storage.entry("fixture.jpg"))
+        val replacement = storage.createFile("fixture.jpg", "image/jpeg")
+        storage.openOutput(replacement).use { it.write(byteArrayOf(4, 5)) }
+        val reopened = DocumentTreeStorage(context, treeUri)
+        var finished = false
+        dev.susnowy.gallery.library.PermanentDeletion(reopened).execute(item,
+            inspect = { inspect(reopened, it) },
+            delete = { error("不得再次删除已完成来源") },
+            finish = { finished = true },
+        )
+        assertTrue(finished)
+        assertEquals(2L, reopened.entry("fixture.jpg")?.size)
+    }
+
+    @Test
     fun existingNestedDirectoryIsResolvedWithoutCreatingQualifiedDuplicate() {
         providerCall(
             TestDocumentsProvider.METHOD_SEED_DIRECTORY,

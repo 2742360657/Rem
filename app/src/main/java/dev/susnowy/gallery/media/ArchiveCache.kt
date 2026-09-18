@@ -8,6 +8,7 @@ import java.security.MessageDigest
 import java.util.zip.ZipFile
 import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -126,6 +127,7 @@ class ArchiveCache(
             true
         }.getOrElse {
             staging.delete()
+            if (it is CancellationException) throw it
             false
         }
     }

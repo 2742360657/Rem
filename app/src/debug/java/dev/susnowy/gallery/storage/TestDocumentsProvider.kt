@@ -112,7 +112,10 @@ class TestDocumentsProvider : DocumentsProvider() {
             nodes.values.filterTo(mutableSetOf()) { it.parentId in parents }.map(Node::id).toSet()
                 .takeIf(Set<String>::isNotEmpty)
         }.flatten().toSet()
-        descendants.forEach(nodes::remove)
+        descendants.forEach { id ->
+            File(requireNotNull(context).cacheDir, "rem-provider-$id").delete()
+            nodes.remove(id)
+        }
     }
 
     override fun openDocument(
@@ -142,6 +145,9 @@ class TestDocumentsProvider : DocumentsProvider() {
     }
 
     private fun reset() {
+        requireNotNull(context).cacheDir.listFiles().orEmpty()
+            .filter { it.isFile && it.name.startsWith("rem-provider-") }
+            .forEach { it.delete() }
         nodes.clear()
         nodes[ROOT_ID] = Node(
             id = ROOT_ID,
@@ -196,8 +202,11 @@ class TestDocumentsProvider : DocumentsProvider() {
                         DocumentsContract.Document.COLUMN_DOCUMENT_ID -> node.id
                         DocumentsContract.Document.COLUMN_DISPLAY_NAME -> node.name
                         DocumentsContract.Document.COLUMN_MIME_TYPE -> node.mimeType
-                        DocumentsContract.Document.COLUMN_SIZE -> 0L
-                        DocumentsContract.Document.COLUMN_LAST_MODIFIED -> node.modifiedAt
+                        DocumentsContract.Document.COLUMN_SIZE ->
+                            File(requireNotNull(context).cacheDir, "rem-provider-${node.id}").length()
+                        DocumentsContract.Document.COLUMN_LAST_MODIFIED ->
+                            File(requireNotNull(context).cacheDir, "rem-provider-${node.id}")
+                                .takeIf { it.isFile }?.lastModified() ?: node.modifiedAt
                         DocumentsContract.Document.COLUMN_FLAGS ->
                             DocumentsContract.Document.FLAG_SUPPORTS_DELETE or
                                 DocumentsContract.Document.FLAG_SUPPORTS_RENAME or
