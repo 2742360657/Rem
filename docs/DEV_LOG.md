@@ -6,6 +6,12 @@
 
 条目按时间倒序。同一问题的后续进展追加到原条目，不另起新条。
 
+## 2026-09-19：漫画预加载逐页容错
+
+- R07/R11：ImageSetReader 的并发预读使用 coroutineScope/awaitAll，普通单页异常会取消同批其他页并退出视口观察 LaunchedEffect。提取实际预加载执行器，每页捕获普通 Exception，CancellationException 保持传播，保留两路并发和 collectLatest 取消旧批次。
+- 新增三项单测验证故障后同批与下一视口继续、并发上限和取消排队、取消信号不吞。Windows / Java 17 的 302 单测、lint、debug/test APK 通过；API 36 八项 ReaderPosition/ComicPageRecovery/ComicPageLayout 通过。
+- 无真实媒体或便携数据修改。检查解码服务还见 bounds 探测 runCatching 会记录取消为失败，本轮未改；Provider 阻塞与预读优先级仍待后续专项处理。
+
 ## 2026-09-19：普通漫画页解码前预留尺寸
 
 - R07/R11：旧加载占位统一 240dp，图片出现时才按固有尺寸布局。现只对进入组合的普通页面执行 IO 尺寸探测，不遍历整书；BitmapFactory bounds 后读取 EXIF 旋转，已知比例保存到页面状态并约束加载及成功内容。

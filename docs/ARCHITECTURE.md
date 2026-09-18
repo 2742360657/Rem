@@ -4,6 +4,8 @@ This document describes the implementation that exists now. Product semantics an
 
 ## Application shape
 
+`preloadComicPages` isolates ordinary per-page prefetch failures, limits active reads to two, and propagates cancellation. `ImageSetReader` keeps its viewport observer alive after a failed speculative read; visible pages retain their own error/retry UI. Viewport changes cancel the old batch through collectLatest.
+
 `DirectComicPage` probes visible/composed file or content-URI pages on IO with BitmapFactory bounds and EXIF orientation before starting its image request. Known aspect ratios survive saved-state restoration and constrain both decoding placeholders and final images. Unknown/unsupported headers fall back to normal decoding. This does not enumerate every page; archive-page dimension preflight is not yet connected. Initial unknown dimensions still use the existing placeholder.
 
 `createVideoPlayer` configures Media3 with USAGE_MEDIA / CONTENT_TYPE_MOVIE, automatic audio focus, and audio-becoming-noisy handling. The same factory is used by the viewer and the real-audio focus regression test.

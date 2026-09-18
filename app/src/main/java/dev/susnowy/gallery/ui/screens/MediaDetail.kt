@@ -116,6 +116,7 @@ import coil3.SingletonImageLoader
 import dev.susnowy.gallery.media.ImagePage
 import dev.susnowy.gallery.media.readComicPageDimensions
 import dev.susnowy.gallery.media.comicPreloadOrder
+import dev.susnowy.gallery.media.preloadComicPages
 import dev.susnowy.gallery.model.MediaItem
 import dev.susnowy.gallery.model.MediaDomain
 import dev.susnowy.gallery.model.MediaKind
@@ -139,12 +140,7 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withPermit
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -1215,27 +1211,15 @@ internal fun ImageSetReader(
                 val scrollingForward = first >= previousFirst
                 previousFirst = first
                 val preload = comicPreloadOrder(first, last, pages.size, scrollingForward)
-                val permits = Semaphore(2)
-                coroutineScope {
-                    preload.map { index ->
-                        async {
-                            permits.withPermit {
-                                val page = pages[index]
-                                when {
-                                    page.uri != null -> imageLoader.execute(
-                                        comicPageImageRequest(context, item, page),
-                                    )
-                                    page.archiveEntry != null -> viewModel.archiveBitmap(
-                                        item,
-                                        page.archiveEntry,
-                                        COMIC_PAGE_TARGET_WIDTH,
-                                        COMIC_PAGE_TARGET_HEIGHT,
-                                        archivePath = page.relativePath,
-                                    )
-                                }
-                            }
-                        }
-                    }.awaitAll()
+                preloadComicPages(preload) { index ->
+                    val page = pages[index]
+                    when {
+                        page.uri != null -> imageLoader.execute(comicPageImageRequest(context, item, page))
+                        page.archiveEntry != null -> viewModel.archiveBitmap(
+                            item, page.archiveEntry, COMIC_PAGE_TARGET_WIDTH, COMIC_PAGE_TARGET_HEIGHT,
+                            archivePath = page.relativePath,
+                        )
+                    }
                 }
             }
     }
