@@ -79,6 +79,7 @@ fun GroupShelf(
 ) {
     var picking by remember { mutableStateOf(false) }
     var naming by remember { mutableStateOf<List<String>?>(null) }
+    val shelfState = rememberLazyListState()
     val derived = remember(items) { MixedMediaPresentation.groups(items) }
     val itemsById = remember(items) { items.associateBy(MediaItem::id) }
     val libraryId = items.firstOrNull()?.libraryId
@@ -113,8 +114,18 @@ fun GroupShelf(
         )
         return
     }
+    val groupIndices = remember(groups.size, unsavedDerived.size) {
+        buildList {
+            repeat(groups.size) { add(it + 2) }
+            val start = if (groups.isEmpty()) 2 else groups.size + 3
+            repeat(unsavedDerived.size) { add(start + it) }
+        }
+    }
+    Column(modifier.fillMaxSize()) {
+    dev.susnowy.gallery.ui.components.ListPositionButton(shelfState, groupIndices.size, itemIndices = groupIndices)
     LazyColumn(
-        modifier = modifier.fillMaxSize(),
+        state = shelfState,
+        modifier = Modifier.weight(1f),
         contentPadding = PaddingValues(bottom = 96.dp),
     ) {
         item(key = "new-group") {
@@ -176,6 +187,7 @@ fun GroupShelf(
                 )
             }
         }
+    }
     }
     NewGroupDialogs(
         picking = picking,
