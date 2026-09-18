@@ -467,7 +467,15 @@ fun MediaCard(
                     item.pageCount?.let {
                         Text("$it 页", style = MaterialTheme.typography.labelSmall)
                     }
-                    if (item.needsRepair) {
+                    if (item.missingMedia) {
+                        // Normal state after a move, a partial copy, or on another device: the Work
+                        // and its decisions are intact, only the bytes are elsewhere.
+                        Text(
+                            "媒体不在本机",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    } else if (item.needsRepair) {
                         Text(
                             "需修复",
                             style = MaterialTheme.typography.labelSmall,

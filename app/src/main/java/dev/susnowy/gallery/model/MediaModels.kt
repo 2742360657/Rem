@@ -108,6 +108,12 @@ data class MediaItem(
     val trashed: Boolean = false,
     val deletedAt: Long? = null,
     val needsRepair: Boolean = false,
+    /**
+     * True when this Work is known from `.gallery/` but its media is not on this device at all —
+     * a move, a partial copy, or another device. It is a normal reachable state, not damage: the
+     * Work and every human decision stay intact, so it must not be presented as a defect.
+     */
+    val missingMedia: Boolean = false,
     val revision: Long = 0,
     /** Portable field name → provenance tag. See [dev.susnowy.gallery.metadata.FieldSource]. */
     val fieldSources: Map<String, String> = emptyMap(),

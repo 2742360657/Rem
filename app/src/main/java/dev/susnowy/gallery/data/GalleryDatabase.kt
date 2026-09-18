@@ -87,6 +87,7 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
                 trashed INTEGER NOT NULL,
                 deleted_at INTEGER,
                 needs_repair INTEGER NOT NULL,
+                missing_media INTEGER NOT NULL DEFAULT 0,
                 revision INTEGER NOT NULL,
                 field_sources_json TEXT NOT NULL,
                 UNIQUE(library_id, relative_path),
@@ -248,6 +249,10 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
             // Existing rows keep the honest "unknown" value; the next open records it.
             db.execSQL("ALTER TABLE progress ADD COLUMN opened_at INTEGER")
         }
+        if (oldVersion < 11) {
+            // A Work known from .gallery/ whose media is absent is a reachable state, not damage.
+            db.execSQL("ALTER TABLE media ADD COLUMN missing_media INTEGER NOT NULL DEFAULT 0")
+}
         if (oldVersion > newVersion) {
             db.execSQL("DROP TABLE IF EXISTS progress")
             db.execSQL("DROP TABLE IF EXISTS discoveries")
@@ -504,7 +509,10 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
             val missingRows = database.query(
                 "media",
                 arrayOf("id", "relative_path"),
-                "library_id = ? AND trashed = 0",
+                // A Catalog-only row is absent from the traversal by definition. Marking it as
+                // needing repair would turn a reachable state (media on another device) into an
+                // error, so only rows that were previously indexed here are candidates.
+                "library_id = ? AND trashed = 0 AND missing_media = 0",
                 arrayOf(libraryId),
                 null,
                 null,
@@ -1193,6 +1201,7 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
         put("trashed", trashed.asInt())
         deletedAt?.let { put("deleted_at", it) } ?: putNull("deleted_at")
         put("needs_repair", needsRepair.asInt())
+        put("missing_media", missingMedia.asInt())
         put("revision", revision)
         put("field_sources_json", json.encodeToString(fieldSources))
     }
@@ -1248,6 +1257,7 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
         trashed = cursor.int("trashed") != 0,
         deletedAt = cursor.nullableLong("deleted_at"),
         needsRepair = cursor.int("needs_repair") != 0,
+        missingMedia = cursor.int("missing_media") != 0,
         revision = cursor.long("revision"),
         fieldSources = json.decodeFromString(cursor.string("field_sources_json")),
     )
@@ -1289,7 +1299,7 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
 
     companion object {
         private const val DATABASE_NAME = "gallery-index.db"
-        private const val DATABASE_VERSION = 10
+        private const val DATABASE_VERSION = 11
         private const val MANUAL_SERIES_FIELD = "series"
         private const val MANUAL_FIELD_SOURCE = "manual"
         private const val ENRICHMENT_PENDING = "PENDING"

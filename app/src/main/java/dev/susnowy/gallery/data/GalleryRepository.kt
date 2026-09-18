@@ -502,8 +502,9 @@ class GalleryRepository(context: Context) {
                         trashed = trashEntry != null,
                         deletedAt = trashEntry?.deletedAt?.let(java.time.Instant::parse)?.toEpochMilli(),
                         // The Work and its human decisions are intact; only the media bytes are
-                        // out of reach on this device right now.
-                        needsRepair = true,
+                        // out of reach on this device right now. That is a normal state, not damage,
+                        // so the card says "media not on this device" instead of "needs repair".
+                        missingMedia = true,
                         revision = metadata.revision,
                         fieldSources = metadata.fieldSources,
                     )

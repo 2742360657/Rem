@@ -248,6 +248,9 @@ Editor drafts survive configuration restoration; leaving a dirty Group/Series as
 - system media access is read-only until the user chooses a copy import;
 - forgetting a Library removes only local registration, index, and SAF grant;
 - a failed provider query never becomes a cached empty directory;
+- a Work known from `.gallery/` whose media is not on this device stays in the projection as a
+  reachable item (`missing_media`), never as an error (`needs_repair`): a move, a partial copy, or
+  another device must not read as damage, and must not delete a Work, Edition, Group, or Series;
 - diagnostics strip content URIs and host paths before writing;
 - `.nomedia` prevents Library copies from being duplicated into the system album.
 
