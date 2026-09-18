@@ -6,6 +6,12 @@
 
 条目按时间倒序。同一问题的后续进展追加到原条目，不另起新条。
 
+## 2026-09-19：归档解码传播取消并检查读取边界
+
+- R11：bounds 的 runCatching 原先会把 CancellationException 记为读取失败；正常返回后还可能进入下一阶段。现显式传播取消，尺寸探测/像素解码/缓存之间检查任务状态，缓存 ZipFile 与流式回退均接入 CancellableInputStream，在底层 read/skip 前后检查取消。
+- 新增三项单测验证取消不启动底层操作、读中取消不交付数据且 use 关闭流、正常缓冲读与 skip 内容不变。Windows / Java 17：305 单测、lint、debug/test APK 通过；API 36 八项 ArchiveBitmapIdentity/ComicPageRecovery/ReaderPosition 通过。
+- 此测试证据不是原生 BitmapFactory 内部取消或真机 Provider 阻塞时间证据；同步操作须返回才能继续响应取消。无便携与真实媒体变更。
+
 ## 2026-09-19：漫画预加载逐页容错
 
 - R07/R11：ImageSetReader 的并发预读使用 coroutineScope/awaitAll，普通单页异常会取消同批其他页并退出视口观察 LaunchedEffect。提取实际预加载执行器，每页捕获普通 Exception，CancellationException 保持传播，保留两路并发和 collectLatest 取消旧批次。

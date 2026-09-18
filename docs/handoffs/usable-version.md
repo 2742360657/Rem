@@ -15,6 +15,8 @@
 - 验收底线：产品要求不可缩减；不能以本轮测试通过宣称最终成熟。按模块中文提交，暂存审查与提交后状态核对；不推送、不改写历史。
 - 更新时间：2026-09-19。
 
+- 最新归档取消（基线 6f007d4）：MediaContentService bounds 明确传播取消，CancellableInputStream 检查归档 read/skip，阶段间检查避免继续解码/缓存。新增三项单测，305 单测/lint/APK + 八项归档/恢复/位置设备回归通过。旧“bounds 吞取消”待办已处理；未测试原生解码中途取消和真机 Provider 阻塞，归档尺寸、实际接入等仍待完善。
+
 - 最新预读容错（基线 1faf8d2）：ComicPagePreloader.kt + MediaDetail 接入，普通页失败不退出视口观察，保持两路并发与取消传播。新增三项单测；302 单测/lint/APK + 八项漫画位置/恢复/布局设备测试通过。检查发现 MediaContentService 的 bounds runCatching 还吞取消并记录失败，未在本轮改动；继续归档尺寸/解码取消、R11 实际接入等未完成项。
 
 - 最新普通漫画尺寸模块（基线 d26625e）：ComicPageDimensions.kt + DirectComicPage 在像素解码前探测头部/EXIF，已知比例 rememberSaveable 并约束加载/图片高度；ComicPageDimensionsTest 两项、ComicPageLayoutTest 三项。299 单测/lint/APK 与 API 36 全量 72 项通过后扩充横图/长图，三项布局测试单独通过（总测试数现在 74，未跑全量 74）。剩余归档尺寸、首次未知尺寸占位变化及慢 Provider 头部额外读取性能，不能把本模块当完全消除跳动。

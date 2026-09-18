@@ -14,6 +14,9 @@ import dev.susnowy.gallery.storage.DocumentTreeStorage
 import java.util.zip.ZipInputStream
 import kotlin.math.ceil
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.ensureActive
+import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -97,8 +100,10 @@ class MediaContentService(
             val readSucceeded = runCatching {
                 decodeArchiveEntry(archivePath, entryName, storage, bounds, owner)
             }.onFailure { error ->
+                if (error is CancellationException) throw error
                 RemLog.failure(TAG, "读取压缩包条目失败：$archivePath!$entryName", error)
             }.isSuccess
+            coroutineContext.ensureActive()
             if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
                 // The UI can only say "cannot decode"; the log has to say why, otherwise a page
                 // that never renders cannot be diagnosed from a user report.
@@ -115,6 +120,7 @@ class MediaContentService(
                 inPreferredConfig = Bitmap.Config.RGB_565
             }
             decodeArchiveEntry(archivePath, entryName, storage, options, owner)?.also { bitmap ->
+                coroutineContext.ensureActive()
                 archiveBitmapCache.put(cacheKey, bitmap)
             }
         }
@@ -179,6 +185,7 @@ class MediaContentService(
         options: BitmapFactory.Options,
         item: MediaItem?,
     ): Bitmap? {
+        coroutineContext.ensureActive()
         val owner = item?.takeIf { it.relativePath == archivePath }
         val entry = if (owner == null) runCatching { storage.entry(archivePath) }.getOrNull() else null
         val libraryId = item?.libraryId
@@ -193,21 +200,23 @@ class MediaContentService(
                 val zipEntry = zip.getEntry(entryName) ?: return null
                 // ZipFile entry streams are not markable and BitmapFactory's bounds probe
                 // rewinds the stream, so it must be wrapped before decoding.
-                return zip.getInputStream(zipEntry).buffered().use {
-                    BitmapFactory.decodeStream(it, null, options)
+                return CancellableInputStream(zip.getInputStream(zipEntry), coroutineContext).buffered().use {
+                    BitmapFactory.decodeStream(it, null, options).also { coroutineContext.ensureActive() }
                 }
             }
         }
         val document = LibraryDocument(archivePath, archivePath.substringAfterLast('/'), false)
-        return storage.openInput(document).buffered().use { input ->
+        return CancellableInputStream(storage.openInput(document), coroutineContext).buffered().use { input ->
             ZipInputStream(input).use { zip ->
                 while (true) {
+                    coroutineContext.ensureActive()
                     val entry = zip.nextEntry ?: return@use null
                     if (!entry.isDirectory && entry.name == entryName) {
                         // The fallback path cannot rewind the archive stream either, so the
                         // entry is read once into memory (a page is small) and decoded from a
                         // markable stream.
                         val bytes = zip.readBytes()
+                        coroutineContext.ensureActive()
                         return@use BitmapFactory.decodeStream(
                             ByteArrayInputStream(bytes),
                             null,

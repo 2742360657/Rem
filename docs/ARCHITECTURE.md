@@ -25,6 +25,8 @@ Debug and release can coexist. Device-local SQLite data, logs, previews, and SAF
 
 ## Data ownership
 
+Archive entry streams check coroutine cancellation before/after underlying read and skip operations. Bounds cancellation propagates without being logged as a decode failure; checks between bounds, pixel decoding and memory-cache insertion prevent cancelled work progressing to the next stage. Native decoding and synchronous Provider calls still must return before cancellation can be observed.
+
 `MediaContentService` keys decoded archive pages by Library ID, archive path, size, modified time, entry name and decode target dimensions. Virtual merged Editions resolve the referenced archive's metadata before both cache lookup and decoding; the containing Work's version does not identify another archive. This is a disposable memory cache, not portable metadata.
 
 `MediaReadPriority` lets repository page loading and archive/oversized decoding preempt offline preview generation and the read phase of enrichment. Preempted reads retry after all foreground reads finish; caller cancellation never retries. Portable/index commits stay outside the retry block. Inventory waits before its next directory query; it does not restart a whole scan. Hashing and archive copying check cancellation between reads, not during a blocking Provider call. Coil's direct reads do not yet participate.
