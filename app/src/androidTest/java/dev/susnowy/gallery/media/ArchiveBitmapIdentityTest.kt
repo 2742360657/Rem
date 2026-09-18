@@ -60,6 +60,34 @@ class ArchiveBitmapIdentityTest {
     private fun work(library: String, size: Long = 1) = MediaItem("work", library, "book.cbz", "",
         MediaKind.IMAGE_SET, sourceKind = SourceKind.ARCHIVE, displayTitle = "Fixture", size = size, modifiedAt = 1)
 
+    @Test fun rotatedJpegReportsDisplayedDimensionsAndCachesOrientedPixels() = runBlocking {
+        val storage = library("rotated")
+        val file = File(context.cacheDir, "exif-${UUID.randomUUID()}.jpg")
+        try {
+            val source = Bitmap.createBitmap(80, 160, Bitmap.Config.ARGB_8888)
+            for (y in 0 until 160) for (x in 0 until 80) source.setPixel(x, y, if (y < 80) Color.RED else Color.BLUE)
+            file.outputStream().use { source.compress(Bitmap.CompressFormat.JPEG, 100, it) }
+            source.recycle()
+            androidx.exifinterface.media.ExifInterface(file).apply {
+                setAttribute(androidx.exifinterface.media.ExifInterface.TAG_ORIENTATION, "6")
+                saveAttributes()
+            }
+            val document = storage.createFile("book.cbz", "application/zip")
+            storage.openOutput(document).use { output -> ZipOutputStream(output).use { zip ->
+                zip.putNextEntry(ZipEntry("rotated.jpg")); file.inputStream().use { it.copyTo(zip) }; zip.closeEntry()
+            } }
+            var dimensions: ComicPageDimensions? = null
+            val decoded = requireNotNull(service.decodeArchivePage(work("rotated"), "rotated.jpg", storage, 200, 200,
+                onDimensions = { dimensions = it }))
+            assertEquals(ComicPageDimensions(160, 80), dimensions)
+            assertEquals(160, decoded.width)
+            assertEquals(80, decoded.height)
+            assertTrue(Color.blue(decoded.getPixel(20, 40)) > 200)
+            assertTrue(Color.red(decoded.getPixel(140, 40)) > 200)
+            assertSame(decoded, service.decodeArchivePage(work("rotated"), "rotated.jpg", storage, 200, 200))
+        } finally { file.delete() }
+    }
+
     @Test fun samePathAndTimestampInDifferentLibrariesCannotReusePage() = runBlocking {
         val first = library("first")
         val second = library("second")

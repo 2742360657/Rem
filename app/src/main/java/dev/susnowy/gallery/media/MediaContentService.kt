@@ -1,6 +1,8 @@
 package dev.susnowy.gallery.media
 
 import android.graphics.Bitmap
+import androidx.exifinterface.media.ExifInterface
+import java.io.InputStream
 import java.io.ByteArrayInputStream
 import android.graphics.BitmapFactory
 import android.net.Uri
@@ -122,15 +124,26 @@ class MediaContentService(
                 )
                 return@withLock null
             }
-            onDimensions(ComicPageDimensions(bounds.outWidth, bounds.outHeight))
+            val orientation = try {
+                readArchiveEntry(archivePath, entryName, storage, owner) {
+                    ExifInterface(it).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
+                } ?: ExifInterface.ORIENTATION_NORMAL
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { ExifInterface.ORIENTATION_NORMAL }
+            val swapsAxes = orientation in 5..8
+            onDimensions(if (swapsAxes) ComicPageDimensions(bounds.outHeight, bounds.outWidth)
+                else ComicPageDimensions(bounds.outWidth, bounds.outHeight))
             coroutineContext.ensureActive()
             val options = BitmapFactory.Options().apply {
-                inSampleSize = calculateSampleSize(bounds.outWidth, bounds.outHeight, targetWidth, targetHeight)
+                inSampleSize = calculateSampleSize(bounds.outWidth, bounds.outHeight,
+                    if (swapsAxes) targetHeight else targetWidth, if (swapsAxes) targetWidth else targetHeight)
                 inPreferredConfig = Bitmap.Config.RGB_565
             }
-            decodeArchiveEntry(archivePath, entryName, storage, options, owner)?.also { bitmap ->
+            decodeArchiveEntry(archivePath, entryName, storage, options, owner)?.let { decoded ->
+                val bitmap = orientArchiveBitmap(decoded, orientation)
                 coroutineContext.ensureActive()
                 archiveBitmapCache.put(cacheKey, bitmap)
+                bitmap
             }
         }
     }
@@ -193,7 +206,17 @@ class MediaContentService(
         storage: DocumentTreeStorage,
         options: BitmapFactory.Options,
         item: MediaItem?,
-    ): Bitmap? {
+    ): Bitmap? = readArchiveEntry(archivePath, entryName, storage, item) {
+        BitmapFactory.decodeStream(it, null, options)
+    }
+
+    private suspend fun <T> readArchiveEntry(
+        archivePath: String,
+        entryName: String,
+        storage: DocumentTreeStorage,
+        item: MediaItem?,
+        read: (InputStream) -> T,
+    ): T? {
         coroutineContext.ensureActive()
         val owner = item?.takeIf { it.relativePath == archivePath }
         val entry = if (owner == null) runCatching { storage.entry(archivePath) }.getOrNull() else null
@@ -210,7 +233,7 @@ class MediaContentService(
                 // ZipFile entry streams are not markable and BitmapFactory's bounds probe
                 // rewinds the stream, so it must be wrapped before decoding.
                 return CancellableInputStream(zip.getInputStream(zipEntry), coroutineContext).buffered().use {
-                    BitmapFactory.decodeStream(it, null, options).also { coroutineContext.ensureActive() }
+                    read(it).also { coroutineContext.ensureActive() }
                 }
             }
         }
@@ -226,11 +249,7 @@ class MediaContentService(
                         // markable stream.
                         val bytes = zip.readBytes()
                         coroutineContext.ensureActive()
-                        return@use BitmapFactory.decodeStream(
-                            ByteArrayInputStream(bytes),
-                            null,
-                            options,
-                        )
+                        return@use ByteArrayInputStream(bytes).use(read).also { coroutineContext.ensureActive() }
                     }
                     zip.closeEntry()
                 }
