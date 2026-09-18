@@ -25,6 +25,13 @@ The project is pre-release. Prefer the cleanest current design over compatibilit
 
 Use Chinese commit messages.
 
+Design philosophy (user-stated, load-bearing):
+
+- The single source of truth is `.gallery/`; device databases, logs, enrichment queues, and previews are disposable. Every rule and default exists to serve the portable layer.
+- Android does **basic, weak recognition** only. Its differentiators are **batch management and batch editing**: apply one decision across a whole selection, at a scale hand-driven work cannot match.
+- A local Agent must stay able to organise a Library unaided, with fixed rules and its own fixed instruction document. Android must not grow a competing "smarter" recognizer.
+- The load-bearing promise: **moving a Library, or opening it on another Android device, is fast and lossless.** Structure and human decisions appear from `.gallery/` alone, before any media is touched; missing or unreachable files must never destroy a Work, Edition, Group, Series membership, or decision.
+
 ## Non-negotiable safety
 
 - Scanning, recognition, metadata edits, grouping, and view changes never move, rename, rewrite, merge, or delete media.

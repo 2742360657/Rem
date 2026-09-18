@@ -10,6 +10,46 @@
 
 ---
 
+## 2026-09-18 · 真实库切片接入模拟器：便携真相被投影丢弃
+
+**范围**：把 S: 真实库（88,736 文件 / 492.1 GB）的一个切片接进 Android 16 模拟器做接入、投影与界面复核。**未改动 S: 任何文件**（26 个便携文档 SHA256 前后一致）。Schema v4 不变。
+
+### 环境与切片
+
+- `adb push` 会在**非 ASCII 目录名**上截断最后一个码点（`218.花柒Hana` → `218.花柒H`）。规避方式：先在设备上建好含该名的父目录，再 push 其父级；`adb shell mv` 也可改名。
+- 模拟器内部存储 `/data` 的主机镜像已无法增长，`df` 报的剩余空间不可信；最终把库放在可移除 SD 卡（`/storage/0000-0000/RemRealLib`）上，同时获得 public 卷语义。
+- 切片：真实 `.gallery`（26 文件）+ 花柒Hana 的 20 个完整作品（340 文件 / 1.27 GB），媒体抽样 SHA256 与主机一致。
+- 结果：库身份 `b1f949ae…` 与 `Rem-lib` 被正确识别，便携文档**未被写入**（哈希与时间戳不变），Inbox 为空。
+
+### 已修改：投影不再丢弃便携目录中的 Work
+
+`GalleryRepository.scan()` 用「本次遍历真正扫到的候选」整表替换索引。`catalog.items` 里存在、但磁盘上找不到的 Work 从未进入投影：1352 个 Work／8 个 Series 在设备上只剩 20 个 Work／1 个 Series。这直接违反"缺失或不可达不得销毁 Work／Edition／Group／Series 与人工决定"。
+
+现在扫描在候选循环之后追加 Catalog-only 行：保留 portable id、标题、作者、标签、Series、封面与字段来源，`size = 0`、`uri = ""`、`needsRepair = true`、`inInbox = false`。`needs_repair` 标志本就存在（扫描已为"磁盘上消失"的行置 1），只是此前没有行可标。
+
+**实测对比**（同一设备、同一库）：
+
+| | 修复前 | 修复后 |
+|---|---|---|
+| `media` 行数 | 20 | 1352 |
+| needs_repair | 全部 0 | 20 个 0 / 1332 个 1 |
+| 界面作品数 | 20 | 909 漫画 + 443 影视 |
+| 投影内 Series 成员 | 森萝财团 0 | 森萝财团 692、蠢沫沫 490、米胡桃视频 93、花柒Hana 41、矢量鱼 19、阳布布鸭 15、狐玖玖 1、aliceholic 1 |
+
+第一版曾写成 `inInbox = decision == null`：`PortableInboxStore.forWork` 对已接受的 Work 返回空，该判断把 1332 个 Work 判成待决定并塞回 Inbox，界面反而更少。已改为 `false`，与候选循环里 `metadata != null` 的语义对齐。
+
+### 待跟进：书架网格未渲染全部系列
+
+`SeriesShelfGrid` 报告 `系列 6`，但渲染树里只有 4 个书架（蠢沫沫 421、花柒Hana 40、阳布布鸭 12、矢量鱼 19，共 492），**森萝财团（692）与米胡桃视频（93）从未进入节点树**，列表也不响应滑动。数据层已验证正确（8 个 Series 行、成员 JSON 与 id 完整、`sort_index` 存在），所以缺陷在呈现层：缺失行只有 `size = 0` 与空 `uri`，需要确认缩略图失败或 `gridItems` key 是否让整个卡片未组合。这是本轮唯一未收口的项。
+
+### 验证
+
+- `testDebugUnitTest --rerun-tasks` **279 项通过**；`lintDebug` **0 error / 31 warning / 1 hint**；`assembleDebug`、`assembleDebugAndroidTest` 通过。
+- 真实库规模（88,736 文件）、清点耗时、断点与分页仍**只有真机能回答**；模拟器存储 I/O 不代表手机。
+
+### 文档
+
+`AGENTS.md` 与 `Gallery_Project_Guide.md` 补齐用户明确的设计主线：便携层是唯一真相来源；Android 只做弱识别，重点是批量管理与批量编辑；本地 Agent 保持独立整理能力；移库与跨设备接入必须快速且无损（新增 §2.1 与 5 条约束）。
 ## 2026-09-18 · 日常可用性复核：回收站、编辑返回、任务与存储校验
 
 **范围**：现有功能可靠性和交互修正；Schema v4 不变，新增独立版本的永久删除事务记录。未接触用户真实媒体库。
