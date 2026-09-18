@@ -15,6 +15,8 @@
 - 验收底线：产品要求不可缩减；不能以本轮测试通过宣称最终成熟。按模块中文提交，暂存审查与提交后状态核对；不推送、不改写历史。
 - 更新时间：2026-09-19。
 
+- 最新接入校验（基线 abe0525）：GalleryRepository.attach 在 claimLibraryTree 前加载验证 catalog/state/Inbox，去掉吞错。LibraryAttachValidationTest 用仅测试 Context 模拟 Provider 权限预检，实际 SAF I/O；先失败证明吞错，后验证不登记/坏字节保留/修好可重试。305 单测/lint/APK + 十二项接入/SAF，通过补充后重试测试再次通过。继续重点：attach 是否投影 Work（当前只见 groups/series/state/plans，疑似缺 Work）、数据库投影事务；原真机问题尚未结案。
+
 - 最新归档方向（基线 c5add9d）：ArchiveOrientation.kt 实现八方向旋转/镜像，MediaContentService 泛化条目读取并读 EXIF，回调显示尺寸、交换采样目标、缓存归一化位图。305 单测/lint/APK + 九项方向/归档/恢复设备测试通过。归档 EXIF 待办已完成实现与合成验证，不重复；首次未知尺寸/慢介质及原始产品需求仍待完善。
 
 - 最新归档尺寸（基线 33f10dc）：decodeArchivePage 可选尺寸回调贯通 Repository/VM 至 DecodedComicPage，复用 bounds、不新增整页读取，缓存命中也回调。305 单测/lint/APK + 九项归档/恢复/位置设备测试通过。归档尺寸接入已完成，不要重复；后续首次未知尺寸变化、归档 EXIF 方向、慢介质和原始产品待办仍未完成。

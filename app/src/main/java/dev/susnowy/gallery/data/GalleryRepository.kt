@@ -185,6 +185,12 @@ class GalleryRepository(context: Context) {
                     _events.tryEmit("已把便携元数据升级到 Schema v${migrated.schemaVersion}（原数据已备份）")
                 }
                 manager.ensureMediaStoreIgnored()
+                // Validate portable truth before publishing a successful local registration.
+                // A corrupt or temporarily unreadable document must remain a visible attach error.
+                val store = PortableMetadataStore(storage)
+                val catalog = store.loadCatalog(migrated.libraryId)
+                val state = store.loadState(migrated.libraryId)
+                val inbox = PortableInboxStore(storage).load(migrated.libraryId)
                 val registration = LibraryRegistration(
                     libraryId = migrated.libraryId,
                     name = migrated.name,
@@ -196,22 +202,11 @@ class GalleryRepository(context: Context) {
                 database.claimLibraryTree(registration)
                 // Portable Inbox decisions are the truth; mirror them into the fresh index
                 // immediately so a re-attached Library does not look undecided.
-                runCatching {
-                    val inbox = PortableInboxStore(storage).load(migrated.libraryId)
-                    database.applyInboxDecisions(migrated.libraryId, inbox.decisions)
-                }.onFailure { error ->
-                    RemLog.failure("GalleryRepository", "Inbox 决策回填失败", error)
-                }
-                runCatching {
-                    val store = PortableMetadataStore(storage)
-                    val catalog = store.loadCatalog(migrated.libraryId)
-                    syncPortableState(migrated.libraryId, store.loadState(migrated.libraryId))
-                    syncGroups(migrated.libraryId, catalog.groups)
-                    syncSeries(migrated.libraryId, catalog.series)
-                    refreshEditionPlans(migrated.libraryId, catalog)
-                }.onFailure { error ->
-                    RemLog.failure("GalleryRepository", "分组/系列索引回填失败", error)
-                }
+                database.applyInboxDecisions(migrated.libraryId, inbox.decisions)
+                syncPortableState(migrated.libraryId, state)
+                syncGroups(migrated.libraryId, catalog.groups)
+                syncSeries(migrated.libraryId, catalog.series)
+                refreshEditionPlans(migrated.libraryId, catalog)
                 refreshFromDatabase()
                 registration
             }
