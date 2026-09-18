@@ -239,6 +239,14 @@ SVG 和部分新图片格式可能只能在线显示，不能生成这种 JPEG �
 
 搜索可以匹配标题、作者、标签、Collection 和系列信息。相册与媒体列表支持选择模式，批量元数据修改会合并到一次便携写入；批量移入回收站也使用一次状态写入。
 
+## 桌面 Library 工具
+
+Java 17+ 环境可使用独立 `library-tool` 分发目录；开发者运行 `:library-tool:installDist` 后，分发 `library-tool/build/install/library-tool/` 整个目录。Windows 入口为 `bin/library-tool.bat`，Linux/macOS 为 `bin/library-tool`（本轮只验证 Windows 分发）。
+
+工具可校验已有 v4 Library、预览并编辑已有 Work 的元数据，不读取媒体。编辑前停止 App 和其他写入者，真实库先将完整 `.gallery/` 备份到另一介质。计划格式、人工字段保护、备份提交与显式恢复命令见 [Library Agent 工具说明](LIBRARY_AGENT.md#13-桌面校验与安全编辑工具)。它尚不支持新建作品、整理实体关系或物理文件操作。
+
+新建库自动携带完整整理规则。已有库的自定义说明不会被接入流程覆盖；`export-guide` 可另存新版说明，审阅并保留用户规则后再更新。
+
 ## 诊断日志
 
 “设置 → 诊断日志”可以查看、导出和清除日志。日志保存在 App 私有目录，按时间和数量限制，并在写入前移除内容 URI、盘符和绝对路径。

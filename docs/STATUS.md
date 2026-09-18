@@ -1,12 +1,13 @@
 # Rem 当前状态
 
-更新日期：2026-09-18。代码核对基线：3dc0a76。本文是当前进度入口；产品要求见 [PRODUCT](PRODUCT.md)，历史证据见 [DEV_LOG](DEV_LOG.md)。
+更新日期：2026-09-18。代码核对基线：068ac7f（工具模块 26c2ae9）。本文是当前进度入口；产品要求见 [PRODUCT](PRODUCT.md)，历史证据见 [DEV_LOG](DEV_LOG.md)。
 
-本次只整理文档与工作流程，未修改应用或 Schema，未重跑 Android 测试，也未访问真实 Library。下列测试数据均为已有开发记录，不是本轮新测试。
+本轮接续中断的 R10 实现，未改 Schema、未访问真实 Library。当前验证与历史证据分列如下。
 
 ## 1. 版本与验证基线
 
-- 单 Android module；release com.susnowy.rem，debug com.susnowy.rem.debug。
+- 一个 Android module 加独立 JVM library-tool；release com.susnowy.rem，debug com.susnowy.rem.debug。
+- 本轮 Windows / Temurin Java 17：桌面工具 12 单测、Android 281 单测通过；lint 0 error、31 warnings、1 hint；debug/test APK 及 installDist 构建通过。说明补回凭据保护后，桌面 12 单测和 LibraryManager 13 单测再次通过，API 36 模拟器 SAF 类 9 测试通过（含 Agent 字段编辑读回）。独立 Windows 启动脚本在 1 Work / 1 缺失 Asset 的合成小库完成 validate、preview、apply、export-guide 和读回；未做本轮真机或真实库验证。
 - 便携 format=gallery-library，Schema v4；本机数据库 v11。
 - 2026-09-18 缺失媒体语义拆分记录：279 单测、28 设备测试通过，lint 0 error，debug 与 test APK 构建通过。证据：DEV_LOG「区分媒体不在本机与需修复，并补设备测试」及提交 082cf8d / 18f07b8；测试环境记录为 API 36 模拟器，不外推为真机全库验证。
 - 后续视频空来源守卫：提交 05203ce，记录见 DEV_LOG 首批同日条目；不把前一轮全套测试自动视为这一提交的新增验证。
@@ -30,7 +31,7 @@
 | R07 | 漫画完成/继续/重读/缩放和系列衔接已验证；视频缺失提示已修复 | 真机持续手势、视频系列上下文、密度/返回/解码前宽高比 |
 | R08 | 多选、追加元数据、加入 Group/Series、收藏、回收站已有；909 项切片批量有证据 | 替换/清空/统一归属、批量移出入口与冲突报告覆盖度，人工无值验收 |
 | R09 | inventory/enrich 分离、弱识别、Inbox 和人工锁已有测试/走查 | 持续限制识别成本；新增规则必须有独立证据与测试 |
-| R10 | 库内生成说明、Schema 概要和仓库整理规则已有 | 独立校验/编辑工具链、完整规则打包入 Library、读回测试及安全提交；不能称已实现无人值守整理闭环 |
+| R10 | 完整规则与契约随 APK/桌面工具打包；独立 v4 校验、已有 Work 字段编辑、外部备份、冲突拒绝、显式恢复和说明单独导出已有单测及模拟器 SAF 读回证据 | 新建实体、Group/Series/Edition 关系编辑及多文档事务仍未支持；真实介质和跨平台分发待验收；不能称已实现无人值守整理闭环 |
 | R11 | 便携 v4、恢复写入、catalog-only 投影、missingMedia 拆分有测试/切片证据 | 无媒体遍历前的冷接入可用性及耗时单独验证；全库跨设备和可移动介质性能待用户安排 |
 
 ## 3. 已知工程边界
@@ -41,7 +42,7 @@
 - deep compare 需显式读取内容；像素级重编码匹配未实现。
 - 混合、多 Edition、单 Series 的运行时 MediaItem 投影比便携模型窄；不得因 JSON 能存就宣称 UI 能完整消费。
 - v4.json 是格式概要，不是完整验证器。App 的进程内 mutex 不能保护外部 Agent 的同时写入。
-- 库内生成 GALLERY_LIBRARY.md 目前是 Kotlin 内嵌文本，已有库接入不覆盖用户版本；本轮没有修改生成器，仓库 LIBRARY_AGENT 的完整规则尚未自动随新库分发。下一个 R10 任务需测试生成文本与契约一致，并设计保留用户规则的显式更新方式。
+- 库内 GALLERY_LIBRARY.md 由构建时打包的完整规则与契约生成；已有库接入不覆盖用户版本，export-guide 仅另存候选说明。桌面工具只编辑已有 Work 的单份 catalog，发现恢复槽或物理事务记录时保守拒绝普通编辑；同库必须单写入者。校验不表示媒体可达，也不是完整 JSON Schema 验证器。
 - 缺失媒体不同于需修复：catalog-only 投影用 missingMedia=true、size=0、uri 为空、inInbox=false；已索引后异常失联可以 needsRepair=true。这是对旧 AGENTS / 早期 DEV_LOG 描述的现行替代。
 - 回收站期限仅提醒，不自动永久删除；部分删除显式重试剩余来源，已删字节不能恢复。
 - 任意新实现要保留字段级并发合并、稳定 ID 和可恢复便携写入，不能为简化 UI 回退这些机制。
@@ -56,7 +57,7 @@
 
 ## 5. 下一步顺序
 
-1. R10：先把固定 Library Agent 规则与生成器同步，并提供小库离线校验/安全编辑工具及读回测试。让弱识别 App 与独立整理能力形成可验证闭环。
+1. R10：已有 Work 字段编辑与规则分发的小库闭环已完成；后续独立设计新建实体、关系整理及多文档安全提交，不扩大当前工具的写入范围。真实库使用前仍需介质外完整备份与切片验收。
 2. R08：补批量追加/替换/清空/统一设置，复用领域规则；优先验证人工空值、并发修改、冲突反馈和跨库分开提交。
 3. R03/R04/R05/R02：按六类媒体建立小而完整的场景 fixture，先验收已有入口，修补作者聚合、分类、混合与影视上下文差距。
 4. R06：实现限定范围的随机图片发现→完整一期→返回，保留来源身份；R07 同步做局部阅读交互打磨。

@@ -4,7 +4,7 @@ This document describes the implementation that exists now. Product semantics an
 
 ## Application shape
 
-Rem is one Android application module targeting Android 8.0+. Kotlin packages separate responsibilities; extra Gradle modules are not justified yet.
+Rem has one Android application module targeting Android 8.0+ and a Java 17 standalone `library-tool` module. The tool compiles the existing portable models and `portable` package directly from the App source tree; it does not fork the format or depend on Android storage/database classes.
 
 - release application ID: `com.susnowy.rem`;
 - debug application ID: `com.susnowy.rem.debug`;
@@ -78,6 +78,7 @@ The converter is idempotent per document, so a stop after the catalog commit but
 ## Packages
 
 - `library`: identity, initialization lease, Schema conversion, generated guide, atomic portable writer;
+- `portable`: shared structural validation, JSON-tree Agent field edits and packaged instructions;
 - `storage`: SAF traversal, mutation, locator reuse, and directory cache;
 - `scanner`: inventory, classification candidates, enrichment, sidecar filtering;
 - `metadata`: portable catalog/state/inbox storage, provenance, recognizers, ComicInfo;
@@ -272,7 +273,11 @@ The scanner avoids repeated provider queries and byte reads, but `refreshFromDat
 
 ## Generated Library instructions
 
-`PortableLibraryManager.libraryGuide` and `schemaDocument` currently embed the Library instructions and v4 summary in Kotlin. Existing user guides are retained on ordinary adoption; conversion explicitly rewrites its backed-up documents. The repository's [Library Agent contract](LIBRARY_AGENT.md) is broader than the embedded guide, and there is not yet an independent complete editor/validator distribution. This gap is tracked as R10 in STATUS; documentation changes alone do not update existing Libraries.
+`prepareLibraryAgentResources` packages LIBRARY_AGENT and PORTABLE_FORMAT into one UTF-8 resource for both the APK and desktop distribution, converting Markdown links to plain labels. `PortableLibraryManager.libraryGuide` adds Library identity; `schemaDocument` still embeds the v4 summary. Ordinary adoption retains user guides; conversion rewrites its backed-up guide. Desktop `export-guide` creates a separate file for explicit review and merging.
+
+`library-tool` validates v4 identity, catalog and optional state/Inbox, then edits only existing Work fields through a JSON tree to preserve unknown extensions. Manual fields (including empty values) and stable source tags are protected. SHA-256 binds the catalog plan; all loaded documents are rechecked after an external backup and before commit. A host-local file lock supplements the required single-writer workflow; it is not a cross-device lock. Catalog commits use staging, forced file writes, atomic rename and the same stable recovery-slot naming as Android. Recovery is explicit; physical transaction JSON blocks editing. New entities, relationship changes, media operations and multi-document transactions are outside this tool's scope.
+
+Shared validation requires a Group cover to be a member. Removing the previously selected cover member through `upsertGroup` clears that selection in the same action; an unrelated non-member cover is rejected.
 
 ## Verification commands
 

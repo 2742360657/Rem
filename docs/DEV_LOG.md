@@ -10,6 +10,17 @@
 
 ---
 
+## 2026-09-18：接续 R10 桌面工具残留并完成小库闭环
+
+- 基线 b791ee0 留有 10 个已跟踪修改及 7 个新增文件，无活动交接。用户确认继续，并要求按步骤、模块及时中文提交；维护规则已在 6393d8a 替代旧的逐次提交授权规则。
+- 审查发现共享校验只检查 Group 封面 Work 存在，未检查属于组成员。先加桌面失败测试复现，再修校验；Android 全测暴露移出原封面成员仍保留旧选择，领域写入现在同步清空该选择，另有拒绝无关非成员封面的测试。
+- 26c2ae9 保存独立工具与共享规则；068ac7f 保存 Android 完整说明分发和 SAF 读回。说明替换时补回旧模板中的凭据、.nomedia、imports 保护，不让完整规则分发丢失安全约束。
+- 验证：Windows / Temurin 17，`:library-tool:test :library-tool:installDist testDebugUnitTest lintDebug assembleDebug assembleDebugAndroidTest` 成功，桌面 12 / Android 281 单测，lint 0 error、31 warnings、1 hint。说明条款补回后重跑桌面测试、LibraryManager 13 单测与模拟器 SAF 类 9 测试，均通过。设备命令指定 ANDROID_SERIAL=emulator-5554 和 DocumentTreeStorageInstrumentedTest；环境 API 36，不触碰已连接真机。
+- 独立 Windows 分发在 build 下合成的 1 Work / 1 缺失 Asset 小库完成 validate → preview → apply（外部目录备份）→ validate，并另存说明；人工标题不变、Collection 生效、revision 增加。首轮脚本因宿主 DEBUG 环境使批处理回显污染 JSON 解析而失败，清空该进程 DEBUG 后通过；未修改用户全局环境。
+- 没有访问真实库或修改 Schema；未验证 Linux/macOS 分发、真实介质原子 rename 或跨设备全库。工具仅提交已有 Work 字段的单份 catalog，关系、新建实体及多文档事务仍是 R10 缺口。当前契约、结构与进度分别回写 PORTABLE_FORMAT、ARCHITECTURE、STATUS。
+
+---
+
 ## 2026-09-18 · 文档职责迁移与需求闭环
 
 **范围**：落实用户确认的六类媒体、观看习惯、弱识别/批量管理/独立 Agent/可移动 Library 主线；只改文档，不改应用、Schema、媒体或生成器。代码核对基线为 3dc0a76。
