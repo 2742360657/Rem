@@ -1645,6 +1645,24 @@ private fun VideoViewer(
     active: Boolean = true,
 ) {
     val context = LocalContext.current
+    // A Work can be known from `.gallery/` while its media is not on this device. ExoPlayer
+    // would turn the empty source into a local file path, fail with ENOENT and leave a black
+    // rectangle, so say what is actually true instead of pretending the player failed.
+    if (uri.isBlank()) {
+        Box(
+            modifier = modifier
+                .fillMaxWidth()
+                .background(androidx.compose.ui.graphics.Color.Black),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                "媒体不在本机",
+                color = androidx.compose.ui.graphics.Color.White,
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        }
+        return
+    }
     val player = remember(item.id) { ExoPlayer.Builder(context).build() }
     val saved by produceState<Long?>(null, item.id) {
         value = viewModel.progress(item)?.positionMs ?: 0
