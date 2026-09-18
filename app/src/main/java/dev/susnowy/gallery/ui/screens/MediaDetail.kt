@@ -154,6 +154,7 @@ fun MediaDetail(
     viewModel: GalleryViewModel,
     onBack: () -> Unit,
     showMixedGroup: Boolean = true,
+    onVisibleItem: (MediaItem) -> Unit = viewModel::selectDetailItem,
 ) {
     val mixedMembers = remember(item.id, libraryWorks, showMixedGroup) {
         if (!showMixedGroup || item.kind != MediaKind.IMAGE_SET || item.sourceKind != SourceKind.DIRECTORY) {
@@ -234,7 +235,7 @@ fun MediaDetail(
     LaunchedEffect(pagerState, sequence) {
         snapshotFlow { pagerState.currentPage }
             .distinctUntilChanged()
-            .collect { page -> sequence.getOrNull(page)?.let(viewModel::selectDetailItem) }
+            .collect { page -> sequence.getOrNull(page)?.let(onVisibleItem) }
     }
 
     Scaffold(
@@ -382,6 +383,7 @@ private fun MixedMediaGroupDetail(
             viewModel = viewModel,
             onBack = { openedId = null },
             showMixedGroup = false,
+            onVisibleItem = {},
         )
         return
     }

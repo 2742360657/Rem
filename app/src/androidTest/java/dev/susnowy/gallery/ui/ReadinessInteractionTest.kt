@@ -21,6 +21,23 @@ import org.junit.Test
 class ReadinessInteractionTest {
     @get:Rule val rule = createComposeRule()
 
+    @Test fun openingMixedDirectoryVideoKeepsOuterSelection() {
+        val saved = SavedStateHandle(mapOf("selected_item_id" to "folder"))
+        val vm = GalleryViewModel(ApplicationProvider.getApplicationContext<GalleryApplication>(), saved)
+        val folder = media("folder").copy(relativePath = "mixed", sourceKind = SourceKind.DIRECTORY, trashed = false)
+        val video = media("video").copy(relativePath = "mixed/video.mp4", kind = MediaKind.VIDEO,
+            sourceKind = SourceKind.FILE, trashed = false, displayTitle = "Fixture video")
+        rule.setContent { MaterialTheme {
+            dev.susnowy.gallery.ui.screens.MediaDetail(item = folder, libraryWorks = listOf(folder, video),
+                viewModel = vm, onBack = {})
+        } }
+        rule.onNodeWithText("Fixture video").performClick()
+        rule.onNodeWithText("媒体不在本机").assertIsDisplayed()
+        rule.runOnIdle { assertEquals("folder", saved.get<String>("selected_item_id")) }
+        rule.onNodeWithContentDescription("返回").performClick()
+        rule.onNodeWithText("浏览全部图片").assertIsDisplayed()
+    }
+
     private fun viewModel() = GalleryViewModel(
         ApplicationProvider.getApplicationContext<GalleryApplication>(), SavedStateHandle(),
     )
