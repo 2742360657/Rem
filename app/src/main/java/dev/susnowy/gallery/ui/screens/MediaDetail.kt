@@ -832,9 +832,12 @@ private fun ImageSetReaderScreen(
     startPage: Int = 0,
     onOpenNextChapter: (MediaItem) -> Unit = {},
 ) {
-    val pages by produceState<Result<List<ImagePage>>?>(null, item.id, item.modifiedAt, item.coverPath) {
-        value = runCatching { viewModel.pages(item) }
+    val pageLoad = dev.susnowy.gallery.ui.components.rememberPageLoad(
+        listOf(item.libraryId, item.id, item.modifiedAt, item.coverPath),
+    ) {
+        viewModel.pages(item)
     }
+    val pages = pageLoad.result
     var controlsVisible by remember { mutableStateOf(true) }
     var currentPage by remember { mutableIntStateOf(0) }
     var showEditor by remember { mutableStateOf(false) }
@@ -865,14 +868,13 @@ private fun ImageSetReaderScreen(
             .background(Color.Black),
     ) {
         when (val current = pages) {
-            null -> CircularProgressIndicator(
-                color = Color.White,
-                modifier = Modifier.align(Alignment.Center),
-            )
+            null -> dev.susnowy.gallery.ui.components.PageLoadingStatus(pageLoad,
+                item.sourceKind == SourceKind.ARCHIVE, onBack, Modifier.align(Alignment.Center))
             else -> current.fold(
                 onSuccess = { result ->
                     if (result.isEmpty()) {
-                        Text("没有可读取的图片页", color = Color.White, modifier = Modifier.align(Alignment.Center))
+                        dev.susnowy.gallery.ui.components.PageLoadingStatus(pageLoad,
+                            item.sourceKind == SourceKind.ARCHIVE, onBack, Modifier.align(Alignment.Center))
                     } else {
                         ImageSetReader(
                             item = item,
@@ -897,14 +899,9 @@ private fun ImageSetReaderScreen(
                         )
                     }
                 },
-                onFailure = { error ->
-                    Text(
-                        "读取失败：${error.message.orEmpty()}",
-                        color = Color.White,
-                        modifier = Modifier
-                            .align(Alignment.Center)
-                            .padding(24.dp),
-                    )
+                onFailure = {
+                    dev.susnowy.gallery.ui.components.PageLoadingStatus(pageLoad,
+                        item.sourceKind == SourceKind.ARCHIVE, onBack, Modifier.align(Alignment.Center))
                 },
             )
         }
