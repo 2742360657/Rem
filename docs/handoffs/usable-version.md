@@ -13,6 +13,8 @@
 - 验收边界：合成 PNG 实际阅读组件测试不等于 SAF 进度写回、真机手势或全量真实介质验证；当前不可称最终成熟版本。
 - 更新时间：2026-09-19。
 
+- 视频最新：45f4c53 调度已提交。VideoPlaybackLifecycle 接入 VideoViewer，后台暂停/保存、回前台按原播放意图恢复、手动暂停和非活动页保持。完整工程检查（299 单测）与四项 API 36 播放器设备测试通过，含实际 MainActivity 生命周期；未准备来源，不能称真视频解码。下一步仍有音频焦点、真视频系列场景、其他长列表和 R06 等目标，不应宣告成熟完成。
+
 - 调度最新：a6aa418 管理列表已提交。scanner.enrich 纯读取现由 MediaReadPriority.background 包裹，inventory 通过 beforeDirectoryRead 等待前台，CancellableHash 分块响应取消。完整工程检查、抢占/哈希单测与 11 项 SAF/预览/调度设备测试通过。提交在重试块外。尚未覆盖 Coil 直接读取与同步 Provider 强制取消；此改动尚未做全量 56 项设备回归，勿混用上轮 55 项结果。
 
 - 最新接续：c233049 之后 Inbox 三个路径列表和 Group/Series 编辑器已接入定位，Inbox 分区各自保存位置，已忽略媒体选择可恢复。298 单测、lint、两个 APK、全量 55 项 API 36 设备测试通过。接下来优先让 scanner.enrich 的纯读取阶段参与前台让路，再补其余长界面；不能把 portable 提交阶段放入可抢占重试块。尚未修改此调度接口。

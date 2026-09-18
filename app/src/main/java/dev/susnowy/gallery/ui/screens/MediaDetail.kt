@@ -1709,8 +1709,9 @@ private fun VideoViewer(
         player.prepare()
         if (!progress.finished && progress.positionMs > 0) player.seekTo(progress.positionMs)
     }
-    LaunchedEffect(player, active) {
-        player.playWhenReady = active
+    dev.susnowy.gallery.ui.components.VideoPlaybackLifecycle(player, active) {
+        if (session.initialized) viewModel.saveProgress(item,
+            positionMs = player.currentPosition.coerceAtLeast(0), finished = session.finished)
     }
     DisposableEffect(player) {
         val listener = object : Player.Listener {

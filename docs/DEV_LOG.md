@@ -6,6 +6,12 @@
 
 条目按时间倒序。同一问题的后续进展追加到原条目，不另起新条。
 
+## 2026-09-19：视频前后台暂停与恢复
+
+- R07：VideoViewer 之前仅由 active 设置 playWhenReady，没有生命周期暂停。新增 VideoPlaybackLifecycle，ON_PAUSE 保存初始化后的位置并暂停，ON_RESUME 仅恢复先前播放意图；手动暂停及非活动页不被自动启动。绑定位于全屏视图之外，维持已有同一播放器切换行为。
+- Windows 299 单测、lint、debug/test APK 构建通过；API 36 四项播放器设备测试通过：可控 LifecycleOwner 覆盖背景激活/非活动页/手动暂停，实际 MainActivity 的 CREATED→RESUMED 验证暂停和位置回调，另回归全屏与一秒 WAV 完成事件。
+- 生命周期场景使用未准备来源，没有做真视频解码、电话/音频焦点或真实库写回验收；不把回调位置测试称为便携落盘证据。
+
 ## 2026-09-19：扫描及信息补全为前台读取让路
 
 - R11：MediaReadPriority 的通用 background 接口只包住 scanner.enrich 的读取阶段；重读后结果才进入原有并发合并与提交，取消不记为补全失败。Inventory 在每次目录查询前等待前台结束，不因让路重新扫描。SHA-256 在每次读取前后检查取消。

@@ -18,6 +18,43 @@ import org.junit.Test
 class VideoFullscreenInteractionTest {
     @get:Rule val rule = createAndroidComposeRule<MainActivity>()
 
+    @Test fun activityStopPausesAndResumePreservesManualPause() {
+        lateinit var player: ExoPlayer
+        var savedPosition = -1L
+        rule.activityRule.scenario.onActivity { activity ->
+            player = ExoPlayer.Builder(activity).build()
+            player.setMediaItem(MediaItem.fromUri("content://fixture/video"))
+            player.seekTo(8_765)
+            activity.setContent {
+                dev.susnowy.gallery.ui.components.VideoPlaybackLifecycle(player, true) {
+                    savedPosition = player.currentPosition
+                }
+            }
+        }
+        rule.waitForIdle()
+        try {
+            rule.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
+            androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().runOnMainSync {
+                assertFalse(player.playWhenReady)
+                assertEquals(8_765L, savedPosition)
+            }
+            rule.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
+            rule.runOnIdle {
+                assertTrue(player.playWhenReady)
+                player.pause()
+            }
+            rule.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
+            rule.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
+            rule.runOnIdle { assertFalse(player.playWhenReady) }
+        } finally {
+            rule.activityRule.scenario.onActivity { activity ->
+                activity.setContent {}
+            }
+            rule.waitForIdle()
+            rule.runOnIdle { player.release() }
+        }
+    }
+
     @Test fun fullscreenKeepsPlayerPositionAndRestoresOrientation() {
         val original = rule.activity
         var orientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED

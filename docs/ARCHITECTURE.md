@@ -4,6 +4,8 @@ This document describes the implementation that exists now. Product semantics an
 
 ## Application shape
 
+`VideoPlaybackLifecycle` pauses on the owning lifecycle's ON_PAUSE and submits initialized playback progress through the existing repository path. ON_RESUME resumes only playback it paused; manual pauses remain paused. Inactive pager pages stay paused. This binding lives outside the fullscreen surface so swapping inline/fullscreen views does not reset its playback intent.
+
 `MainActivity` handles orientation/screen-size configuration changes so entering video fullscreen does not recreate the player. Compose observes the new configuration for layout. `VideoPlayerSurface` attaches the same Player to its inline or fullscreen view, requests sensor landscape only while fullscreen, and restores the previous orientation on exit. Other configuration changes and process recreation still follow normal saved-state restoration.
 
 Rem has one Android application module targeting Android 8.0+ and a Java 17 standalone `library-tool` module. The tool compiles the existing portable models and `portable` package directly from the App source tree; it does not fork the format or depend on Android storage/database classes.
