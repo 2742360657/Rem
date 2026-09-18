@@ -1,8 +1,8 @@
 package dev.susnowy.gallery.media
 
 import dev.susnowy.gallery.library.LibraryDocument
+import dev.susnowy.gallery.library.LibraryDocumentAccess
 import dev.susnowy.gallery.model.MediaItem
-import dev.susnowy.gallery.storage.DocumentTreeStorage
 import java.io.File
 import java.security.MessageDigest
 import java.util.zip.ZipFile
@@ -35,9 +35,10 @@ class ArchiveCache(
     private val maxBytes: Long = DEFAULT_MAX_BYTES,
 ) {
     private val mutex = Mutex()
+    private val copyMutex = Mutex()
 
     /** Opens a cached copy of [item], copying it once when necessary. Null when unavailable. */
-    suspend fun open(item: MediaItem, storage: DocumentTreeStorage): ZipFile? =
+    suspend fun open(item: MediaItem, storage: LibraryDocumentAccess): ZipFile? =
         open(item.libraryId, item.relativePath, item.size, item.modifiedAt, storage)
 
     /**
@@ -52,40 +53,39 @@ class ArchiveCache(
         relativePath: String,
         size: Long,
         modifiedAt: Long,
-        storage: DocumentTreeStorage,
+        storage: LibraryDocumentAccess,
     ): ZipFile? = withContext(Dispatchers.IO) {
         val target = fileFor(libraryId, relativePath, size, modifiedAt) ?: return@withContext null
-        mutex.withLock {
-            if (!target.isFile || target.length() == 0L) {
-                if (!copyInto(relativePath, storage, target)) {
-                    target.delete()
-                    return@withLock null
-                }
-            }
-            target.setLastModified(System.currentTimeMillis())
-            runCatching { ZipFile(target) }.getOrNull()
-                ?: run {
-                    // A truncated or corrupt copy must not be reused forever.
-                    target.delete()
-                    null
-                }
+        mutex.withLock { openCached(target) }?.let { return@withContext it }
+        copyMutex.withLock {
+            mutex.withLock { openCached(target) }?.let { return@withLock it }
+            copyInto(relativePath, storage, target)
         }
+    }
+
+    /** Called under the short cache lock, never while waiting on a Provider stream. */
+    private fun openCached(target: File): ZipFile? {
+        if (!target.isFile || target.length() == 0L) return null
+        target.setLastModified(System.currentTimeMillis())
+        return runCatching { ZipFile(target) }.getOrElse { target.delete(); null }
     }
 
     /** Removes every cached copy and reports what was actually removed. */
     suspend fun clear(): ArchiveCacheStats = withContext(Dispatchers.IO) {
-        mutex.withLock {
-            val files = directory.listFiles().orEmpty().filter(File::isFile)
-            var removedFiles = 0
-            var removedBytes = 0L
-            files.forEach { file ->
-                val bytes = file.length()
-                if (file.delete()) {
-                    removedFiles++
-                    removedBytes += bytes
+        copyMutex.withLock {
+            mutex.withLock {
+                val files = directory.listFiles().orEmpty().filter(File::isFile)
+                var removedFiles = 0
+                var removedBytes = 0L
+                files.forEach { file ->
+                    val bytes = file.length()
+                    if (file.delete()) {
+                        removedFiles++
+                        removedBytes += bytes
+                    }
                 }
+                ArchiveCacheStats(removedFiles, removedBytes)
             }
-            ArchiveCacheStats(removedFiles, removedBytes)
         }
     }
 
@@ -96,7 +96,7 @@ class ArchiveCache(
         }
     }
 
-    private suspend fun copyInto(relativePath: String, storage: DocumentTreeStorage, target: File): Boolean {
+    private suspend fun copyInto(relativePath: String, storage: LibraryDocumentAccess, target: File): ZipFile? {
         directory.mkdirs()
         val staging = File(directory, "${target.name}.part")
         val document = LibraryDocument(
@@ -116,19 +116,20 @@ class ArchiveCache(
                     }
                 }
             }
-            if (!staging.renameTo(target)) {
-                staging.copyTo(target, overwrite = true)
-                staging.delete()
+            mutex.withLock {
+                if (!staging.renameTo(target)) {
+                    staging.copyTo(target, overwrite = true)
+                    staging.delete()
+                }
+                val opened = openCached(target)
+                // A newly opened archive survives its own trim even when over budget.
+                trim(keep = target.path)
+                opened
             }
-            // The archive being opened must survive its own trim. This also lets one large
-            // archive exceed the nominal cache budget temporarily instead of making it
-            // impossible to read at all; older cache entries are still evicted first.
-            trim(keep = target.path)
-            true
         }.getOrElse {
             staging.delete()
             if (it is CancellationException) throw it
-            false
+            null
         }
     }
 

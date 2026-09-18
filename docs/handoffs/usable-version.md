@@ -12,6 +12,8 @@
 - 剩余：按 STATUS 场景验收 R03/R04/R05/R02、R06/R07，视频剧集连播尚未实现验收，MediaDetail.kt 的 VideoViewer 没有队列衔接。R10 新实体/关系工具与 R11 真库性能仍保留。
 - 更新时间：2026-09-19。
 
+- 加载调度进展：ArchiveCache 已拆慢复制锁/短缓存锁，295 单测和10项SAF/预览设备回归通过。未缓存请求仍串行，前台优先未完成。Repository.pages 的 Edition plan 分支直接 storage.list，下一步应核查 IO 调度；后台预览使用同一个 ArchiveCache，前台打开可能还需取消/暂停后台未缓存复制。勿将这些待查项冒充已解决。
+
 - 最新视频模块：VideoPlayerSurface 同一播放器切换全屏 Dialog，横屏请求及退出方向恢复；MainActivity configChanges 避免方向导致播放器重建。完整工程检查和42项模拟器设备回归通过，新增实际 Activity 全屏位置/方向测试。真视频解码与后台/前台生命周期仍需后续场景，真机已断开。
 
 - 新验证：GridReturnPositionTest 在 API 36 通过；150 项 MediaGrid 定位到第100项、详情往返、空快照期间重建后恢复相同行首。共享网格正常，不代表用户所有页面返回问题已解决；下一步重点测实际漫画跳页不误完成、真实导航层保存状态与视频横屏。

@@ -17,6 +17,8 @@ Debug and release can coexist. Device-local SQLite data, logs, previews, and SAF
 
 ## Data ownership
 
+`ArchiveCache` separates its serialized copy lock from short cache lookup/commit locks. Cached ZIP opens and statistics do not wait on Provider copying. Clear waits for copying before removing files, preserving its existing semantics. Uncached requests still serialize; this is not a complete foreground-priority scheduler.
+
 ```text
 SAF media tree
   ├─ user media bytes
