@@ -1,24 +1,16 @@
 ﻿# 可用版本持续开发
 
-- 需求 / 目标：按 PRODUCT 持续完成可用版本；当前优先 R07 漫画体验、R11 前台读取、所有长界面快速定位。避免复杂低频功能。
-- 基线与归属：本次接续自 70a1fea；前台读取模块已提交 8eeca30。当前漫画位置修复由主 Agent 独占 MediaDetail.kt、ReaderPositionTest.kt 和权威文档；默认单 Agent。
-- 便携影响：本次无 Schema、便携字段或原媒体变更；进度仍经原 ViewModel/Repository 写入。真实 Library 未访问。
-- 已完成：批量字段和关系操作、视频完成判定/系列队列/横屏全屏、混合目录视频导航、共享网格和漫画页码定位、页列表 IO 与取消重试、缓存锁拆分、离线预览为前台页读取让路。具体证据以 STATUS 和 DEV_LOG 为准。
-- 不要重复：GalleryApp 已有 SaveableStateHolder；视频队列已实现。虚拟 Edition 页解析已移 IO。不能照旧交接再次添加这些功能。
-- 最新阅读修复：initialized 精确偏移保留、同页跳转归零、短末页实际布局定位、Coil Empty 占位，避免零高度把末页跳转拉到前面；完成只由活动滚动或明确确认驱动。两个实际阅读组件设备测试及完整工程检查、48 项模拟器设备测试已通过。
-- 最新验证：Windows 298 单测、lint、debug/test APK 和 API 36 全部 48 项设备测试通过，包含实际 swipe、状态重建、跳末页不自动完成。设备测试退出曾卡在模拟器 GPU qemu_pipe 帧提交，三次主动终止不计为通过；已改 swiftshader_indirect、禁用 Vulkan，并让测试时钟等待滑动动画结束。
-- 工具：ADB C:/Users/Susnowy/AppData/Local/Android/Sdk/platform-tools/adb.exe；emulator-5556 / Rem_API_36 / API 36。当前启动参数 -no-window -no-audio -no-snapshot -gpu swiftshader_indirect -feature -Vulkan。adbd 已恢复非 root。Gradle 前设置 DEBUG 为空，设备测试指定 ANDROID_SERIAL=emulator-5556。
-- 用户真机已主动移除，旧真机安装包为 d9f2324，不能说最新修复已真机验收。旧日志补全 1261 项失败 1259，Provider 单次最慢 51 秒；S: 曾可由 Get-PSDrive 发现，不因 Get-Volume 无结果断言不存在。不要为整理文档访问原库。
-- 下一步：扩展 Series 章节、作品/关系选择器及其他长列表的快速定位并验证返回锚点；进一步覆盖解码前尺寸与缩放/翻页协调。调度尚未覆盖扫描/补全和 Coil 直接读取，Provider 同步调用不能立即取消。视频实解码与真实多集、R03/R04/R05 场景、R06 随机发现、R10 新实体关系工具和 R11 真介质验收均仍未完成。
-- 验收边界：合成 PNG 实际阅读组件测试不等于 SAF 进度写回、真机手势或全量真实介质验证；当前不可称最终成熟版本。
+- 需求 / 目标：完整满足 PRODUCT，优先真实使用中的 R07 阅读/观看、R11 接入与性能、R08 管理可靠性。避免复杂低频功能，整体目标仍 active。
+- 基线：a53ed65，加本轮 SyntheticVideo.kt / VideoDecodeTest.kt 设备验收。单 Agent；当前拥有上述测试与 STATUS/DEV_LOG/handoff。
+- 便携影响：本轮无。生成视频只在测试 App 缓存，无真实 Library 访问、无 Schema 或原媒体变更。
+- 最近已完成：8eeca30 离线预览为前台让路；13ef21f 漫画精确位置与末页跳转；c233049 章节与选择器定位；a6aa418 管理列表定位和 Inbox 分区/选择恢复；45f4c53 扫描/补全让路与可取消哈希；0d7c3c6 视频生命周期；a53ed65 音频焦点/noisy 配置。
+- 最新验证：Windows / Java 17，299 单测、lint、debug/test APK、API 36 全部 60 项设备测试通过。新增 MediaCodec 合成 160×120 AVC/MP4（30 帧）在实际 MainActivity 同款播放器/Surface 上验证首帧、seek、全屏横屏、播放结束。不是完整 Library/剧集/便携进度或真机长视频验收。
+- 既有证据：漫画实际组件精确偏移重建、同页定位、末页不误完成、真实 swipe 自动下一话；150 项网格/章节返回锚点；Inbox 三分区各自定位/重建及忽略媒体选择；关系编辑定位不变草稿；冷归档与哈希抢占取消；SAF 查询等待；实际 Activity 前后台暂停/手动暂停；合成 WAV 实播音频焦点竞争。
+- 不要重复：GalleryApp 已按 Library 和 screen 保存状态，Inbox 已按分区保存；VideoViewer 已有系列队列/全屏/生命周期/焦点；Edition 页计划已在 IO；不要根据旧日志重复实现。
+- 继续优先项：补齐分组书架、系统相册、分类/设置等长界面的快速定位；完整真实视频系列 UI 与便携进度读回；R03/R04/R05 场景审查、R06 随机发现来源回溯、R10 新实体/关系和多文档事务。
+- R11 剩余：Coil 直接读取未参与调度，Provider 同步调用必须返回后才能响应取消；真实接入故障和大库冷/热性能未关闭。scanner.enrich 只有读取阶段可抢占重试，提交阶段不得放入重试块。
+- 用户真机已移除，旧真机安装包 d9f2324；不能把模拟器结果写成真机验收。旧日志补全 1261 中失败 1259、Provider 最慢 51 秒，仍待来源/介质实测。S: 曾可由 Get-PSDrive 看到，Get-Volume 无结果不能证明未挂载；勿为文档访问源库。
+- 工具：ADB C:/Users/Susnowy/AppData/Local/Android/Sdk/platform-tools/adb.exe；Rem_API_36 / emulator-5556。启动参数 -no-window -no-audio -no-snapshot -gpu swiftshader_indirect -feature -Vulkan。Gradle DEBUG 置空，ANDROID_SERIAL=emulator-5556。
+- 环境证据：先前 GPU qemu_pipe 在测试 Activity 退出时卡住；改软件后端/禁用 Vulkan，滑动测试退出前让 Compose 时钟完成动画后正常。adbd 已恢复非 root。测试 App 伪造耳机 noisy 受保护广播被拒绝，未绕过；耳机实际拔插、蓝牙和电话场景未验收。
+- 验收底线：产品要求不可缩减；不能以本轮测试通过宣称最终成熟。按模块中文提交，暂存审查与提交后状态核对；不推送、不改写历史。
 - 更新时间：2026-09-19。
-
-- 音频最新：0d7c3c6 生命周期已提交。createVideoPlayer 已启用媒体焦点与 noisy 处理，合成 WAV 实播后真实 AudioManager 焦点竞争暂停测试通过；完整工程检查及五项播放器设备回归通过。系统拒绝测试 App 伪造 noisy 广播，未绕过；耳机物理拔插/蓝牙/电话/真视频仍未验证。
-
-- 视频最新：45f4c53 调度已提交。VideoPlaybackLifecycle 接入 VideoViewer，后台暂停/保存、回前台按原播放意图恢复、手动暂停和非活动页保持。完整工程检查（299 单测）与四项 API 36 播放器设备测试通过，含实际 MainActivity 生命周期；未准备来源，不能称真视频解码。下一步仍有音频焦点、真视频系列场景、其他长列表和 R06 等目标，不应宣告成熟完成。
-
-- 调度最新：a6aa418 管理列表已提交。scanner.enrich 纯读取现由 MediaReadPriority.background 包裹，inventory 通过 beforeDirectoryRead 等待前台，CancellableHash 分块响应取消。完整工程检查、抢占/哈希单测与 11 项 SAF/预览/调度设备测试通过。提交在重试块外。尚未覆盖 Coil 直接读取与同步 Provider 强制取消；此改动尚未做全量 56 项设备回归，勿混用上轮 55 项结果。
-
-- 最新接续：c233049 之后 Inbox 三个路径列表和 Group/Series 编辑器已接入定位，Inbox 分区各自保存位置，已忽略媒体选择可恢复。298 单测、lint、两个 APK、全量 55 项 API 36 设备测试通过。接下来优先让 scanner.enrich 的纯读取阶段参与前台让路，再补其余长界面；不能把 portable 提交阶段放入可抢占重试块。尚未修改此调度接口。
-
-- 后续模块：13ef21f 漫画位置修复已提交。章节列表、添加成员和选择分组/系列现已接入 ListPositionButton；LongListPositionTest 三项 API 36 测试、298 单测、lint 和两个 APK 构建通过。此模块未重跑之前全部 48 项设备测试，不能累计成一次 51 项通过。下一步扩展其余长界面，勿再次实现这三个入口。

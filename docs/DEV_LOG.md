@@ -6,6 +6,12 @@
 
 条目按时间倒序。同一问题的后续进展追加到原条目，不另起新条。
 
+## 2026-09-19：合成 AVC 实际画面、seek 与全屏验收
+
+- R07/R02：当前主机未发现 ffmpeg，用 Android MediaCodec 在测试缓存中生成 160×120、10 fps、30 帧 AVC/MP4，无下载媒体、无用户素材。编码样本数校验、20 秒编码上限和资源释放均在夹具内。
+- 实际 MainActivity 使用 createVideoPlayer 与 VideoPlayerSurface，验证首帧渲染回调、160×120 输出、seek 到 1 秒、真正横屏后继续至结束且无播放器错误；测试清理生成文件。此场景不经过 Library/便携进度，不能冒充剧集和落盘验收。
+- Windows 299 单测、lint、debug/test APK 构建及 API 36 全量 60 项设备测试通过。模拟器 swiftshader_indirect、禁用 Vulkan；真机长视频、多格式、音画同步与剧集 UI 闭环仍未验证。
+
 ## 2026-09-19：视频音频焦点及耳机断开处理
 
 - R07：现有裸 ExoPlayer.Builder 未启用焦点处理。提取 createVideoPlayer，声明媒体/电影用途，开启 Media3 音频焦点与 noisy 处理，不添加后台播放。
