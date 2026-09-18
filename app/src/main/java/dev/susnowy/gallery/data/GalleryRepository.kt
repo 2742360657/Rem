@@ -39,6 +39,7 @@ import dev.susnowy.gallery.model.MediaDomain
 import dev.susnowy.gallery.model.MediaItem
 import dev.susnowy.gallery.model.MediaSeries
 import dev.susnowy.gallery.model.PortableSeries
+import dev.susnowy.gallery.model.PortableState
 import dev.susnowy.gallery.model.PortableSeriesMember
 import dev.susnowy.gallery.model.SeriesRef
 import dev.susnowy.gallery.model.toMediaSeries
@@ -149,6 +150,10 @@ class GalleryRepository(context: Context) {
     private val _series = MutableStateFlow<List<MediaSeries>>(emptyList())
     val series: StateFlow<List<MediaSeries>> = _series.asStateFlow()
 
+    /** Invalidates UI progress snapshots after a portable progress/state commit. */
+    private val _progressRevision = MutableStateFlow(0L)
+    val progressRevision: StateFlow<Long> = _progressRevision.asStateFlow()
+
     /**
      * Reading order of Works whose preferred Edition is a page plan (a virtual merge).
      * Rebuilt whenever the catalog is loaded, so the reader never has to read it again.
@@ -195,7 +200,9 @@ class GalleryRepository(context: Context) {
                     RemLog.failure("GalleryRepository", "Inbox 决策回填失败", error)
                 }
                 runCatching {
-                    val catalog = PortableMetadataStore(storage).loadCatalog(migrated.libraryId)
+                    val store = PortableMetadataStore(storage)
+                    val catalog = store.loadCatalog(migrated.libraryId)
+                    syncPortableState(migrated.libraryId, store.loadState(migrated.libraryId))
                     syncGroups(migrated.libraryId, catalog.groups)
                     syncSeries(migrated.libraryId, catalog.series)
                     refreshEditionPlans(migrated.libraryId, catalog)
@@ -477,19 +484,7 @@ class GalleryRepository(context: Context) {
                 .filter { result.protectsPreviouslyIndexed(it.relativePath) }
                 .mapTo(mutableSetOf(), DiscoveredEntry::relativePath)
             database.replaceDiscoveries(libraryId, discovered, protectedDiscoveries)
-            state.progress.forEach { progress ->
-                if (database.mediaItem(progress.itemId) != null) {
-                    database.upsertProgress(
-                        PlaybackProgress(
-                            itemId = progress.itemId,
-                            page = progress.page,
-                            positionMs = progress.positionMs,
-                            finished = progress.finished,
-                            lastOpenedAt = java.time.Instant.parse(progress.lastOpenedAt).toEpochMilli(),
-                        ),
-                    )
-                }
-            }
+            syncPortableState(libraryId, state)
             database.upsertLibrary(
                 effectiveRegistration.copy(
                     permissionState = PermissionState.AVAILABLE,
@@ -594,15 +589,19 @@ class GalleryRepository(context: Context) {
         return completed
     }
 
-    suspend fun updateMedia(updated: MediaItem): MediaItem = runOperation("正在保存元数据…") {
+    suspend fun updateMedia(previous: MediaItem, updated: MediaItem): MediaItem =
+        runOperation("正在保存元数据…") {
         withPortableWrite {
+            require(previous.id == updated.id && previous.libraryId == updated.libraryId) {
+                "元数据编辑基线与目标不一致"
+            }
             val storage = storageFor(requireLibrary(updated.libraryId))
             val stored = database.mediaItem(updated.id)
             // The editor works on a snapshot and may have been open while the scanner enriched
             // the same item. Only the fields this edit actually changed are written, so a hash
             // or page count that arrived in the meantime is not rolled back by saving a title.
             val locked = stored
-                ?.let { current -> updated.mergeEdit(stored, current) }
+                ?.let { current -> updated.mergeEdit(previous, current) }
                 ?: updated.copy(fieldSources = updated.withManualEdits(null))
             val portable = PortableMetadataStore(storage).saveItem(locked, locked.revision)
             // Editing a Work is also an Inbox decision: the suggestion is no longer pending,
@@ -1243,9 +1242,16 @@ class GalleryRepository(context: Context) {
 
     suspend fun saveProgress(progress: PlaybackProgress) = withPortableWrite {
         val item = database.mediaItem(progress.itemId) ?: return@withPortableWrite
+        val current = database.progress(progress.itemId)
+        if (current != null && current.lastOpenedAt > progress.lastOpenedAt) {
+            // Page observers launch writes asynchronously. A slower earlier write must not land
+            // after a newer one and move the portable reading position backwards.
+            return@withPortableWrite
+        }
         val storage = storageFor(requireLibrary(item.libraryId))
         PortableMetadataStore(storage).saveProgress(item.libraryId, progress)
         database.upsertProgress(progress)
+        _progressRevision.value += 1
     }
 
     suspend fun progress(itemId: String): PlaybackProgress? = onIo { database.progress(itemId) }
@@ -1464,6 +1470,26 @@ class GalleryRepository(context: Context) {
         database.replaceSeries(libraryId, series.map { it.toMediaSeries(libraryId) })
     }
 
+    /** Mirrors the whole portable state, including removals, into the disposable index. */
+    private fun syncPortableState(libraryId: String, state: PortableState) {
+        database.replacePortableState(
+            libraryId = libraryId,
+            progress = state.progress.map { progress ->
+                PlaybackProgress(
+                    itemId = progress.itemId,
+                    page = progress.page,
+                    positionMs = progress.positionMs,
+                    finished = progress.finished,
+                    lastOpenedAt = java.time.Instant.parse(progress.lastOpenedAt).toEpochMilli(),
+                )
+            },
+            trashedAt = state.trash.associate { entry ->
+                entry.itemId to java.time.Instant.parse(entry.deletedAt).toEpochMilli()
+            },
+        )
+        _progressRevision.value += 1
+    }
+
     /**
      * Keeps the reading order of page-plan Editions ready for the reader.
      *
@@ -1571,12 +1597,9 @@ class GalleryRepository(context: Context) {
         val canonical = portable.mapNotNull(PortableItemMetadata::series)
         if (canonical.isEmpty()) return
         val byId = canonical.associateBy { it.id }
-        val byTitle = canonical.associateBy { it.title.trim().lowercase(java.util.Locale.ROOT) }
         database.media(libraryId).forEach { item ->
             val current = item.series ?: return@forEach
-            val resolved = byId[current.id]
-                ?: byTitle[current.title.trim().lowercase(java.util.Locale.ROOT)]
-                ?: return@forEach
+            val resolved = resolveCanonicalSeries(current, byId) ?: return@forEach
             if (current.id != resolved.id || current.title != resolved.title) {
                 database.upsertMedia(item.copy(series = current.copy(id = resolved.id, title = resolved.title)))
             }
@@ -1647,3 +1670,9 @@ class GalleryRepository(context: Context) {
         const val INITIALIZATION_WAIT_MILLIS = 250L
     }
 }
+
+/** Series identity is its portable id; equal titles are allowed and must remain separate. */
+internal fun resolveCanonicalSeries(
+    current: SeriesRef,
+    canonicalById: Map<String, SeriesRef>,
+): SeriesRef? = canonicalById[current.id]

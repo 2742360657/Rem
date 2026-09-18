@@ -18,24 +18,19 @@ data class SeriesChapter(
 
     val lastPage: Int get() = progress?.page?.coerceAtLeast(0) ?: 0
 
-    /** A chapter counts as read when the reader reached its end, or when the last page is on. */
+    /** A chapter counts as read only after the reader explicitly records reaching its end. */
     val finished: Boolean
-        get() {
-            val progress = progress ?: return false
-            if (progress.finished) return true
-            val count = pageCount ?: return false
-            return progress.page >= count - 1
-        }
+        get() = progress?.finished == true
 
-    val started: Boolean get() = (progress?.page ?: 0) > 0 || progress?.finished == true
+    val started: Boolean get() = progress != null
 
     /** "第 12 / 40 页", "未开始" or "已读完" for the chapter row. */
     fun progressLabel(): String {
         val count = pageCount
         return when {
             finished -> "已读完"
-            (progress?.page ?: 0) > 0 && count != null -> "第 ${lastPage + 1} / $count 页"
-            (progress?.page ?: 0) > 0 -> "第 ${lastPage + 1} 页"
+            progress != null && count != null -> "第 ${lastPage + 1} / $count 页"
+            progress != null -> "第 ${lastPage + 1} 页"
             else -> "未开始"
         }
     }
@@ -66,7 +61,10 @@ object SeriesReading {
     /** The chapter "继续阅读" should open, or null for an empty series. */
     fun continueChapter(chapters: List<SeriesChapter>): SeriesChapter? {
         if (chapters.isEmpty()) return null
-        chapters.firstOrNull { it.started && !it.finished }?.let { return it }
+        chapters.asSequence()
+            .filter { it.started && !it.finished }
+            .maxByOrNull { it.progress?.lastOpenedAt ?: Long.MIN_VALUE }
+            ?.let { return it }
         chapters.firstOrNull { !it.finished }?.let { return it }
         // Everything is finished: reading again starts from the first chapter.
         return chapters.first()
@@ -93,6 +91,21 @@ object SeriesReading {
         started = chapters.count(SeriesChapter::started),
     )
 }
+
+/**
+ * True only after the reader moved forward from its restored position and reached the physical
+ * end of the chapter. Merely restoring the last page is not completion: a tall last page may
+ * still have most of its content below the viewport.
+ */
+fun chapterEndReached(
+    pageCount: Int,
+    lastVisibleItemIndex: Int,
+    canScrollForward: Boolean,
+    advancedAfterRestore: Boolean,
+): Boolean = pageCount > 0 &&
+    advancedAfterRestore &&
+    lastVisibleItemIndex >= pageCount - 1 &&
+    !canScrollForward
 
 data class SeriesSummary(val total: Int, val finished: Int, val started: Int) {
     val untouched: Boolean get() = total > 0 && started == 0

@@ -1040,6 +1040,71 @@ class GalleryDatabase(context: Context) : SQLiteOpenHelper(
         )
     }
 
+    /**
+     * Replaces the disposable progress/trash projection for one Library from `state.json`.
+     * Missing entries are removals, not permission to keep an older SQLite value.
+     */
+    @Synchronized
+    fun replacePortableState(
+        libraryId: String,
+        progress: Collection<PlaybackProgress>,
+        trashedAt: Map<String, Long>,
+    ) {
+        require(progress.map(PlaybackProgress::itemId).distinct().size == progress.size) {
+            "便携进度包含重复 Work"
+        }
+        val database = writableDatabase
+        database.transaction {
+            val validIds = query(
+                "media",
+                arrayOf("id"),
+                "library_id = ?",
+                arrayOf(libraryId),
+                null,
+                null,
+                null,
+            ).use { cursor -> buildSet { while (cursor.moveToNext()) add(cursor.string("id")) } }
+
+            execSQL(
+                "UPDATE media SET trashed = 0, deleted_at = NULL WHERE library_id = ?",
+                arrayOf<Any>(libraryId),
+            )
+            trashedAt.forEach { (itemId, deletedAt) ->
+                if (itemId in validIds) {
+                    update(
+                        "media",
+                        ContentValues().apply {
+                            put("trashed", 1)
+                            put("deleted_at", deletedAt)
+                        },
+                        "library_id = ? AND id = ?",
+                        arrayOf(libraryId, itemId),
+                    )
+                }
+            }
+
+            delete(
+                "progress",
+                "item_id IN (SELECT id FROM media WHERE library_id = ?)",
+                arrayOf(libraryId),
+            )
+            progress.filter { it.itemId in validIds }.forEach { entry ->
+                insertWithOnConflict(
+                    "progress",
+                    null,
+                    ContentValues().apply {
+                        put("item_id", entry.itemId)
+                        put("page", entry.page)
+                        put("position_ms", entry.positionMs)
+                        put("finished", entry.finished.asInt())
+                        put("last_opened_at", entry.lastOpenedAt)
+                    },
+                    SQLiteDatabase.CONFLICT_REPLACE,
+                )
+            }
+        }
+    }
+
     @Synchronized
     fun progress(itemId: String): PlaybackProgress? = readableDatabase.query(
         "progress",

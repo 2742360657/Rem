@@ -230,6 +230,49 @@ class EnrichmentMergeTest {
     }
 
     @Test
+    fun aStaleEditorCannotDropManualProvenanceWrittenAfterItOpened() {
+        val planned = row(
+            title = "旧标题",
+            fieldSources = mapOf(
+                MetadataField.DISPLAY_TITLE to FieldSource.FILENAME,
+                MetadataField.AUTHORS to FieldSource.FILENAME,
+            ),
+        )
+        // Another user action commits an author while this editor is still open.
+        val current = planned.copy(
+            authors = listOf("并发写入的作者"),
+            fieldSources = planned.fieldSources + (MetadataField.AUTHORS to FieldSource.MANUAL),
+        )
+        val edited = planned.copy(displayTitle = "编辑器里的新标题")
+
+        val merged = edited.mergeEdit(planned, current)
+
+        assertEquals("编辑器里的新标题", merged.displayTitle)
+        assertEquals(listOf("并发写入的作者"), merged.authors)
+        assertEquals(FieldSource.MANUAL, merged.fieldSources[MetadataField.DISPLAY_TITLE])
+        assertEquals(
+            "当前行的人工来源锁不能被旧编辑器快照清掉",
+            FieldSource.MANUAL,
+            merged.fieldSources[MetadataField.AUTHORS],
+        )
+    }
+
+    @Test
+    fun aStaleEditorKeepsAutomaticProvenanceThatArrivedWithEnrichment() {
+        val planned = row(title = "旧标题")
+        val current = planned.copy(
+            authors = listOf("ComicInfo 作者"),
+            fieldSources = mapOf(MetadataField.AUTHORS to FieldSource.COMIC_INFO),
+        )
+        val edited = planned.copy(displayTitle = "新标题")
+
+        val merged = edited.mergeEdit(planned, current)
+
+        assertEquals(listOf("ComicInfo 作者"), merged.authors)
+        assertEquals(FieldSource.COMIC_INFO, merged.fieldSources[MetadataField.AUTHORS])
+    }
+
+    @Test
     fun aRebuiltSeriesReferenceDoesNotBecomeAManualDecision() {
         val planned = row(series = SeriesRef(id = "stable-id", title = "系列 A", chapter = 4.0))
         // The editor rebuilds the assignment from the Library; only the derived id differs.

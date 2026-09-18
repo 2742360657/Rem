@@ -107,7 +107,11 @@ fun MediaItem.mergeEdit(previous: MediaItem, current: MediaItem): MediaItem = cu
     series = if (!previous.series.sameAssignmentAs(series)) series else current.series,
     coverPath = if (coverPath != previous.coverPath) coverPath else current.coverPath,
     favorite = if (favorite != previous.favorite) favorite else current.favorite,
-    fieldSources = withManualEdits(previous),
+    // The editor's snapshot may predate another edit or an enrichment commit. Start from the
+    // provenance that is on disk now, then stamp only the fields this editor actually changed.
+    // Otherwise a stale editor can keep the current value while silently dropping its `manual`
+    // lock, which lets the next automatic recognition overwrite the user's decision.
+    fieldSources = copy(fieldSources = current.fieldSources).withManualEdits(previous),
 )
 
 /**

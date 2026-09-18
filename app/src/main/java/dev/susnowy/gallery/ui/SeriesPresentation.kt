@@ -2,7 +2,6 @@ package dev.susnowy.gallery.ui
 
 import dev.susnowy.gallery.model.MediaItem
 import dev.susnowy.gallery.model.SeriesRef
-import java.util.Locale
 
 /** A presentation-only shelf derived from portable per-item series assignments. */
 data class SeriesShelf(
@@ -17,7 +16,10 @@ object SeriesPresentation {
 
     fun shelves(items: List<MediaItem>): List<SeriesShelf> {
         val assigned = items.filter { !it.series?.title.isNullOrBlank() }
-            .groupBy { "series:${normalizeTitle(requireNotNull(it.series).title)}" }
+            // Schema v4 gives the relationship one owner and a stable Series id. Grouping by
+            // title merges two legitimate same-named Series and makes the editor target an
+            // arbitrary one, so presentation must keep the entity identity.
+            .groupBy { "series:${requireNotNull(it.series).id}" }
             .map { (key, members) ->
                 SeriesShelf(
                     key = key,
@@ -27,7 +29,10 @@ object SeriesPresentation {
                     items = orderEntries(members),
                 )
             }
-            .sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER, SeriesShelf::title))
+            .sortedWith(
+                compareBy(String.CASE_INSENSITIVE_ORDER, SeriesShelf::title)
+                    .thenBy(SeriesShelf::key),
+            )
         val unassigned = items.filter { it.series?.title.isNullOrBlank() }
             .takeIf(List<MediaItem>::isNotEmpty)
             ?.let { members ->
@@ -66,8 +71,6 @@ object SeriesPresentation {
         )
         else -> SeriesPosition(2, 0.0, 0.0)
     }
-
-    private fun normalizeTitle(title: String): String = title.trim().lowercase(Locale.ROOT)
 
     private data class SeriesPosition(val bucket: Int, val major: Double, val minor: Double)
 }

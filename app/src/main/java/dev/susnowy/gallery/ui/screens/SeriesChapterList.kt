@@ -34,6 +34,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -73,10 +74,12 @@ fun SeriesChapterList(
     onEditSeries: () -> Unit,
 ) {
     val ordered = remember(chapters) { chapters }
+    val progressRevision by viewModel.progressRevision.collectAsState()
     val progress by produceState<Map<String, PlaybackProgress>>(
         initialValue = emptyMap(),
         ordered.map(MediaItem::id),
         ordered.map(MediaItem::modifiedAt),
+        progressRevision,
     ) {
         value = runCatching { viewModel.progressFor(ordered) }.getOrDefault(emptyMap())
     }
@@ -94,7 +97,7 @@ fun SeriesChapterList(
                     Column {
                         Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Text(
-                            summary.label(),
+                            if (series == null) "${entries.size} 个未归系列作品" else summary.label(),
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -120,11 +123,12 @@ fun SeriesChapterList(
                 .fillMaxSize()
                 .padding(padding),
         ) {
-            Surface(tonalElevation = 2.dp, modifier = Modifier.fillMaxWidth()) {
-                Column(
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-                ) {
+            if (series != null) {
+                Surface(tonalElevation = 2.dp, modifier = Modifier.fillMaxWidth()) {
+                    Column(
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                    ) {
                     Button(
                         enabled = entry.enabled,
                         onClick = { entry.chapter?.let { onOpenChapter(it.item, ordered) } },
@@ -158,6 +162,7 @@ fun SeriesChapterList(
                                 viewModel.setAutoAdvanceChapters(it)
                             },
                         )
+                    }
                     }
                 }
             }
@@ -202,7 +207,7 @@ private fun ChapterRow(
         },
         headlineContent = {
             Text(
-                "${chapter.position + 1}. ${title ?: item.displayTitle}",
+                if (title == null) item.displayTitle else "${chapter.position + 1}. $title",
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 fontWeight = if (chapter.started && !chapter.finished) FontWeight.SemiBold else null,
@@ -226,7 +231,7 @@ private fun ChapterRow(
                     contentDescription = "已读完",
                     tint = MaterialTheme.colorScheme.primary,
                 )
-            } else {
+            } else if (title != null) {
                 Text(
                     "${chapter.position + 1}",
                     style = MaterialTheme.typography.labelLarge,

@@ -82,15 +82,15 @@ class SeriesReadingTest {
     }
 
     @Test
-    fun reachingTheLastPageCountsAsFinishedEvenWithoutTheFlag() {
+    fun restoringTheLastPageDoesNotPretendTheChapterWasFinished() {
         val chapters = SeriesReading.chapters(
             listOf(chapter("a", pageCount = 20), chapter("b")),
             mapOf("a" to progress("a", page = 19)),
         )
 
-        assertTrue(chapters.first().finished)
-        assertEquals("已读完", chapters.first().progressLabel())
-        assertEquals("b", SeriesReading.entry(chapters).chapter?.item?.id)
+        assertFalse(chapters.first().finished)
+        assertEquals("第 20 / 20 页", chapters.first().progressLabel())
+        assertEquals("a", SeriesReading.entry(chapters).chapter?.item?.id)
     }
 
     @Test
@@ -101,7 +101,7 @@ class SeriesReadingTest {
         )
 
         assertFalse(chapters.first().finished)
-        assertEquals("未开始", chapters.first().progressLabel())
+        assertEquals("第 1 页", chapters.first().progressLabel())
     }
 
     @Test
@@ -155,5 +155,65 @@ class SeriesReadingTest {
         assertEquals("未开始", untouched.progressLabel())
         assertEquals("第 3 / 20 页", started.progressLabel())
         assertEquals("已读完", done.progressLabel())
+    }
+
+    @Test
+    fun openingTheFirstPageCountsAsStarted() {
+        val opened = SeriesReading.chapters(
+            listOf(chapter("a")),
+            mapOf("a" to progress("a", page = 0, lastOpenedAt = 10)),
+        ).first()
+
+        assertTrue(opened.started)
+        assertEquals("第 1 / 20 页", opened.progressLabel())
+    }
+
+    @Test
+    fun continueReadingChoosesTheMostRecentlyOpenedPartialChapter() {
+        val chapters = SeriesReading.chapters(
+            listOf(chapter("a"), chapter("b"), chapter("c")),
+            mapOf(
+                "a" to progress("a", page = 4, lastOpenedAt = 20),
+                "c" to progress("c", page = 2, lastOpenedAt = 40),
+            ),
+        )
+
+        assertEquals("c", SeriesReading.continueChapter(chapters)?.item?.id)
+    }
+
+    @Test
+    fun chapterEndRequiresForwardMovementAndThePhysicalEndOfContent() {
+        assertFalse(
+            chapterEndReached(
+                pageCount = 3,
+                lastVisibleItemIndex = 2,
+                canScrollForward = false,
+                advancedAfterRestore = false,
+            ),
+        )
+        assertFalse(
+            chapterEndReached(
+                pageCount = 3,
+                lastVisibleItemIndex = 2,
+                canScrollForward = true,
+                advancedAfterRestore = true,
+            ),
+        )
+        assertTrue(
+            chapterEndReached(
+                pageCount = 3,
+                lastVisibleItemIndex = 3,
+                canScrollForward = false,
+                advancedAfterRestore = true,
+            ),
+        )
+        assertFalse(
+            chapterEndReached(
+                pageCount = 0,
+                lastVisibleItemIndex = 0,
+                canScrollForward = false,
+                advancedAfterRestore = true,
+            ),
+        )
     }
 }

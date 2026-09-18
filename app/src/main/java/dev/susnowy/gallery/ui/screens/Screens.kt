@@ -734,16 +734,18 @@ private fun WorksLibraryScreen(
     if (selectedSeries != null) {
         // A series is one entry point: the chapter list replaces the work grid (and its filter
         // bar) and brings its own toolbar.
-        val editableSeries = series.firstOrNull {
-            it.title.equals(selectedSeries.title, ignoreCase = true)
-        }
+        val editableSeries = selectedSeries.key.removePrefix("series:")
+            .let { seriesId -> series.firstOrNull { it.id == seriesId } }
         SeriesChapterList(
             title = selectedSeries.title,
             chapters = selectedSeries.items,
             series = editableSeries,
             viewModel = viewModel,
             onBack = { selectedSeriesKey = null },
-            onOpenChapter = { chapter, ordered -> viewModel.openChapter(chapter, ordered) },
+            onOpenChapter = { chapter, ordered ->
+                if (selectedSeries.isUnassigned) viewModel.open(chapter, ordered)
+                else viewModel.openChapter(chapter, ordered)
+            },
             onEditSeries = { editableSeries?.let { viewModel.openSeries(it.id) } },
         )
         RightSidePanel(

@@ -16,8 +16,11 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.pinch
 import androidx.compose.ui.test.doubleClick
+import androidx.compose.ui.test.click
+import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.swipe
 import androidx.compose.ui.unit.dp
+import androidx.compose.runtime.mutableStateOf
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -212,6 +215,70 @@ class ZoomableInteractionInstrumentedTest {
                 "垂直位移必须在可见切片范围内，实际 ${state.transform.offsetY}，上限 $limit",
                 state.transform.offsetY in -limit - 0.5f..limit + 0.5f,
             )
+        }
+    }
+
+    @Test
+    fun widthMeasurementSurvivesAnUnrelatedRecomposition() {
+        val state = ZoomState()
+        val revision = mutableStateOf(0)
+        rule.setContent {
+            revision.value
+            Zoomable(
+                state = state,
+                placement = ZoomPlacement.WIDTH,
+                modifier = Modifier
+                    .size(500.dp)
+                    .testTag("page"),
+            ) { modifier ->
+                Box(
+                    modifier = modifier
+                        .fillMaxWidth()
+                        .height(900.dp)
+                        .onSizeChanged { size ->
+                            state.intrinsic = Size(size.width.toFloat(), size.height.toFloat())
+                        },
+                )
+            }
+        }
+
+        var measured = Size.Zero
+        rule.runOnIdle {
+            measured = state.intrinsic
+            assertTrue(measured.width > 0f && measured.height > 0f)
+            revision.value++
+        }
+        rule.runOnIdle {
+            assertEquals(measured, state.intrinsic)
+        }
+    }
+
+    @Test
+    fun tapAndLongPressEachDispatchOnce() {
+        val state = ZoomState()
+        var taps = 0
+        var longPresses = 0
+        rule.setContent {
+            Zoomable(
+                state = state,
+                intrinsicSize = Size(1000f, 1000f),
+                modifier = Modifier
+                    .size(500.dp)
+                    .testTag("viewer"),
+                onTap = { taps++ },
+                onLongPress = { longPresses++ },
+            ) { modifier -> Box(modifier) }
+        }
+
+        rule.onNodeWithTag("viewer").performTouchInput { click() }
+        // A registered double-tap handler intentionally delays single-tap dispatch until the
+        // second-tap window closes. Do not start the long press inside that window.
+        rule.waitUntil(2_000) { taps == 1 }
+        rule.onNodeWithTag("viewer").performTouchInput { longClick() }
+        rule.waitUntil(2_000) { longPresses == 1 }
+        rule.runOnIdle {
+            assertEquals(1, taps)
+            assertEquals(1, longPresses)
         }
     }
 }

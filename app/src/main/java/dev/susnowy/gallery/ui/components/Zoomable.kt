@@ -211,11 +211,15 @@ fun Zoomable(
     intrinsicSize: Size? = null,
     placement: ZoomPlacement = ZoomPlacement.FIT,
     onTap: (() -> Unit)? = null,
+    onLongPress: (() -> Unit)? = null,
     onDoubleTap: ((Offset) -> Unit)? = null,
     content: @Composable (Modifier) -> Unit,
 ) {
     state.placement = placement
-    state.intrinsic = intrinsicSize ?: Size.Zero
+    // WIDTH content reports its measured aspect ratio from inside [content]. Do not erase that
+    // measurement on every recomposition (for example while its visible slice changes during a
+    // list scroll); onSizeChanged does not fire again when the size itself stayed the same.
+    if (intrinsicSize != null) state.intrinsic = intrinsicSize
 
     val density = LocalDensity.current
     val contentModifier = when {
@@ -260,6 +264,7 @@ fun Zoomable(
             .pointerInput(Unit) {
                 detectTapGestures(
                     onTap = { onTap?.invoke() },
+                    onLongPress = { onLongPress?.invoke() },
                     onDoubleTap = { position ->
                         state.applyDoubleTap(position)
                         onDoubleTap?.invoke(position)

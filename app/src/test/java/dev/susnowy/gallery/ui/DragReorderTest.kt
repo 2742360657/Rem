@@ -1,6 +1,7 @@
 package dev.susnowy.gallery.ui
 
 import dev.susnowy.gallery.ui.components.DRAG_AUTOSCROLL_PX_PER_SECOND
+import dev.susnowy.gallery.ui.components.DragReorderState
 import dev.susnowy.gallery.ui.components.dragAutoScrollDelta
 import dev.susnowy.gallery.ui.components.dragAutoScrollSpeed
 import dev.susnowy.gallery.ui.components.reorderStep
@@ -131,5 +132,21 @@ class DragReorderTest {
         assertEquals(0f, dragAutoScrollDelta(1_200f, elapsedMillis = 0), 0.001f)
         // A stalled or jumping clock must not scroll the list by a whole screen in one frame.
         assertEquals(76.8f, dragAutoScrollDelta(1_200f, elapsedMillis = 5_000), 0.001f)
+    }
+
+    @Test
+    fun autoScrollActuallyReordersRowsPassingUnderTheFinger() {
+        val state = DragReorderState().apply {
+            rowHeightPx = 100f
+            itemCount = 5
+            start(index = 1, pointerInViewport = 490f)
+        }
+        val moves = mutableListOf<Pair<Int, Int>>()
+
+        state.scrolledBy(230f) { from, to -> moves += from to to }
+
+        assertEquals(listOf(1 to 2, 2 to 3), moves)
+        assertEquals(3, state.draggingIndex)
+        assertEquals(30f, state.rowOffset, 0.001f)
     }
 }

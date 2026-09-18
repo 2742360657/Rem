@@ -8,6 +8,7 @@ import dev.susnowy.gallery.model.MediaDomain
 import dev.susnowy.gallery.model.MediaItem
 import dev.susnowy.gallery.model.MediaKind
 import dev.susnowy.gallery.model.PermissionState
+import dev.susnowy.gallery.model.PlaybackProgress
 import dev.susnowy.gallery.model.SourceKind
 import java.util.UUID
 import org.junit.After
@@ -108,6 +109,31 @@ class GalleryDatabaseEnrichmentInstrumentedTest {
         assertTrue(current.getValue(first.id).favorite)
         // A row the batch no longer finds simply stays absent instead of failing the commit.
         assertFalse(current.containsKey("missing"))
+    }
+
+    @Test
+    fun portableStateReplacementRemovesStaleProgressAndTrashProjection() {
+        val first = scanItem("downloads/a.cbz", "a")
+        val second = scanItem("downloads/b.cbz", "b")
+        database.replaceScannedMedia(
+            libraryId = libraryId,
+            items = listOf(first.copy(trashed = true, deletedAt = 1), second),
+            foundPaths = setOf(first.relativePath, second.relativePath),
+        )
+        database.upsertProgress(PlaybackProgress(first.id, page = 8, lastOpenedAt = 8))
+        database.upsertProgress(PlaybackProgress(second.id, page = 9, lastOpenedAt = 9))
+
+        database.replacePortableState(
+            libraryId = libraryId,
+            progress = listOf(PlaybackProgress(first.id, page = 2, lastOpenedAt = 20)),
+            trashedAt = mapOf(second.id to 30L),
+        )
+
+        assertEquals(2, database.progress(first.id)?.page)
+        assertEquals("便携状态已删除的进度不能留在 SQLite", null, database.progress(second.id))
+        assertFalse(database.mediaItem(first.id)!!.trashed)
+        assertTrue(database.mediaItem(second.id)!!.trashed)
+        assertEquals(30L, database.mediaItem(second.id)!!.deletedAt)
     }
 
     private fun scanItem(relativePath: String, title: String) = MediaItem(

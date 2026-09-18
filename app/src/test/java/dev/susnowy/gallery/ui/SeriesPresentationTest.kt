@@ -40,7 +40,7 @@ class SeriesPresentationTest {
     }
 
     @Test
-    fun groupsLegacyIdsByTitleAndKeepsStandaloneVisible() {
+    fun keepsSameNamedSeriesSeparateByTheirPortableIdentity() {
         val shelves = SeriesPresentation.shelves(
             listOf(
                 item("a", "First", SeriesRef("legacy-a", "Example", sortIndex = 2.0)),
@@ -49,8 +49,9 @@ class SeriesPresentationTest {
             ),
         )
 
-        assertEquals(2, shelves.size)
-        assertEquals(listOf("b", "a"), shelves.first().items.map(MediaItem::id))
+        assertEquals(3, shelves.size)
+        assertEquals(listOf("a"), shelves[0].items.map(MediaItem::id))
+        assertEquals(listOf("b"), shelves[1].items.map(MediaItem::id))
         assertFalse(shelves.first().isUnassigned)
         assertEquals(SeriesPresentation.UNASSIGNED_KEY, shelves.last().key)
         assertEquals(listOf("c"), shelves.last().items.map(MediaItem::id))

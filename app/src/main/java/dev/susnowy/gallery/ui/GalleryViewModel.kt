@@ -33,6 +33,7 @@ import dev.susnowy.gallery.model.toSeriesRef
 import dev.susnowy.gallery.organizer.OrganizationPlan
 import dev.susnowy.gallery.organizer.OrganizerTemplate
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.CancellationException
@@ -152,8 +153,10 @@ class GalleryViewModel(
     val offlinePreviewStats: StateFlow<OfflinePreviewStats> = _offlinePreviewStats
     private val _archiveCacheStats = MutableStateFlow(ArchiveCacheStats(files = 0, bytes = 0))
     val archiveCacheStats: StateFlow<ArchiveCacheStats> = _archiveCacheStats
+    val progressRevision: StateFlow<Long> = repository.progressRevision
     private var longOperationJob: Job? = null
     private var systemMediaJob: Job? = null
+    private val progressClock = AtomicLong(System.currentTimeMillis())
 
     val uiState: StateFlow<GalleryUiState> = combine(
         repository.libraries,
@@ -341,10 +344,9 @@ class GalleryViewModel(
             .distinct()
             .toList()
         detailItemIds.value = browsingIds.takeIf { item.id in it } ?: listOf(item.id)
-        // The reader's chapter context is the whole ordered list the reader opened from, so
-        // "next chapter" means the same thing whether the Work was opened from a shelf or from
-        // the series chapter list.
-        readerQueueIds.value = browsingIds
+        // A normal grid/search result is only a paging context. It is not a Series and must never
+        // make an unrelated following result look like the next chapter.
+        readerQueueIds.value = listOf(item.id)
         setSelectedItem(item.id)
     }
 
@@ -353,7 +355,17 @@ class GalleryViewModel(
      * Used both by the chapter list and by the end-of-chapter hand-over.
      */
     fun openChapter(item: MediaItem, ordered: List<MediaItem>) {
-        open(item, ordered.ifEmpty { listOf(item) })
+        setActiveLibrary(item.libraryId)
+        val chapterIds = ordered.asSequence()
+            .filter { it.libraryId == item.libraryId && !it.trashed }
+            .map(MediaItem::id)
+            .distinct()
+            .toList()
+            .takeIf { item.id in it }
+            ?: listOf(item.id)
+        detailItemIds.value = chapterIds
+        readerQueueIds.value = chapterIds
+        setSelectedItem(item.id)
     }
 
     fun selectDetailItem(item: MediaItem) {
@@ -584,7 +596,7 @@ class GalleryViewModel(
                 series = series,
                 favorite = favorite,
             )
-            runCatching { repository.updateMedia(updated) }
+            runCatching { repository.updateMedia(item, updated) }
                 .onSuccess { message.value = "元数据已写入便携 Library" }
                 .onFailure(::showError)
         }
@@ -733,7 +745,7 @@ class GalleryViewModel(
 
     fun setFavorite(item: MediaItem, favorite: Boolean) {
         viewModelScope.launch {
-            runCatching { repository.updateMedia(item.copy(favorite = favorite)) }
+            runCatching { repository.updateMedia(item, item.copy(favorite = favorite)) }
                 .onSuccess { message.value = if (favorite) "已收藏" else "已取消收藏" }
                 .onFailure(::showError)
         }
@@ -833,6 +845,10 @@ class GalleryViewModel(
     }
 
     fun saveProgress(item: MediaItem, page: Int = 0, positionMs: Long = 0, finished: Boolean = false) {
+        // Stamp the UI event before launching its write. Coroutine scheduling is not an ordering
+        // guarantee: if an older page event starts later, the repository can now identify it as
+        // stale instead of moving portable progress backwards.
+        val requestedAt = nextProgressTimestamp()
         viewModelScope.launch {
             runCatching {
                 repository.saveProgress(
@@ -841,7 +857,7 @@ class GalleryViewModel(
                         page = page,
                         positionMs = positionMs,
                         finished = finished,
-                        lastOpenedAt = System.currentTimeMillis(),
+                        lastOpenedAt = requestedAt,
                     ),
                 )
             }.onFailure(::showError)
@@ -1079,6 +1095,14 @@ class GalleryViewModel(
         this >= 1_048_576 -> "%.1f MB".format(this / 1_048_576.0)
         this >= 1_024 -> "%.1f KB".format(this / 1_024.0)
         else -> "$this B"
+    }
+
+    private fun nextProgressTimestamp(): Long {
+        while (true) {
+            val previous = progressClock.get()
+            val next = maxOf(System.currentTimeMillis(), previous + 1)
+            if (progressClock.compareAndSet(previous, next)) return next
+        }
     }
 
     private data class SettingsStatus(

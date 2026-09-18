@@ -184,7 +184,7 @@ fun SeriesEditor(
                         listState = listState,
                         leading = { if (item != null) MediaThumbnail(item, viewModel, Modifier.fillMaxSize()) },
                         onClick = {
-                            item?.let { viewModel.open(it, memberIds.mapNotNull(worksById::get)) }
+                            item?.let { viewModel.openChapter(it, memberIds.mapNotNull(worksById::get)) }
                         },
                         headline = {
                             Text(

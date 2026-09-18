@@ -55,10 +55,6 @@ class DragReorderState internal constructor() {
     var rowHeightPx by mutableFloatStateOf(0f)
     var itemCount by mutableIntStateOf(0)
 
-    /** Pixels the list has been scrolled by the drag itself, so the row can follow it. */
-    var scrollOffset by mutableFloatStateOf(0f)
-        internal set
-
     /** The finger's position in the list viewport, which is what the auto-scroll follows. */
     var pointerY by mutableFloatStateOf(0f)
         internal set
@@ -66,25 +62,30 @@ class DragReorderState internal constructor() {
     val dragging: Boolean get() = draggingIndex != null
 
     /** Visual displacement of the dragged row from its laid-out position. */
-    val rowOffset: Float get() = dragOffset + scrollOffset
+    val rowOffset: Float get() = dragOffset
 
     internal fun start(index: Int, pointerInViewport: Float) {
         draggingIndex = index
         dragOffset = 0f
-        scrollOffset = 0f
         pointerY = pointerInViewport
     }
 
-    /** Auto-scroll moved the list under the finger, so the dragged row moves with it. */
-    internal fun scrolledBy(delta: Float) {
-        scrollOffset += delta
+    fun drag(deltaY: Float, onMove: (from: Int, to: Int) -> Unit) {
+        applyDelta(deltaY, onMove)
     }
 
-    fun drag(deltaY: Float, onMove: (from: Int, to: Int) -> Unit) {
+    /**
+     * Auto-scroll is movement of the list underneath the stationary finger. It must feed the
+     * same reorder arithmetic as a finger drag; a visual translation alone scrolls the original
+     * row out of composition without ever changing the member order.
+     */
+    internal fun scrolledBy(delta: Float, onMove: (from: Int, to: Int) -> Unit) {
+        applyDelta(delta, onMove)
+    }
+
+    private fun applyDelta(delta: Float, onMove: (from: Int, to: Int) -> Unit) {
         val index = draggingIndex ?: return
-        dragOffset += deltaY
-        pointerY += deltaY
-        val result = reorderStep(index, dragOffset, rowHeightPx, itemCount)
+        val result = reorderStep(index, dragOffset + delta, rowHeightPx, itemCount)
         result.moves.forEach { (from, to) -> onMove(from, to) }
         draggingIndex = result.index
         dragOffset = result.offset
@@ -93,7 +94,6 @@ class DragReorderState internal constructor() {
     fun finish() {
         draggingIndex = null
         dragOffset = 0f
-        scrollOffset = 0f
     }
 }
 
@@ -247,7 +247,7 @@ fun ReorderableRow(
                 )
                 if (speed != 0f && elapsed > 0) {
                     val consumed = listState.scrollBy(dragAutoScrollDelta(speed, elapsed))
-                    if (consumed != 0f) state.scrolledBy(consumed)
+                    if (consumed != 0f) state.scrolledBy(consumed, onMove)
                 }
             }
         }
