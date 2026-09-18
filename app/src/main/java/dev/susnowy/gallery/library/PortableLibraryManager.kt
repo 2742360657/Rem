@@ -307,66 +307,10 @@ class PortableLibraryManager(
         fun sanitizeDisplayName(value: String): String =
             value.trim().replace(Regex("[\\r\\n\\t]+"), " ").take(120).ifBlank { "Rem Library" }
 
-        fun libraryGuide(library: PortableLibrary): String = """
-            # ${library.name}
-
-            这是一个 Rem 便携媒体库。媒体原文件属于用户；`.gallery/` 只保存可以随盘移动的身份、逻辑关系、人工元数据、进度和安全事务。当前格式为 Schema v${library.schemaVersion}，规范位于 `.gallery/schema/v4.json`。
-
-            根目录中的 `.nomedia` 用于阻止 Android 系统相册重复收录 Library 内的媒体副本；Rem 自己通过 SAF 扫描，不受影响。
-
-            ## Agent 开始前必须读取
-
-            1. 本文件；
-            2. `.gallery/library.json` 和 `.gallery/schema/v4.json`；
-            3. `.gallery/items/catalog.json` 中即将修改的实体及其 `field_sources`；
-            4. `.gallery/state/inbox.json` 中已经存在的 Inbox 决定，避免重复处理或复活被忽略内容；
-            5. `.gallery/transactions/` 中是否存在未完成事务；`.gallery/imports/` 是程序维护的导入/派生来源清单。
-
-            不要直接修改 Android 本机数据库。它只是可重建索引，不是便携真相。
-
-            ## Schema v4 的实体
-
-            - `assets`：物理文件、目录或压缩包，只保存 Library 相对路径和来源技术信息。
-            - `works`：用户看到和编辑的逻辑作品；标题、作者、标签、归属和收藏状态在这里。
-            - `editions`：某个 Work 的一个取得版本，按角色引用一个或多个 Asset。多版本不得靠覆盖路径表达。
-            - `groups`：为了“一起浏览”建立的 Work 集合，可用于写真集、图片/视频混合组或人工集合；它不是 Series。
-            - `series`：有先后关系的 Work 序列，可使用手动顺序、季/集或卷/章；成员允许不编号。
-            - `.gallery/state/state.json`：以 `work_id` 保存进度和逻辑回收站状态。
-            - `.gallery/state/inbox.json`：以 Library 相对路径（有 Work 时同时记录 `work_id`）保存 Inbox 决定：`accepted`（接受建议）、`classified`（人工归类）、`ignored`（不再出现在普通视图）、`handled`（待判断路径已由用户处理）。`target` 说明决定针对媒体还是待判断路径。
-
-            每个关系只在一个方向保存：Edition 指向 Work/Asset，Group 和 Series 指向 Work。不要再在 Work 内复制成员列表。
-
-            ## 三个内容区域
-
-            - 相册：`Photos/` 中的图片和视频，按拍摄时间浏览，不需要作者或标签。
-            - 图片 / 视频：普通图片、视频、写真集及图片视频混合组，主要按目录或 Group 浏览。
-            - 漫画 / 阅读：独立漫画和 Series，使用连续阅读与进度。
-
-            `domain`（`album`、`classified`、`works`）是最终归属；目录名只是识别证据。修改归属、Group 或 Series 不需要移动媒体。
-
-            ## 识别和来源
-
-            `JM/`、纯数字目录和相似标题都不是权威。只有结构、sidecar 或稳定来源 ID 足够明确时才提出建议；不确定内容留在 Inbox，由用户或本地 Agent 处理。
-            常见来源包括 `JM/<album_id>`、带 `.ehviewer` 标记的 EhViewer GID 目录，以及 Pixiv `<illust_id>_p<page>` 文件。
-            `source:jm` / `jm:album:<id>`、`source:ehviewer` / `eh:gid:<id>`、`source:pixiv` / `pixiv:id:<id>` 是稳定的来源 Tag，Agent 整理时应保留。账号、Cookie、Token 不得写入 Library。
-
-            ## Agent 写入规则
-
-            - 先备份将修改的 `.gallery` 文档，再逐字段合并；不得整条覆盖。
-            - 任何来源为 `manual` 的字段都不得修改、清空、追加、翻译、规范化或去重。
-            `tags` 是字段级保护：只要 `field_sources.tags` 为 `manual`，整组标签必须原样保留；未锁定时可以同步并去重，但必须保留 `source:*` 和来源 ID Tag。
-            - 可靠的外部结果标记为 `provider:<来源>`；只有用户明确指定的值才标为 `manual`。多个候选或低置信度时保持原值并请求确认。
-            - 路径必须使用 `/` 分隔的 Library 相对路径，禁止 Android URI、盘符、绝对路径和 `..`。
-            - 不得擅自修改 ID、`revision`、时间戳、哈希、事务或活动回收站记录。
-            - `.gallery/state/inbox.json` 是用户的决定：不要删除已有决定，不要让被 `ignored` 的路径重新出现在建议里。Agent 自己写入时必须把 `by` 标为 `agent:<标识>`，且 `handled` 只能用于 `target` 为 `discovery` 的路径；`classified` 的权威归属仍在 Work 的 `domain`。
-            - Group 只表达一起浏览；Series 只表达顺序；Edition 表达同一 Work 的不同来源版本。不要用同作者或相似标题自动建立永久关系。
-            Group 成员的 `sort_index` 就是用户看到的顺序；不要擅自重排、增删用户建立的分组或改它的封面，删除分组只允许删除关系。
-            Series 的 `sort_index` 是阅读顺序，季/集/卷/章是用户编号；不要擅自重排、清空编号或改写 `field_sources.series` 为 `manual` 的归属。
-            - 自动整理不得移动、改名、合并或删除媒体。物理操作必须由用户确认计划，并写入可恢复事务。
-            - 完成后让 Rem 重扫，并报告实际修改、未匹配项目和冲突。
-
-            不要删除 `.gallery`、`.nomedia` 或活动事务。账号、Cookie、Token 只能在用户授权会话中临时使用，不能保存到 Library、日志或 Git。
-        """.trimIndent() + "\n"
+        fun libraryGuide(library: PortableLibrary): String =
+            "# ${sanitizeDisplayName(library.name)}\n\n" +
+                "这是一个 Rem 便携媒体库。Schema v${library.schemaVersion}；Library ID: ${library.libraryId}。\n\n" +
+                dev.susnowy.gallery.portable.LibraryAgentInstructions.text()
 
         fun schemaDocument(): String = """
             {

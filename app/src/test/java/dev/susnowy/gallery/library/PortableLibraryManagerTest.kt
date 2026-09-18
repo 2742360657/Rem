@@ -19,6 +19,22 @@ import org.junit.Test
 
 class PortableLibraryManagerTest {
     @Test
+    fun generatedGuideContainsStandaloneOrganizingAndEditingContract() {
+        val access = MemoryDocumentAccess()
+        PortableLibraryManager(access).initialize("Guide fixture")
+        val guide = access.files.getValue(PortableLibraryManager.GUIDE_FILE).decodeToString()
+        assertTrue(guide.contains("连载漫画"))
+        assertTrue(guide.contains("field_sources"))
+        assertTrue(guide.contains("expected_catalog_sha256"))
+        assertTrue(guide.contains("state/state.json"))
+        assertTrue(guide.contains("单写入者"))
+        assertTrue(guide.contains("entry_path"))
+        assertTrue(guide.contains("Cookie、Token"))
+        assertTrue(guide.contains(".nomedia"))
+        assertTrue(guide.contains(".gallery/imports/"))
+    }
+
+    @Test
     fun initializeCreatesPortableIdentityAndGuide() {
         val access = MemoryDocumentAccess()
         val library = PortableLibraryManager(access).initialize("  My\nLibrary  ")

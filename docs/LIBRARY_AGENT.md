@@ -42,6 +42,8 @@ Agent 不应要求 Android 先把所有内容识别正确。
 
 绝不把主机盘符或当前挂载点写入便携数据。
 
+账号、Cookie、Token 等凭据只能在用户授权会话中临时使用，不得进入 Library、日志、fixture、诊断导出或 Git。不要删除 `.gallery/`、`.nomedia` 或活动事务；`.nomedia` 用于阻止 Android 系统相册重复收录 Library 媒体，Rem 的 SAF 扫描不受影响。`.gallery/imports/` 是程序维护的导入及派生来源清单，不把它当成可随意改写的整理结果。
+
 任何来源为 `manual` 的字段都不得修改、清空、追加、翻译、规范化或去重。
 `field_sources.tags` 为 `manual`，整组标签必须原样保留；人工空值同样保护。
 Group 只表达一起浏览；Series 只表达顺序；Edition 表达同一 Work 的取得版本。

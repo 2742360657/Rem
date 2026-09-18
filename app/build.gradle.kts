@@ -88,7 +88,11 @@ android {
     testOptions {
         unitTests.isReturnDefaultValues = true
     }
+
+    sourceSets["main"].resources.srcDir(rootProject.layout.buildDirectory.dir("generated/library-agent-resources"))
 }
+
+tasks.named("preBuild") { dependsOn(rootProject.tasks.named("prepareLibraryAgentResources")) }
 
 /**
  * Keeps the R8 mapping next to the released APK.

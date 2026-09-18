@@ -33,6 +33,40 @@ class DocumentTreeStorageInstrumentedTest {
     }
 
     @Test
+    fun agentPlanRoundTripsThroughSafWithoutTouchingManualFields() {
+        val storage = DocumentTreeStorage(context, treeUri)
+        val library = PortableLibraryManager(storage).initialize("Agent readback fixture")
+        val writer = dev.susnowy.gallery.library.PortableDocumentWriter(storage)
+        assertTrue(writer.read("GALLERY_LIBRARY.md")!!.contains("expected_catalog_sha256"))
+        val store = dev.susnowy.gallery.metadata.PortableMetadataStore(storage)
+        store.saveItem(dev.susnowy.gallery.model.MediaItem(
+            id = "agent-work", libraryId = library.libraryId, relativePath = "Missing/book.cbz", uri = "",
+            kind = dev.susnowy.gallery.model.MediaKind.IMAGE_SET,
+            sourceKind = dev.susnowy.gallery.model.SourceKind.ARCHIVE,
+            displayTitle = "人工标题", fieldSources = mapOf("display_title" to "manual"),
+        ), 0)
+        val original = writer.read(".gallery/items/catalog.json")!!
+        val plan = dev.susnowy.gallery.portable.AgentEditPlan(
+            library.libraryId,
+            dev.susnowy.gallery.portable.AgentCatalogEdits.sha256(original.toByteArray(Charsets.UTF_8)),
+            "readback-test",
+            listOf(dev.susnowy.gallery.portable.AgentWorkEdit("agent-work",
+                kotlinx.serialization.json.Json.parseToJsonElement(
+                    """{"display_title":"不应覆盖","collections":["Agent 分类"]}""",
+                ) as kotlinx.serialization.json.JsonObject,
+            )),
+        )
+        val prepared = dev.susnowy.gallery.portable.AgentCatalogEdits.prepare(original, plan)
+        writer.write(".gallery/items/catalog.json", prepared.catalog, "application/json")
+        val reopened = dev.susnowy.gallery.metadata.PortableMetadataStore(DocumentTreeStorage(context, treeUri))
+        val work = reopened.loadCatalog(library.libraryId).works.single()
+        assertEquals("人工标题", work.displayTitle)
+        assertEquals(listOf("Agent 分类"), work.collections)
+        assertEquals("provider:readback-test", work.fieldSources["collections"])
+        assertNull(storage.find("Missing/book.cbz"))
+    }
+
+    @Test
     fun outputCloseRefreshesCachedFileSize() {
         val storage = DocumentTreeStorage(context, treeUri)
         val document = storage.createFile("size.jpg", "image/jpeg")
