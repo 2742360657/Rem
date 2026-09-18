@@ -46,7 +46,7 @@ class ArchiveCacheConcurrencyTest {
         val cache = ArchiveCache(root)
         val priority = MediaReadPriority()
         val preview = async(Dispatchers.IO) {
-            priority.preview {
+            priority.background {
                 cache.open("lib", "preview.zip", zip.size.toLong(), 1, access)!!.use {
                     assertNotNull(it.getEntry("page.txt"))
                 }

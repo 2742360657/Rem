@@ -111,7 +111,8 @@ class GalleryRepository(context: Context) {
         encodeDefaults = true
     }
     private val database = GalleryDatabase(appContext)
-    private val scanner = LibraryScanner()
+    private val mediaReadPriority = MediaReadPriority()
+    private val scanner = LibraryScanner(beforeDirectoryRead = mediaReadPriority::awaitBackgroundTurn)
     private val organizer = OrganizerService()
     private val importer = SystemMediaImporter(appContext)
     private val systemMediaCatalog = SystemMediaCatalog(appContext)
@@ -121,7 +122,6 @@ class GalleryRepository(context: Context) {
     private val pageManifests = PageManifestService(archives = archives)
     private val content = MediaContentService(archives = archives)
     private val offlinePreviews = OfflinePreviewStore(appContext, archives = archives)
-    private val mediaReadPriority = MediaReadPriority()
     /**
      * Every portable store performs a read-modify-write of one of the shared `.gallery`
      * documents. Serializing only playback progress is insufficient: a simultaneous trash,
@@ -601,7 +601,7 @@ class GalleryRepository(context: Context) {
             val enriched = mutableListOf<Pair<MediaItem, ScanEnrichment>>()
             batch.forEach { item ->
                 coroutineContext.ensureActive()
-                runCatching { scanner.enrich(storage, item, archives) }
+                runCatching { mediaReadPriority.background { scanner.enrich(storage, item, archives) } }
                     .onSuccess { result -> enriched += item to result }
                     .onFailure { error ->
                         if (error is CancellationException) throw error
@@ -1432,7 +1432,7 @@ class GalleryRepository(context: Context) {
         onIo { database.progressFor(itemIds) }
 
     suspend fun offlinePreview(item: MediaItem): java.io.File? =
-        mediaReadPriority.preview { offlinePreviews.getOrCreate(item, storageFor(requireLibrary(item.libraryId))) }
+        mediaReadPriority.background { offlinePreviews.getOrCreate(item, storageFor(requireLibrary(item.libraryId))) }
 
     suspend fun offlinePreviewStats(): OfflinePreviewStats = offlinePreviews.stats()
 

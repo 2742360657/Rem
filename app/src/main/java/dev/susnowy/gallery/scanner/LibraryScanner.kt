@@ -161,7 +161,7 @@ private class ScanStatistics {
     )
 }
 
-class LibraryScanner {
+class LibraryScanner(private val beforeDirectoryRead: suspend () -> Unit = {}) {
     private val comicInfo = ComicInfoReader()
     suspend fun scan(
         storage: DocumentTreeStorage,
@@ -225,6 +225,7 @@ class LibraryScanner {
         onProgress: (ScanProgress) -> Unit,
     ) {
         coroutineContext.ensureActive()
+        beforeDirectoryRead()
         val entries = runCatching { storage.list(path) }.getOrElse { error ->
             RemLog.warn(TAG, "无法读取 ${path.ifEmpty { "Library 根目录" }}", error)
             warnings += "无法读取 ${path.ifEmpty { "Library 根目录" }}：${error.message.orEmpty()}"
@@ -495,7 +496,7 @@ class LibraryScanner {
      * the content had to be opened. A size or timestamp difference always forces a re-read,
      * so an edited file can never keep a stale fingerprint.
      */
-    private fun contentHash(
+    private suspend fun contentHash(
         storage: DocumentTreeStorage,
         entry: StorageEntry,
         prior: ScanSnapshot,
@@ -513,16 +514,7 @@ class LibraryScanner {
         if (depth == ScanDepth.INVENTORY) return DeferredValue(deferred = true)
         statistics.contentRead(entry.relativePath)
         val document = LibraryDocument(entry.relativePath, entry.name, false, locator = entry.uri)
-        val digest = MessageDigest.getInstance("SHA-256")
-        storage.openInput(document).use { input ->
-            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-            while (true) {
-                val count = input.read(buffer)
-                if (count < 0) break
-                digest.update(buffer, 0, count)
-            }
-        }
-        return DeferredValue(digest.digest().toHex())
+        return DeferredValue(storage.openInput(document).use { cancellableSha256(it) })
     }
 
     private fun StorageEntry.toCandidate(

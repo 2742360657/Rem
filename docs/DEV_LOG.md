@@ -6,6 +6,12 @@
 
 条目按时间倒序。同一问题的后续进展追加到原条目，不另起新条。
 
+## 2026-09-19：扫描及信息补全为前台读取让路
+
+- R11：MediaReadPriority 的通用 background 接口只包住 scanner.enrich 的读取阶段；重读后结果才进入原有并发合并与提交，取消不记为补全失败。Inventory 在每次目录查询前等待前台结束，不因让路重新扫描。SHA-256 在每次读取前后检查取消。
+- 聚焦抢占、缓存、哈希测试通过，完整单测/lint/debug 和 test APK 构建通过；API 36 新增 ScanPriority 与原 SAF/OfflinePreview 共 11 项设备测试通过。阻塞哈希输入验证关闭流、准确摘要及单次交付；真实测试 Provider 验证等待时根目录查询为 0，恢复后为 1，等待中取消不继续查询。
+- 不承诺立即中断 Provider 同步调用；Exif、容器检查等同步步骤也需返回后才能传播取消。Coil 直接读取尚未纳入；真实库冷/热与长期负载未验证。
+
 ## 2026-09-19：管理列表定位与 Inbox 分区状态
 
 - R07/R08：复用 ListPositionButton 接入 Inbox 三个路径列表与 Group/Series 编辑器。Inbox 的 SaveableStateHolder 在空内容分支前建立，每个分区保存独立位置，外层 GalleryApp 已按 Library 和页面隔离。已忽略媒体选择改用现有 StringSetSaver。

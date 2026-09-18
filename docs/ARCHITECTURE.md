@@ -17,7 +17,7 @@ Debug and release can coexist. Device-local SQLite data, logs, previews, and SAF
 
 ## Data ownership
 
-`MediaReadPriority` lets repository page loading and archive/oversized decoding preempt offline preview generation. A preempted preview retries after all foreground reads finish; caller cancellation never retries. Cancellation releases archive copying cooperatively between reads, not during a blocking Provider call. This does not yet schedule scanner/enrichment or Coil's direct reads.
+`MediaReadPriority` lets repository page loading and archive/oversized decoding preempt offline preview generation and the read phase of enrichment. Preempted reads retry after all foreground reads finish; caller cancellation never retries. Portable/index commits stay outside the retry block. Inventory waits before its next directory query; it does not restart a whole scan. Hashing and archive copying check cancellation between reads, not during a blocking Provider call. Coil's direct reads do not yet participate.
 
 `ArchiveCache` separates its serialized copy lock from short cache lookup/commit locks. Cached ZIP opens and statistics do not wait on Provider copying. Clear waits for copying before removing files, preserving its existing semantics. Uncached requests still serialize; this is not a complete foreground-priority scheduler.
 

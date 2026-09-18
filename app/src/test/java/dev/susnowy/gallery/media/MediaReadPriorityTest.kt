@@ -11,7 +11,7 @@ class MediaReadPriorityTest {
         val cancelled = CompletableDeferred<Unit>()
         var attempts = 0
         val preview = async {
-            gate.preview {
+            gate.background {
                 attempts++
                 if (attempts == 1) {
                     started.complete(Unit)
@@ -35,11 +35,11 @@ class MediaReadPriorityTest {
         val gate = MediaReadPriority()
         var attempts = 0
         val started = CompletableDeferred<Unit>()
-        val preview = launch { gate.preview { attempts++; started.complete(Unit); awaitCancellation() } }
+        val preview = launch { gate.background { attempts++; started.complete(Unit); awaitCancellation() } }
         started.await()
         preview.cancelAndJoin()
         assertEquals(1, attempts)
         runCatching { gate.foreground { error("read failed") } }
-        assertEquals("next", withTimeout(2_000) { gate.preview { "next" } })
+        assertEquals("next", withTimeout(2_000) { gate.background { "next" } })
     }
 }
