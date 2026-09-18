@@ -677,10 +677,19 @@ private fun WorksLibraryScreen(
                 WorkFacet.ALL -> emptyList()
                 WorkFacet.AUTHOR -> item.authors
                 WorkFacet.TAG -> item.tags
-                WorkFacet.SERIES -> listOfNotNull(item.series?.title)
+                // Series identity is its portable id; filtering by title would merge two
+                // legitimately same-named Series into one list of works.
+                WorkFacet.SERIES -> listOfNotNull(item.series?.id)
             }
         }.distinctBy { it.lowercase(Locale.ROOT) }.sortedWith(String.CASE_INSENSITIVE_ORDER)
     }
+    // Series ids are not readable, so the facet list and the filter label fall back to the title.
+    fun facetLabel(value: String): String =
+        if (facet != WorkFacet.SERIES) {
+            value
+        } else {
+            typed.firstOrNull { it.series?.id == value }?.series?.title ?: value
+        }
     LaunchedEffect(facet, facetValues) {
         if (selectedFacet !in facetValues) selectedFacet = null
     }
@@ -691,7 +700,7 @@ private fun WorksLibraryScreen(
                     WorkFacet.ALL -> true
                     WorkFacet.AUTHOR -> selectedFacet in item.authors
                     WorkFacet.TAG -> selectedFacet in item.tags
-                    WorkFacet.SERIES -> item.series?.title?.equals(selectedFacet, ignoreCase = true) == true
+                    WorkFacet.SERIES -> item.series?.id == selectedFacet
                 }
             }
             .filter { item ->
@@ -773,6 +782,7 @@ private fun WorksLibraryScreen(
                 sort = sort,
                 onSortChange = { sort = it },
                 onClear = ::clearSearch,
+                facetLabel = ::facetLabel,
             )
         }
         return
@@ -862,6 +872,7 @@ private fun WorksLibraryScreen(
             sort = sort,
             onSortChange = { sort = it },
             onClear = ::clearSearch,
+                facetLabel = ::facetLabel,
         )
     }
 }
@@ -879,6 +890,7 @@ private fun WorkSearchPanel(
     sort: WorkSort,
     onSortChange: (WorkSort) -> Unit,
     onClear: () -> Unit,
+    facetLabel: (String) -> String = { it },
 ) {
     Text(
         "筛选仅影响当前作品页，不会修改文件或元数据。",
@@ -914,7 +926,9 @@ private fun WorkSearchPanel(
             FilterChip(
                 selected = selectedFacet == value,
                 onClick = { onSelectedFacetChange(value) },
-                label = { Text(value, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                label = {
+                    Text(facetLabel(value), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                },
                 modifier = Modifier.fillMaxWidth(),
             )
         }
@@ -1461,9 +1475,12 @@ private fun CreateImageSetDialog(
     onCreate: (List<String>, String) -> Unit,
 ) {
     var title by remember { mutableStateOf("新漫画/图集") }
-    var selected by remember(items, initialSelected) {
-        mutableStateOf(initialSelected.intersect(items.mapTo(mutableSetOf(), MediaItem::id)))
-    }
+    // The candidate list comes from the media flow, which is re-emitted by every scan/enrichment
+    // commit. Keying the selection on that list discarded the ticks the user had just made, so the
+    // starting selection is captured once and only pruned to the items that still exist.
+    val initialIds = remember { initialSelected.intersect(items.mapTo(mutableSetOf(), MediaItem::id)) }
+    var selected by remember { mutableStateOf(initialIds) }
+    selected = selected.intersect(items.mapTo(mutableSetOf(), MediaItem::id))
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("创建漫画/图集") },
@@ -1833,7 +1850,12 @@ private fun SettingsScreen(state: GalleryUiState, viewModel: GalleryViewModel) {
                 value = daysText,
                 onValueChange = { daysText = it.filter(Char::isDigit).take(4) },
                 label = { Text("回收站保留天数") },
-                supportingText = { Text("自定义天数；到期内容仍需经过身份验证后才会真删除") },
+                supportingText = {
+                    Text(
+                        "到期项会在下次启动 Rem 时直接真删除并提示数量，不会再次询问；" +
+                            "填 0 或选“永久”则永久保留，只能手动删除。",
+                    )
+                },
                 singleLine = true,
             )
             FilledTonalButton(

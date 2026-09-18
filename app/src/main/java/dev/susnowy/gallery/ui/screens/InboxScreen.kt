@@ -26,6 +26,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -71,10 +72,21 @@ enum class InboxSection(val label: String) {
     HANDLED("已处理"),
 }
 
+/** Keeps an Inbox selection across a configuration change, so the mode is never restored empty. */
+private val StringSetSaver = Saver<Set<String>, ArrayList<String>>(
+    save = { ArrayList(it) },
+    restore = { it.toSet() },
+)
+
 @Composable
 fun InboxScreen(content: InboxContent, viewModel: GalleryViewModel) {
     var selectionMode by rememberSaveable { mutableStateOf(false) }
-    var selected by remember { mutableStateOf(emptySet<String>()) }
+    // Selection mode and the selection have to survive together: the mode is saveable, so a plain
+    // `remember` selection came back empty after a rotation or a trip to another tab and left the
+    // user in a mode whose buttons are all disabled, with no way out.
+    var selected by rememberSaveable(stateSaver = StringSetSaver) {
+        mutableStateOf(emptySet<String>())
+    }
     var selectedIgnored by remember { mutableStateOf(emptySet<String>()) }
     var section by rememberSaveable {
         mutableStateOf(
@@ -215,6 +227,10 @@ private fun PendingMediaSection(
                         onSelectionModeChange(false)
                     },
                 ) { Text("忽略") }
+                TextButton(onClick = {
+                    onSelectedChange(emptySet())
+                    onSelectionModeChange(false)
+                }) { Text("完成") }
             } else {
                 TextButton(onClick = { onSelectionModeChange(true) }) { Text("选择") }
             }

@@ -1086,6 +1086,12 @@ class GalleryViewModel(
     }
 
     private fun setActiveLibrary(libraryId: String?) {
+        if (activeLibraryId.value != libraryId) {
+            // A plan describes real paths inside one Library. Keeping it across a Library switch
+            // would let the Organizer offer to move files of a Library the user is no longer
+            // looking at, under a template chip that no longer describes that plan.
+            _organizationPlan.value = null
+        }
         activeLibraryId.value = libraryId
         preferences.edit {
             if (libraryId == null) remove(ACTIVE_LIBRARY_KEY) else putString(ACTIVE_LIBRARY_KEY, libraryId)

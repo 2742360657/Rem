@@ -100,6 +100,9 @@ fun GroupShelf(
             )
             TextButton(onClick = { picking = true }) { Text("新建分组") }
         }
+        // The dialogs are the only path from the button to a real Group, so they have to be
+        // composed for both layouts; keeping them inside this branch made the identical button in
+        // the list below do nothing as soon as one group or derived folder existed.
         NewGroupDialogs(
             picking = picking,
             naming = naming,
@@ -174,6 +177,14 @@ fun GroupShelf(
             }
         }
     }
+    NewGroupDialogs(
+        picking = picking,
+        naming = naming,
+        candidates = items,
+        viewModel = viewModel,
+        onPickingChange = { picking = it },
+        onNamingChange = { naming = it },
+    )
 }
 
 @Composable
