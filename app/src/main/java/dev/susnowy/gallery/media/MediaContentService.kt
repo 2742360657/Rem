@@ -35,8 +35,17 @@ class MediaContentService(
     private val archives: ArchiveCache,
     archiveBitmapCacheBytes: Int = DEFAULT_ARCHIVE_BITMAP_CACHE_BYTES,
 ) {
-    private val archiveBitmapCache = object : LruCache<String, Bitmap>(archiveBitmapCacheBytes) {
-        override fun sizeOf(key: String, value: Bitmap): Int = value.allocationByteCount
+    private data class ArchiveBitmapKey(
+        val libraryId: String,
+        val archivePath: String,
+        val size: Long,
+        val modifiedAt: Long,
+        val entryName: String,
+        val targetWidth: Int,
+        val targetHeight: Int,
+    )
+    private val archiveBitmapCache = object : LruCache<ArchiveBitmapKey, Bitmap>(archiveBitmapCacheBytes) {
+        override fun sizeOf(key: ArchiveBitmapKey, value: Bitmap): Int = value.allocationByteCount
     }
     private val archiveDecodeMutex = Mutex()
 
@@ -71,20 +80,22 @@ class MediaContentService(
         targetHeight: Int,
         archivePath: String = item.relativePath,
     ): Bitmap? = withContext(Dispatchers.IO) {
-        val cacheKey = listOf(
-            archivePath,
-            item.modifiedAt,
-            entryName,
-            targetWidth,
-            targetHeight,
-        ).joinToString(":")
+        // A merged Edition may read another archive whose version differs from its Work.
+        val owner = if (archivePath == item.relativePath) item else {
+            val entry = storage.entry(archivePath) ?: return@withContext null
+            item.copy(relativePath = archivePath, size = entry.size, modifiedAt = entry.lastModified)
+        }
+        val cacheKey = ArchiveBitmapKey(
+            owner.libraryId, archivePath, owner.size, owner.modifiedAt,
+            entryName, targetWidth, targetHeight,
+        )
         archiveBitmapCache.get(cacheKey)?.let { return@withContext it }
 
         archiveDecodeMutex.withLock {
             archiveBitmapCache.get(cacheKey)?.let { return@withLock it }
             val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             val readSucceeded = runCatching {
-                decodeArchiveEntry(archivePath, entryName, storage, bounds, item)
+                decodeArchiveEntry(archivePath, entryName, storage, bounds, owner)
             }.onFailure { error ->
                 RemLog.failure(TAG, "读取压缩包条目失败：$archivePath!$entryName", error)
             }.isSuccess
@@ -103,7 +114,7 @@ class MediaContentService(
                 inSampleSize = calculateSampleSize(bounds.outWidth, bounds.outHeight, targetWidth, targetHeight)
                 inPreferredConfig = Bitmap.Config.RGB_565
             }
-            decodeArchiveEntry(archivePath, entryName, storage, options, item)?.also { bitmap ->
+            decodeArchiveEntry(archivePath, entryName, storage, options, owner)?.also { bitmap ->
                 archiveBitmapCache.put(cacheKey, bitmap)
             }
         }

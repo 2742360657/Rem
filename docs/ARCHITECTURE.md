@@ -21,6 +21,8 @@ Debug and release can coexist. Device-local SQLite data, logs, previews, and SAF
 
 ## Data ownership
 
+`MediaContentService` keys decoded archive pages by Library ID, archive path, size, modified time, entry name and decode target dimensions. Virtual merged Editions resolve the referenced archive's metadata before both cache lookup and decoding; the containing Work's version does not identify another archive. This is a disposable memory cache, not portable metadata.
+
 `MediaReadPriority` lets repository page loading and archive/oversized decoding preempt offline preview generation and the read phase of enrichment. Preempted reads retry after all foreground reads finish; caller cancellation never retries. Portable/index commits stay outside the retry block. Inventory waits before its next directory query; it does not restart a whole scan. Hashing and archive copying check cancellation between reads, not during a blocking Provider call. Coil's direct reads do not yet participate.
 
 `ArchiveCache` separates its serialized copy lock from short cache lookup/commit locks. Cached ZIP opens and statistics do not wait on Provider copying. Clear waits for copying before removing files, preserving its existing semantics. Uncached requests still serialize; this is not a complete foreground-priority scheduler.
