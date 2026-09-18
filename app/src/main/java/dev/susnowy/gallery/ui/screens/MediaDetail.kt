@@ -120,6 +120,7 @@ import dev.susnowy.gallery.model.SeriesRef
 import dev.susnowy.gallery.model.SourceKind
 import dev.susnowy.gallery.ui.GalleryViewModel
 import dev.susnowy.gallery.ui.chapterEndReached
+import dev.susnowy.gallery.ui.chapterEndState
 import dev.susnowy.gallery.ui.resumePageIndex
 import dev.susnowy.gallery.ui.components.MetadataEditor
 import dev.susnowy.gallery.ui.components.MediaGrid
@@ -1070,7 +1071,7 @@ private fun ImageSetReader(
     onFinishChapter: () -> Unit,
     onOpenNextChapter: (MediaItem) -> Unit = {},
 ) {
-    val restorePage by produceState<Int?>(initialValue = startPage, item.id, startPage) {
+    val restorePage by produceState<Int?>(initialValue = null, item.id, startPage) {
         value = startPage
     }
     val context = LocalContext.current
@@ -1116,25 +1117,39 @@ private fun ImageSetReader(
                 viewModel.saveProgress(item, page = visiblePage, finished = completedThisSession)
             }
     }
-    // Completion means the physical end of the list after forward movement from the restored
-    // position. Showing the first pixel of a tall last page is not completion, and reopening a
-    // chapter whose saved page is last must not immediately jump onward.
-    LaunchedEffect(listState, pages.size, restored, advancedAfterRestore, completedThisSession) {
+    // Completion is recorded when the reader reaches the physical end after moving forward, or
+    // when the whole chapter fits on screen so no forward movement exists. Only the first case
+    // hands over automatically: an end that was already visible when the chapter opened is not an
+    // arrival, and a single-page chapter would otherwise jump onward before it was read.
+    // `positionInitialized` is a key, not just an argument: a snapshotFlow block only re-evaluates
+    // when snapshot state it read changes, so a settled flag arriving as a parameter would leave
+    // the flow reporting the pre-restore value forever.
+    LaunchedEffect(
+        listState,
+        pages.size,
+        restored,
+        advancedAfterRestore,
+        completedThisSession,
+        positionInitialized,
+    ) {
         if (!restored || pages.isEmpty() || completedThisSession) return@LaunchedEffect
         snapshotFlow {
-            chapterEndReached(
+            val visible = listState.layoutInfo.visibleItemsInfo
+            chapterEndState(
                 pageCount = pages.size,
-                lastVisibleItemIndex = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1,
+                lastVisibleItemIndex = visible.lastOrNull()?.index ?: -1,
                 canScrollForward = listState.canScrollForward,
                 advancedAfterRestore = advancedAfterRestore,
+                footnoteVisible = visible.any { it.index > pages.lastIndex },
+                settled = positionInitialized,
             )
         }
             .distinctUntilChanged()
-            .collect { finished ->
-                if (finished && !completedThisSession) {
+            .collect { state ->
+                if (state.reachedEnd && !completedThisSession) {
                     completedThisSession = true
                     viewModel.saveProgress(item, page = pages.lastIndex, finished = true)
-                    if (autoAdvance) nextChapter?.let(onOpenNextChapter)
+                    if (state.arrivedByScrolling && autoAdvance) nextChapter?.let(onOpenNextChapter)
                 }
             }
     }

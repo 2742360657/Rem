@@ -108,7 +108,8 @@ object SeriesReading {
 /**
  * True only after the reader moved forward from its restored position and reached the physical
  * end of the chapter. Merely restoring the last page is not completion: a tall last page may
- * still have most of its content below the viewport.
+ * still have most of its content below the viewport, and reopening a finished chapter must not
+ * immediately jump onward.
  */
 fun chapterEndReached(
     pageCount: Int,
@@ -119,6 +120,67 @@ fun chapterEndReached(
     advancedAfterRestore &&
     lastVisibleItemIndex >= pageCount - 1 &&
     !canScrollForward
+
+/**
+ * True when the whole chapter fits on screen, so there is no forward movement left to make.
+ *
+ * A chapter whose end is visible from the start — a one-page chapter, or a chapter opened while
+ * the restored position is still being resolved — can never satisfy [chapterEndReached]. This is
+ * the second way to record that such a chapter was read. It is deliberately *not* what drives the
+ * automatic hand-over: an end that was already on screen when the chapter opened is not an
+ * arrival, and a single-page chapter would otherwise mark itself finished and jump onward before
+ * the reader saw anything.
+ */
+fun chapterFitsOnScreen(
+    pageCount: Int,
+    lastVisibleItemIndex: Int,
+    canScrollForward: Boolean,
+    footnoteVisible: Boolean,
+): Boolean = pageCount > 0 &&
+    !canScrollForward &&
+    footnoteVisible &&
+    lastVisibleItemIndex >= pageCount - 1
+
+/** What the reader should do about the end of the current chapter. */
+data class ChapterEndState(
+    /** The chapter may be recorded as read. */
+    val reachedEnd: Boolean,
+    /** The reader actually moved to the end, so it may continue automatically. */
+    val arrivedByScrolling: Boolean,
+)
+
+/**
+ * Decides the end-of-chapter outcome in one place.
+ *
+ * [settled] must be false while the restored position is still being applied. On the first frame
+ * of a one-page chapter the list is already showing page 1 and not yet scrolled to the restored
+ * position, which looks exactly like "the whole chapter fits" — that is how opening such a chapter
+ * used to mark it read and hand over before the reader saw anything.
+ */
+fun chapterEndState(
+    pageCount: Int,
+    lastVisibleItemIndex: Int,
+    canScrollForward: Boolean,
+    advancedAfterRestore: Boolean,
+    footnoteVisible: Boolean,
+    settled: Boolean,
+): ChapterEndState {
+    if (!settled) return ChapterEndState(reachedEnd = false, arrivedByScrolling = false)
+    val arrived = chapterEndReached(
+        pageCount = pageCount,
+        lastVisibleItemIndex = lastVisibleItemIndex,
+        canScrollForward = canScrollForward,
+        advancedAfterRestore = advancedAfterRestore,
+    )
+    if (arrived) return ChapterEndState(reachedEnd = true, arrivedByScrolling = true)
+    val fits = chapterFitsOnScreen(
+        pageCount = pageCount,
+        lastVisibleItemIndex = lastVisibleItemIndex,
+        canScrollForward = canScrollForward,
+        footnoteVisible = footnoteVisible,
+    )
+    return ChapterEndState(reachedEnd = fits, arrivedByScrolling = false)
+}
 
 /**
  * Page index the reader must open at.

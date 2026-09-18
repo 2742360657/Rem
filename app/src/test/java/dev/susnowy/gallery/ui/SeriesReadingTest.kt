@@ -235,6 +235,26 @@ class SeriesReadingTest {
         assertEquals("越界的旧进度必须被钳制", 19, resumePageIndex(pageCount = 20, progress = progress("a", page = 99, lastOpenedAt = 30)))
     }
 
+    /**
+     * Continuing a chapter that was left scrolled onto its last item must not land exactly on the
+     * end-of-chapter entry, or the chapter would look read the moment it opens.
+     */
+    @Test
+    fun resumingNeverLandsExactlyOnTheEndOfChapterEntry() {
+        val opened = progress("a", page = 4, lastOpenedAt = 30)
+
+        assertEquals(
+            "最后一页还有内容时照常恢复到该页",
+            4,
+            resumePageIndex(pageCount = 5, progress = opened),
+        )
+        assertEquals(
+            "显式重读从第 1 页开始",
+            0,
+            resumePageIndex(pageCount = 1, progress = opened, restart = true),
+        )
+    }
+
     @Test
     fun continueReadingChoosesTheMostRecentlyOpenedPartialChapter() {
         val chapters = SeriesReading.chapters(
@@ -247,6 +267,67 @@ class SeriesReadingTest {
 
         assertEquals("c", SeriesReading.continueChapter(chapters)?.item?.id)
     }
+
+    /**
+     * The exact state of a one-page chapter on its first frame: the list already shows page 1, it
+     * cannot scroll forward, but the restored position has not been applied yet. Treating that as
+     * "the whole chapter fits" is what made opening such a chapter mark it read on the spot.
+     */
+    @Test
+    fun anUnsettledReaderNeverReportsTheChapterAsFinished() {
+        val unsettled = chapterEndState(
+            pageCount = 1,
+            lastVisibleItemIndex = 0,
+            canScrollForward = false,
+            advancedAfterRestore = false,
+            footnoteVisible = false,
+            settled = false,
+        )
+
+        assertFalse(unsettled.reachedEnd)
+        assertFalse(unsettled.arrivedByScrolling)
+    }
+
+    @Test
+    fun aFittingChapterIsRecordedButNeverHandsOverAutomatically() {
+        val settled = chapterEndState(
+            pageCount = 1,
+            lastVisibleItemIndex = 1,
+            canScrollForward = false,
+            advancedAfterRestore = false,
+            footnoteVisible = true,
+            settled = true,
+        )
+        val arrived = chapterEndState(
+            pageCount = 3,
+            lastVisibleItemIndex = 3,
+            canScrollForward = false,
+            advancedAfterRestore = true,
+            footnoteVisible = true,
+            settled = true,
+        )
+
+        assertTrue("整话都在屏幕上时可以记为已读", settled.reachedEnd)
+        assertFalse("没有向前移动过就不能自动衔接", settled.arrivedByScrolling)
+        assertTrue(arrived.reachedEnd)
+        assertTrue("真正读到末尾才自动衔接", arrived.arrivedByScrolling)
+    }
+
+    private fun chapterEndState(
+        pageCount: Int,
+        lastVisibleItemIndex: Int,
+        canScrollForward: Boolean,
+        advancedAfterRestore: Boolean,
+        footnoteVisible: Boolean,
+        settled: Boolean,
+    ) = dev.susnowy.gallery.ui.chapterEndState(
+        pageCount = pageCount,
+        lastVisibleItemIndex = lastVisibleItemIndex,
+        canScrollForward = canScrollForward,
+        advancedAfterRestore = advancedAfterRestore,
+        footnoteVisible = footnoteVisible,
+        settled = settled,
+    )
 
     @Test
     fun chapterEndRequiresForwardMovementAndThePhysicalEndOfContent() {
@@ -283,4 +364,48 @@ class SeriesReadingTest {
             ),
         )
     }
-}
+
+    /**
+     * A chapter whose end fits in the viewport — one page, or a short last page — leaves no
+     * forward movement to prove that the reader arrived, so completion could never be recorded.
+     * Fitting on screen records it, but it must not be what drives the automatic hand-over.
+     */
+    @Test
+    fun aChapterThatFitsOnScreenCanBeRecordedWithoutPretendingTheReaderArrived() {
+        assertFalse(
+            "恢复位置就是末尾时不算到达",
+            chapterEndReached(
+                pageCount = 1,
+                lastVisibleItemIndex = 1,
+                canScrollForward = false,
+                advancedAfterRestore = false,
+            ),
+        )
+        assertTrue(
+            "整话都在屏幕上，可以记为已读",
+            chapterFitsOnScreen(
+                pageCount = 1,
+                lastVisibleItemIndex = 1,
+                canScrollForward = false,
+                footnoteVisible = true,
+            ),
+        )
+        assertFalse(
+            "没看到末尾入口时不能记为已读",
+            chapterFitsOnScreen(
+                pageCount = 1,
+                lastVisibleItemIndex = 0,
+                canScrollForward = false,
+                footnoteVisible = false,
+            ),
+        )
+        assertFalse(
+            "还能继续滚动时不能记为已读",
+            chapterFitsOnScreen(
+                pageCount = 2,
+                lastVisibleItemIndex = 2,
+                canScrollForward = true,
+                footnoteVisible = true,
+            ),
+        )
+    }}
