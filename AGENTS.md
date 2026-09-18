@@ -116,6 +116,9 @@ A second, always-available test target is the phone's own storage (`/storage/emu
 - One gesture layer owns tap, double tap, long press and pinch. Rebuilding a container must not erase a measurement that container produced.
 - Auto-scroll changes the logical order, not only pixels: the distance the list actually consumed feeds the same arithmetic as a finger drag, and the finger position used for the edge speed moves only when the finger moves.
 - Evidence is graded: verified by test/emulator, inferred from code, or still needing a real device. Documentation may only claim the first kind.
+- A portable entity that a user action creates has to reach the device projection in the same action. Only mirroring it after a scan leaves the UI describing a series, group or state that the catalog already owns.
+- `snapshotFlow` re-runs only when snapshot state it read changes. A value that arrives as a parameter (a settled flag, an initialised flag) must also be a key of the surrounding `LaunchedEffect`, or the flow keeps reporting the value it started with.
+- A state that drives a destructive or irreversible outcome (permanent deletion, physical move) must not be reachable from a stale screen: clear it when its owner changes, and make the UI text match what the code actually does.
 
 ## Known gaps
 
