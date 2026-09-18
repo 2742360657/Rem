@@ -105,6 +105,7 @@ private val destinations = listOf(
 @Composable
 fun GalleryApp(viewModel: GalleryViewModel = viewModel()) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val attachment by viewModel.attachment.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val drawerState = rememberDrawerState(DrawerValue.Closed)
@@ -114,12 +115,6 @@ fun GalleryApp(viewModel: GalleryViewModel = viewModel()) {
     var lastExitBackAt by remember { mutableLongStateOf(0L) }
     val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         uri ?: return@rememberLauncherForActivityResult
-        runCatching {
-            context.contentResolver.takePersistableUriPermission(
-                uri,
-                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
-            )
-        }
         viewModel.attachTree(uri)
     }
     val mediaPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
@@ -144,6 +139,14 @@ fun GalleryApp(viewModel: GalleryViewModel = viewModel()) {
     }
 
     GalleryTheme {
+        LibraryAttachmentStatus(
+            state = attachment,
+            onDismiss = viewModel::dismissAttachmentError,
+            onChooseAgain = {
+                viewModel.dismissAttachmentError()
+                folderPicker.launch(null)
+            },
+        )
         if (state.selectedItem != null) {
             val selected = state.selectedItem!!
             val mediaById = remember(state.allMedia) { state.allMedia.associateBy(MediaItem::id) }

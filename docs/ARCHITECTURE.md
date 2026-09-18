@@ -142,6 +142,8 @@ Derived folder groups stay presentation-only inference until saved; after that t
 
 ## Library initialization and writes
 
+`GalleryViewModel.attachment` tracks picker-return attachment stages independently of scan operations. Persistable read/write grants and directory-name queries run on IO; denied grants stop attachment explicitly. A ViewModel-owned dialog remains visible for pending work and errors (including the empty-library screen), and duplicate attachment jobs are ignored. Failures retain their message until dismissal or a new selection; device-specific failures still require actual provider evidence.
+
 Initialization claims a provider-exclusive root lease before creating `.gallery/`. The lease carries a timestamp and expires after 15 minutes. `library.json` is the completion marker and is committed last.
 
 `PortableDocumentWriter` stages every write with a unique name, moves the previous revision to the stable `.<name>.rem-backup` recovery path, then verifies the requested final path exists. A process stop between both renames is recovered by the next read (including `library.json` identity inspection); a live target wins over a stale recovery file. If a provider publishes a qualified ` (1)` copy or leaves the staging document visible, the writer refuses the commit and restores the previous revision.

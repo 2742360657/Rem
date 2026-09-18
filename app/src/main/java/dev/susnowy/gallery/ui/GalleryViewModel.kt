@@ -1,6 +1,7 @@
 package dev.susnowy.gallery.ui
 
 import android.app.Application
+import android.content.Intent
 import android.graphics.Bitmap
 import android.net.Uri
 import androidx.documentfile.provider.DocumentFile
@@ -35,6 +36,8 @@ import dev.susnowy.gallery.organizer.OrganizerTemplate
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -156,6 +159,9 @@ class GalleryViewModel(
     val archiveCacheStats: StateFlow<ArchiveCacheStats> = _archiveCacheStats
     val progressRevision: StateFlow<Long> = repository.progressRevision
     private var longOperationJob: Job? = null
+    private var attachmentJob: Job? = null
+    private val _attachment = MutableStateFlow(LibraryAttachmentState())
+    val attachment: StateFlow<LibraryAttachmentState> = _attachment.asStateFlow()
     private var systemMediaJob: Job? = null
     private val progressClock = AtomicLong(System.currentTimeMillis())
 
@@ -269,20 +275,49 @@ class GalleryViewModel(
     }
 
     fun attachTree(uri: Uri) {
-        viewModelScope.launch {
-            runCatching {
-                val suggestedName = DocumentFile.fromTreeUri(getApplication(), uri)?.name
-                    ?.takeIf(String::isNotBlank)
-                    ?: "Rem Library"
+        if (attachmentJob?.isCompleted == false) return
+        _attachment.value = LibraryAttachmentState(progress = "正在取得目录访问权限…")
+        attachmentJob = viewModelScope.launch {
+            try {
+                RemLog.info("LibraryAttach", "开始接入所选目录")
+                val suggestedName = withContext(Dispatchers.IO) {
+                    try {
+                        getApplication<Application>().contentResolver.takePersistableUriPermission(
+                            uri,
+                            Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+                        )
+                    } catch (error: SecurityException) {
+                        throw IllegalStateException("无法保留目录读写授权，请重新选择可读写的目录并允许访问", error)
+                    }
+                    DocumentFile.fromTreeUri(getApplication(), uri)?.name
+                        ?.takeIf(String::isNotBlank) ?: "Rem Library"
+                }
+                _attachment.value = LibraryAttachmentState(progress = "正在读取或建立媒体库…")
                 val library = repository.attach(uri, suggestedName)
                 setActiveLibrary(library.libraryId)
                 setScreen(AppScreen.INBOX)
+                RemLog.info("LibraryAttach", "媒体库已登记，开始检查未完成事务")
+                _attachment.value = LibraryAttachmentState(progress = "正在检查未完成事务…")
                 val recovered = repository.recoverInterruptedTransactions(library.libraryId)
+                _attachment.value = LibraryAttachmentState()
+                RemLog.info("LibraryAttach", "接入完成")
                 if (recovered > 0) message.value = "已恢复 $recovered 个未完成整理事务"
                 if (autoScan.value) scan(library.libraryId)
                 else if (recovered == 0) message.value = "已接入 ${library.name}"
-            }.onFailure(::showError)
+            } catch (error: CancellationException) {
+                _attachment.value = LibraryAttachmentState()
+                throw error
+            } catch (error: Exception) {
+                RemLog.failure("LibraryAttach", "接入失败：${_attachment.value.progress}", error)
+                _attachment.value = LibraryAttachmentState(
+                    error = error.message?.takeIf(String::isNotBlank) ?: "无法接入所选目录，请检查目录权限和存储连接",
+                )
+            }
         }
+    }
+
+    fun dismissAttachmentError() {
+        if (_attachment.value.progress == null) _attachment.value = LibraryAttachmentState()
     }
 
     fun scan(libraryId: String? = activeLibraryId.value) {

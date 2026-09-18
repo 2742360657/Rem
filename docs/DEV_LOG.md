@@ -10,6 +10,15 @@
 
 ---
 
+## 2026-09-18：接入目录返回无反馈的排查与可观测性修正
+
+- 用户报告两个入口均能选择并确认目录，但返回 Rem 后没有变化。API 36 模拟器上用系统 DocumentsUI 新建独立空目录完成授权，旧包正常进入 Inbox 并扫描 0 项；用户手机未连接，本轮没有取得真机故障日志，不能据此宣布原始问题已修复。
+- 代码确认：接入没有独立进度，名称查询在主线程，持久授权异常被忽略，初始化错误只走短暂 Snackbar。修正为 IO 授权/名称查询、ViewModel 保持接入阶段及错误、独立对话框和重新选择入口；重复接入任务被拦截。记录脱敏阶段日志，不改变便携格式和原媒体。
+- 新增设备测试覆盖无持久授权时不登记 Library、错误持续可见及关闭、进度与重选回调。Windows / Java 17 全套 testDebugUnitTest、lintDebug、assembleDebug、assembleDebugAndroidTest 通过，281 单测；lint 0 errors / 31 warnings / 1 hint。API 36 模拟器 LibraryAttachmentInteractionTest + DocumentTreeStorageInstrumentedTest 共 11 项通过。未进行本轮真机或真实库验证。
+- 后续：用更新 debug 包收集用户实际失败阶段/错误或连接手机读取日志；R11 原始故障仍待现场确认。
+
+---
+
 ## 2026-09-18：接续 R10 桌面工具残留并完成小库闭环
 
 - 基线 b791ee0 留有 10 个已跟踪修改及 7 个新增文件，无活动交接。用户确认继续，并要求按步骤、模块及时中文提交；维护规则已在 6393d8a 替代旧的逐次提交授权规则。
