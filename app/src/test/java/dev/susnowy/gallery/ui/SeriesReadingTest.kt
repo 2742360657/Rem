@@ -280,7 +280,6 @@ class SeriesReadingTest {
             lastVisibleItemIndex = 0,
             canScrollForward = false,
             advancedAfterRestore = false,
-            footnoteVisible = false,
             settled = false,
         )
 
@@ -288,27 +287,40 @@ class SeriesReadingTest {
         assertFalse(unsettled.arrivedByScrolling)
     }
 
+    /**
+     * A chapter whose end is visible from the start — one page, or a chapter reopened to re-read
+     * it — must not be recorded as read by merely opening it. Only moving forward or pressing the
+     * end-of-chapter entry finishes it.
+     */
     @Test
-    fun aFittingChapterIsRecordedButNeverHandsOverAutomatically() {
-        val settled = chapterEndState(
+    fun aVisibleEndIsNotCompletionUntilTheReaderArrivesOrConfirms() {
+        val justOpened = chapterEndState(
             pageCount = 1,
             lastVisibleItemIndex = 1,
             canScrollForward = false,
             advancedAfterRestore = false,
-            footnoteVisible = true,
             settled = true,
+        )
+        val confirmed = chapterEndState(
+            pageCount = 1,
+            lastVisibleItemIndex = 1,
+            canScrollForward = false,
+            advancedAfterRestore = false,
+            settled = true,
+            confirmed = true,
         )
         val arrived = chapterEndState(
             pageCount = 3,
             lastVisibleItemIndex = 3,
             canScrollForward = false,
             advancedAfterRestore = true,
-            footnoteVisible = true,
             settled = true,
         )
 
-        assertTrue("整话都在屏幕上时可以记为已读", settled.reachedEnd)
-        assertFalse("没有向前移动过就不能自动衔接", settled.arrivedByScrolling)
+        assertFalse("仅仅打开不能算读完", justOpened.reachedEnd)
+        assertFalse(justOpened.arrivedByScrolling)
+        assertTrue("点击话末入口是显式完成", confirmed.reachedEnd)
+        assertFalse("显式完成不触发自动衔接", confirmed.arrivedByScrolling)
         assertTrue(arrived.reachedEnd)
         assertTrue("真正读到末尾才自动衔接", arrived.arrivedByScrolling)
     }
@@ -318,15 +330,15 @@ class SeriesReadingTest {
         lastVisibleItemIndex: Int,
         canScrollForward: Boolean,
         advancedAfterRestore: Boolean,
-        footnoteVisible: Boolean,
         settled: Boolean,
+        confirmed: Boolean = false,
     ) = dev.susnowy.gallery.ui.chapterEndState(
         pageCount = pageCount,
         lastVisibleItemIndex = lastVisibleItemIndex,
         canScrollForward = canScrollForward,
         advancedAfterRestore = advancedAfterRestore,
-        footnoteVisible = footnoteVisible,
         settled = settled,
+        confirmed = confirmed,
     )
 
     @Test
@@ -370,8 +382,9 @@ class SeriesReadingTest {
      * forward movement to prove that the reader arrived, so completion could never be recorded.
      * Fitting on screen records it, but it must not be what drives the automatic hand-over.
      */
+    /** The end being reachable without scrolling is not an arrival; only an action finishes it. */
     @Test
-    fun aChapterThatFitsOnScreenCanBeRecordedWithoutPretendingTheReaderArrived() {
+    fun aChapterThatFitsOnScreenIsNotFinishedByItself() {
         assertFalse(
             "恢复位置就是末尾时不算到达",
             chapterEndReached(
@@ -381,31 +394,23 @@ class SeriesReadingTest {
                 advancedAfterRestore = false,
             ),
         )
-        assertTrue(
-            "整话都在屏幕上，可以记为已读",
-            chapterFitsOnScreen(
-                pageCount = 1,
-                lastVisibleItemIndex = 1,
-                canScrollForward = false,
-                footnoteVisible = true,
-            ),
-        )
         assertFalse(
-            "没看到末尾入口时不能记为已读",
-            chapterFitsOnScreen(
-                pageCount = 1,
-                lastVisibleItemIndex = 0,
-                canScrollForward = false,
-                footnoteVisible = false,
-            ),
-        )
-        assertFalse(
-            "还能继续滚动时不能记为已读",
-            chapterFitsOnScreen(
+            "还有内容没滚动时不算到达",
+            chapterEndReached(
                 pageCount = 2,
                 lastVisibleItemIndex = 2,
                 canScrollForward = true,
-                footnoteVisible = true,
+                advancedAfterRestore = false,
             ),
         )
-    }}
+        assertTrue(
+            "向前移动到物理末尾才算到达",
+            chapterEndReached(
+                pageCount = 2,
+                lastVisibleItemIndex = 2,
+                canScrollForward = false,
+                advancedAfterRestore = true,
+            ),
+        )
+    }
+}

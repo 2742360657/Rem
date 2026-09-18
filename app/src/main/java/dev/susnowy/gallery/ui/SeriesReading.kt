@@ -121,29 +121,9 @@ fun chapterEndReached(
     lastVisibleItemIndex >= pageCount - 1 &&
     !canScrollForward
 
-/**
- * True when the whole chapter fits on screen, so there is no forward movement left to make.
- *
- * A chapter whose end is visible from the start — a one-page chapter, or a chapter opened while
- * the restored position is still being resolved — can never satisfy [chapterEndReached]. This is
- * the second way to record that such a chapter was read. It is deliberately *not* what drives the
- * automatic hand-over: an end that was already on screen when the chapter opened is not an
- * arrival, and a single-page chapter would otherwise mark itself finished and jump onward before
- * the reader saw anything.
- */
-fun chapterFitsOnScreen(
-    pageCount: Int,
-    lastVisibleItemIndex: Int,
-    canScrollForward: Boolean,
-    footnoteVisible: Boolean,
-): Boolean = pageCount > 0 &&
-    !canScrollForward &&
-    footnoteVisible &&
-    lastVisibleItemIndex >= pageCount - 1
-
 /** What the reader should do about the end of the current chapter. */
 data class ChapterEndState(
-    /** The chapter may be recorded as read. */
+    /** The chapter may be recorded as read without the user acting. */
     val reachedEnd: Boolean,
     /** The reader actually moved to the end, so it may continue automatically. */
     val arrivedByScrolling: Boolean,
@@ -152,18 +132,26 @@ data class ChapterEndState(
 /**
  * Decides the end-of-chapter outcome in one place.
  *
- * [settled] must be false while the restored position is still being applied. On the first frame
- * of a one-page chapter the list is already showing page 1 and not yet scrolled to the restored
- * position, which looks exactly like "the whole chapter fits" — that is how opening such a chapter
- * used to mark it read and hand over before the reader saw anything.
+ * Completion is never inferred from "the end happens to be visible". A one-page chapter shows its
+ * only page — and therefore the end-of-chapter entry — the moment it opens, and so does a chapter
+ * that is reopened to re-read it; recording that as read would silently reverse an explicit
+ * "read again" and could hand over to the next chapter before the reader saw anything. The reader
+ * therefore has two ways to finish a chapter:
+ *
+ * 1. move forward to the physical end of the content ([chapterEndReached]), which also drives the
+ *    automatic hand-over; or
+ * 2. press the end-of-chapter entry, which is an explicit action and is passed in as [confirmed].
+ *
+ * [settled] must be false while the restored position is still being applied, so the pre-restore
+ * frame cannot be mistaken for an arrival.
  */
 fun chapterEndState(
     pageCount: Int,
     lastVisibleItemIndex: Int,
     canScrollForward: Boolean,
     advancedAfterRestore: Boolean,
-    footnoteVisible: Boolean,
     settled: Boolean,
+    confirmed: Boolean = false,
 ): ChapterEndState {
     if (!settled) return ChapterEndState(reachedEnd = false, arrivedByScrolling = false)
     val arrived = chapterEndReached(
@@ -173,13 +161,7 @@ fun chapterEndState(
         advancedAfterRestore = advancedAfterRestore,
     )
     if (arrived) return ChapterEndState(reachedEnd = true, arrivedByScrolling = true)
-    val fits = chapterFitsOnScreen(
-        pageCount = pageCount,
-        lastVisibleItemIndex = lastVisibleItemIndex,
-        canScrollForward = canScrollForward,
-        footnoteVisible = footnoteVisible,
-    )
-    return ChapterEndState(reachedEnd = fits, arrivedByScrolling = false)
+    return ChapterEndState(reachedEnd = confirmed, arrivedByScrolling = false)
 }
 
 /**

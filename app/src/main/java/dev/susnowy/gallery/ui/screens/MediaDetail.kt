@@ -133,6 +133,7 @@ import java.util.Date
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -1082,15 +1083,22 @@ private fun ImageSetReader(
     var restoredOffset by remember(item.id) { mutableIntStateOf(0) }
     var advancedAfterRestore by remember(item.id) { mutableStateOf(false) }
     var completedThisSession by remember(item.id) { mutableStateOf(false) }
+    // Pressing the end-of-chapter entry is an explicit "I finished this chapter". It is the only
+    // way to finish a chapter whose end is visible from the start, such as a single-page one.
+    var chapterConfirmed by remember(item.id) { mutableStateOf(false) }
     LaunchedEffect(pages.size, restorePage) {
         if (pages.isEmpty()) return@LaunchedEffect
         val target = restorePage?.coerceIn(pages.indices) ?: return@LaunchedEffect
-        // On a fresh reader, restore portable page progress. After a configuration recreation,
-        // rememberLazyListState already has the newer exact page and within-page offset; a
-        // slightly older asynchronous portable write must not pull it backwards.
-        if (!positionInitialized && listState.firstVisibleItemIndex != target) {
+        if (listState.firstVisibleItemIndex != target) {
             listState.scrollToItem(target)
+            // The scroll must be applied before the restored position is read back. Reading it in
+            // the same frame captured the pre-scroll position, so "did the reader move forward"
+            // was compared against the wrong baseline and reopening a chapter at page 1 looked
+            // like an arrival at the end — which re-marked it read and could hand over again.
+            snapshotFlow { listState.firstVisibleItemIndex }.first { it == target }
         }
+        // Reached either way: on a first open the saved position, after a configuration change the
+        // position the list already restored. Measuring after the list is settled is what matters.
         onPositionInitialized()
         restoredIndex = listState.firstVisibleItemIndex
         restoredOffset = listState.firstVisibleItemScrollOffset
@@ -1131,6 +1139,7 @@ private fun ImageSetReader(
         advancedAfterRestore,
         completedThisSession,
         positionInitialized,
+        chapterConfirmed,
     ) {
         if (!restored || pages.isEmpty() || completedThisSession) return@LaunchedEffect
         snapshotFlow {
@@ -1140,8 +1149,8 @@ private fun ImageSetReader(
                 lastVisibleItemIndex = visible.lastOrNull()?.index ?: -1,
                 canScrollForward = listState.canScrollForward,
                 advancedAfterRestore = advancedAfterRestore,
-                footnoteVisible = visible.any { it.index > pages.lastIndex },
                 settled = positionInitialized,
+                confirmed = chapterConfirmed,
             )
         }
             .distinctUntilChanged()
@@ -1149,7 +1158,13 @@ private fun ImageSetReader(
                 if (state.reachedEnd && !completedThisSession) {
                     completedThisSession = true
                     viewModel.saveProgress(item, page = pages.lastIndex, finished = true)
-                    if (state.arrivedByScrolling && autoAdvance) nextChapter?.let(onOpenNextChapter)
+                    when {
+                        state.arrivedByScrolling && autoAdvance -> nextChapter?.let(onOpenNextChapter)
+                        // Explicit confirmation: the reader asked to finish, so the final chapter
+                        // returns to its overview and any other chapter continues.
+                        !state.arrivedByScrolling && chapterConfirmed ->
+                            nextChapter?.let(onOpenNextChapter) ?: onFinishChapter()
+                    }
                 }
             }
     }
@@ -1253,10 +1268,9 @@ private fun ImageSetReader(
                 ChapterEndFooter(
                     nextChapter = nextChapter,
                     onComplete = {
-                        completedThisSession = true
-                        viewModel.saveProgress(item, page = pages.lastIndex, finished = true)
-                        if (nextChapter != null) onOpenNextChapter(nextChapter)
-                        else onFinishChapter()
+                        // The button is the explicit confirmation; the decision effect records it,
+                        // so the state is written through one path instead of two.
+                        chapterConfirmed = true
                     },
                 )
             }
