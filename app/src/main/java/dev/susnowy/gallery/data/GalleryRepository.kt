@@ -23,6 +23,7 @@ import dev.susnowy.gallery.media.ImageSetOrderResult
 import dev.susnowy.gallery.media.ImageSetOrderService
 import dev.susnowy.gallery.media.OfflinePreviewStats
 import dev.susnowy.gallery.media.OfflinePreviewStore
+import dev.susnowy.gallery.media.MediaReadPriority
 import dev.susnowy.gallery.metadata.PortableInboxStore
 import dev.susnowy.gallery.metadata.PortableMetadataStore
 import dev.susnowy.gallery.metadata.FieldSource
@@ -120,6 +121,7 @@ class GalleryRepository(context: Context) {
     private val pageManifests = PageManifestService(archives = archives)
     private val content = MediaContentService(archives = archives)
     private val offlinePreviews = OfflinePreviewStore(appContext, archives = archives)
+    private val mediaReadPriority = MediaReadPriority()
     /**
      * Every portable store performs a read-modify-write of one of the shared `.gallery`
      * documents. Serializing only playback progress is insufficient: a simultaneous trash,
@@ -1430,7 +1432,7 @@ class GalleryRepository(context: Context) {
         onIo { database.progressFor(itemIds) }
 
     suspend fun offlinePreview(item: MediaItem): java.io.File? =
-        offlinePreviews.getOrCreate(item, storageFor(requireLibrary(item.libraryId)))
+        mediaReadPriority.preview { offlinePreviews.getOrCreate(item, storageFor(requireLibrary(item.libraryId))) }
 
     suspend fun offlinePreviewStats(): OfflinePreviewStats = offlinePreviews.stats()
 
@@ -1699,24 +1701,28 @@ class GalleryRepository(context: Context) {
         width: Int,
         height: Int,
         archivePath: String? = null,
-    ): Bitmap? = content.decodeArchivePage(
-        item = item,
-        entryName = entryName,
-        storage = storageFor(requireLibrary(item.libraryId)),
-        targetWidth = width,
-        targetHeight = height,
-        archivePath = archivePath ?: item.relativePath,
-    )
+    ): Bitmap? = mediaReadPriority.foreground {
+        content.decodeArchivePage(
+            item = item,
+            entryName = entryName,
+            storage = storageFor(requireLibrary(item.libraryId)),
+            targetWidth = width,
+            targetHeight = height,
+            archivePath = archivePath ?: item.relativePath,
+        )
+    }
 
     suspend fun oversizedBitmap(item: MediaItem, relativePath: String): Bitmap? =
-        content.decodeOversizedImage(relativePath, storageFor(requireLibrary(item.libraryId)))
+        mediaReadPriority.foreground { content.decodeOversizedImage(relativePath, storageFor(requireLibrary(item.libraryId))) }
 
-    suspend fun pages(item: MediaItem): List<ImagePage> = onIo {
-        val storage = storageFor(requireLibrary(item.libraryId))
-        val plan = _editionPlans.value[planKey(item.libraryId, item.id)]
-            ?: return@onIo content.imageSetPages(item, storage)
-        dev.susnowy.gallery.media.resolveEditionPages(plan) { parent ->
-            storage.list(parent).associate { it.relativePath to it.uri }
+    suspend fun pages(item: MediaItem): List<ImagePage> = mediaReadPriority.foreground {
+        onIo {
+            val storage = storageFor(requireLibrary(item.libraryId))
+            val plan = _editionPlans.value[planKey(item.libraryId, item.id)]
+                ?: return@onIo content.imageSetPages(item, storage)
+            dev.susnowy.gallery.media.resolveEditionPages(plan) { parent ->
+                storage.list(parent).associate { it.relativePath to it.uri }
+            }
         }
     }
 

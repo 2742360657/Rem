@@ -15,6 +15,9 @@ import dev.susnowy.gallery.storage.DocumentTreeStorage
 import java.io.File
 import java.security.MessageDigest
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.ensureActive
+import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -79,9 +82,16 @@ class OfflinePreviewStore(
                     target.setLastModified(System.currentTimeMillis())
                     return@withLock target
                 }
-                val bitmap = runCatching { createBitmap(item, storage) }.getOrNull()
+                val bitmap = try {
+                    createBitmap(item, storage)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    null
+                }
                     ?: return@withLock null
                 try {
+                    coroutineContext.ensureActive()
                     target.parentFile?.mkdirs()
                     val temporary = File(target.parentFile, ".${target.name}.${System.nanoTime()}.tmp")
                     val previousLength = target.takeIf(File::isFile)?.length()
