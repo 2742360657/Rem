@@ -12,6 +12,8 @@
 
 ## 2026-09-19：R08 批量字段编辑与持续回归
 
+- GridReturnPositionTest 使用 150 项合成媒体，验证定位至第 100 项可见、离开/返回列表及空快照期间界面重建后恢复相同行首。API 36 通过；第一轮测试误把多列网格目标索引视为行首，修正为记录实际行首后比较。没有通过修改产品来迎合错误断言，尚不覆盖整个 App 导航或其他长列表。
+
 - R07 定位入口：新增共享 PositionJumpDialog，漫画底部页码可跳页，MediaGrid 可跳当前结果序号并保留异步空快照期间的滚动状态 holder。阅读跳转重新建立到达末尾判定基线，不能把定位当作已读完；这一端到端语义仍需补设备场景。testDebugUnitTest/lintDebug/assembleDebug/assembleDebugAndroidTest 通过；PositionJumpInteractionTest 两项通过（越界/零禁用，首末位置，取消）。
 
 - 混合目录视频误跳：内层 MediaDetail 的 pager 初始事件调用全局 selectDetailItem，破坏外层目录选择。新增可控的可见项回调，混合目录内层不修改全局选择。ReadinessInteractionTest 新用例覆盖打开目录视频、外层身份保持、返回同一目录；API 36 三项该类测试通过。
