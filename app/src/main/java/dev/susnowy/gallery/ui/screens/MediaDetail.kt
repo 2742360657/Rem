@@ -842,6 +842,8 @@ private fun ImageSetReaderScreen(
     var showDerivePage by remember { mutableStateOf(false) }
     var showOrderEditor by remember { mutableStateOf(false) }
     var showPageTools by remember { mutableStateOf(false) }
+    var showJump by remember { mutableStateOf(false) }
+    var jumpRequest by remember(item.id) { mutableStateOf<Pair<Int, Int>?>(null) }
     // Keep the saveable list holder outside the asynchronous success branch. During Activity
     // recreation `pages` is briefly null; constructing the holder only after loading completes
     // loses the saved index/offset and lets portable page-level progress pull the reader away
@@ -851,8 +853,8 @@ private fun ImageSetReaderScreen(
     val loadedPages = pages?.getOrNull().orEmpty()
 
     ImmersiveSystemBars(controlsVisible)
-    LaunchedEffect(controlsVisible, showEditor, confirmTrash, showDerivePage, showOrderEditor, showPageTools) {
-        if (controlsVisible && !showEditor && !confirmTrash && !showDerivePage && !showOrderEditor && !showPageTools) {
+    LaunchedEffect(controlsVisible, showEditor, confirmTrash, showDerivePage, showOrderEditor, showPageTools, showJump) {
+        if (controlsVisible && !showEditor && !confirmTrash && !showDerivePage && !showOrderEditor && !showPageTools && !showJump) {
             delay(3_000)
             controlsVisible = false
         }
@@ -887,6 +889,7 @@ private fun ImageSetReaderScreen(
                             autoAdvance = autoAdvance,
                             startPage = startPage,
                             listState = readerListState,
+                            jumpRequest = jumpRequest,
                             positionInitialized = readerPositionInitialized,
                             onPositionInitialized = { readerPositionInitialized = true },
                             onFinishChapter = onBack,
@@ -953,15 +956,19 @@ private fun ImageSetReaderScreen(
                     .navigationBarsPadding()
                     .padding(14.dp),
             ) {
-                Text(
-                    if (loadedPages.isEmpty()) "—" else "${currentPage + 1} / ${loadedPages.size}",
-                    color = Color.White,
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
-                )
+                TextButton(onClick = { showJump = true }, enabled = loadedPages.isNotEmpty()) {
+                    Text(if (loadedPages.isEmpty()) "—" else "${currentPage + 1} / ${loadedPages.size} · 跳页", color = Color.White)
+                }
             }
         }
     }
 
+    if (showJump && loadedPages.isNotEmpty()) {
+        dev.susnowy.gallery.ui.components.PositionJumpDialog(loadedPages.size, currentPage, "页", { showJump = false }) { page ->
+            showJump = false
+            jumpRequest = page to ((jumpRequest?.second ?: 0) + 1)
+        }
+    }
     RightSidePanel(
         visible = showPageTools,
         title = "第 ${currentPage + 1} 页",
@@ -1090,6 +1097,7 @@ private fun ImageSetReader(
     autoAdvance: Boolean = false,
     startPage: Int = 0,
     listState: LazyListState,
+    jumpRequest: Pair<Int, Int>? = null,
     positionInitialized: Boolean,
     onPositionInitialized: () -> Unit,
     onFinishChapter: () -> Unit,
@@ -1109,9 +1117,11 @@ private fun ImageSetReader(
     // Pressing the end-of-chapter entry is an explicit "I finished this chapter". It is the only
     // way to finish a chapter whose end is visible from the start, such as a single-page one.
     var chapterConfirmed by remember(item.id) { mutableStateOf(false) }
-    LaunchedEffect(pages.size, restorePage) {
+    LaunchedEffect(pages.size, restorePage, jumpRequest) {
         if (pages.isEmpty()) return@LaunchedEffect
-        val target = restorePage?.coerceIn(pages.indices) ?: return@LaunchedEffect
+        val target = (jumpRequest?.first ?: restorePage)?.coerceIn(pages.indices) ?: return@LaunchedEffect
+        restored = false
+        advancedAfterRestore = false
         if (listState.firstVisibleItemIndex != target) {
             listState.scrollToItem(target)
             // The scroll must be applied before the restored position is read back. Reading it in

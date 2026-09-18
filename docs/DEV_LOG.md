@@ -12,6 +12,8 @@
 
 ## 2026-09-19：R08 批量字段编辑与持续回归
 
+- R07 定位入口：新增共享 PositionJumpDialog，漫画底部页码可跳页，MediaGrid 可跳当前结果序号并保留异步空快照期间的滚动状态 holder。阅读跳转重新建立到达末尾判定基线，不能把定位当作已读完；这一端到端语义仍需补设备场景。testDebugUnitTest/lintDebug/assembleDebug/assembleDebugAndroidTest 通过；PositionJumpInteractionTest 两项通过（越界/零禁用，首末位置，取消）。
+
 - 混合目录视频误跳：内层 MediaDetail 的 pager 初始事件调用全局 selectDetailItem，破坏外层目录选择。新增可控的可见项回调，混合目录内层不修改全局选择。ReadinessInteractionTest 新用例覆盖打开目录视频、外层身份保持、返回同一目录；API 36 三项该类测试通过。
 
 - R02/R07 视频系列入口改用显式 readerQueue，支持播放结束后按设置衔接下一项与手动下一项；普通打开仍无系列衔接。系列视频进度使用时间和观看用语。完整工程检查通过，队列聚焦 22 单测、37 模拟器设备回归通过；尚未证明真实视频多集全流程。

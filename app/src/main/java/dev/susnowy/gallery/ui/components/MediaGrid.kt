@@ -15,6 +15,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Collections
@@ -86,6 +89,10 @@ fun MediaGrid(
     // Groups and Series are needed to offer "add to …" straight from a card; the state is
     // collected once per grid, not per card.
     val libraryState by viewModel.uiState.collectAsStateWithLifecycle()
+    // Keep the saveable holder alive across a transient empty data snapshot.
+    val gridState = rememberLazyGridState()
+    val scope = rememberCoroutineScope()
+    var jump by remember { mutableStateOf(false) }
     if (items.isEmpty()) {
         Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Text("这里还没有内容", color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -94,6 +101,7 @@ fun MediaGrid(
     }
     Box(modifier = modifier.fillMaxSize()) {
         LazyVerticalGrid(
+            state = gridState,
             columns = GridCells.Adaptive(if (compact) 92.dp else 142.dp),
             modifier = Modifier.fillMaxSize(),
             contentPadding = if (compact) {
@@ -127,6 +135,17 @@ fun MediaGrid(
                     supportingText = supportingText(item),
                 )
             }
+        }
+        Surface(modifier = Modifier.align(Alignment.BottomEnd).padding(8.dp), shape = MaterialTheme.shapes.large) {
+            TextButton(onClick = { jump = true }) {
+                Text("${gridState.firstVisibleItemIndex + 1} / ${items.size} · 定位")
+            }
+        }
+    }
+    if (jump && items.isNotEmpty()) {
+        PositionJumpDialog(items.size, gridState.firstVisibleItemIndex, "项", { jump = false }) { index ->
+            jump = false
+            scope.launch { gridState.scrollToItem(index) }
         }
     }
     actionItem?.let { item ->
