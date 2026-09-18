@@ -148,7 +148,7 @@ fun SeriesChapterList(
                         modifier = Modifier.fillMaxWidth(),
                     ) {
                         Column(Modifier.weight(1f)) {
-                            Text("读完一话后自动进入下一话", style = MaterialTheme.typography.bodyMedium)
+                            Text(if (entries.any { it.video }) "播放结束后自动进入下一项" else "读完一话后自动进入下一话", style = MaterialTheme.typography.bodyMedium)
                             Text(
                                 "关闭时会停在话末，仍可手动翻回；不会跳过任何一话。",
                                 style = MaterialTheme.typography.bodySmall,
@@ -228,7 +228,7 @@ private fun ChapterRow(
             if (chapter.finished) {
                 Icon(
                     Icons.Rounded.CheckCircle,
-                    contentDescription = "已读完",
+                    contentDescription = chapter.progressLabel(),
                     tint = MaterialTheme.colorScheme.primary,
                 )
             } else if (title != null) {

@@ -2,6 +2,7 @@ package dev.susnowy.gallery.ui
 
 import dev.susnowy.gallery.model.MediaItem
 import dev.susnowy.gallery.model.PlaybackProgress
+import dev.susnowy.gallery.model.MediaKind
 
 /**
  * One chapter of a Series as the shelf lists it: the Work plus what the reader has done with it.
@@ -13,6 +14,7 @@ data class SeriesChapter(
     val position: Int,
     val progress: PlaybackProgress?,
 ) {
+    val video: Boolean get() = item.kind == MediaKind.VIDEO || item.kind == MediaKind.PHOTO_VIDEO
     /** Page count known from the local index, or null while it is still unknown. */
     val pageCount: Int? get() = item.pageCount?.takeIf { it > 0 }
 
@@ -34,7 +36,11 @@ data class SeriesChapter(
     fun progressLabel(): String {
         val count = pageCount
         return when {
-            finished -> "已读完"
+            finished -> if (video) "已看完" else "已读完"
+            started && video -> {
+                val seconds = (progress?.positionMs ?: 0).coerceAtLeast(0) / 1000
+                "已播放 ${seconds / 60}:${(seconds % 60).toString().padStart(2, '0')}"
+            }
             started && count != null -> "第 ${lastPage + 1} / $count 页"
             started -> "第 ${lastPage + 1} 页"
             else -> "未开始"
@@ -85,11 +91,13 @@ object SeriesReading {
 
     fun entry(chapters: List<SeriesChapter>): SeriesReadingEntry {
         val chapter = continueChapter(chapters) ?: return SeriesReadingEntry(null, "没有可阅读的话")
+        val action = if (chapter.video) "观看" else "阅读"
+        val unit = if (chapter.video) "集" else "话"
         val label = when {
             chapter.started && !chapter.finished ->
-                "继续阅读 · 第 ${chapter.position + 1} 话（${chapter.progressLabel()}）"
-            chapters.all(SeriesChapter::finished) -> "重新阅读 · 第 1 话"
-            else -> "开始阅读 · 第 ${chapter.position + 1} 话"
+                "继续$action · 第 ${chapter.position + 1} $unit（${chapter.progressLabel()}）"
+            chapters.all(SeriesChapter::finished) -> "重新$action · 第 1 $unit"
+            else -> "开始$action · 第 ${chapter.position + 1} $unit"
         }
         return SeriesReadingEntry(chapter, label)
     }

@@ -72,6 +72,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.snapshotFlow
@@ -193,6 +194,25 @@ fun MediaDetail(
             onBack = onBack,
             onOpenNextChapter = { next -> viewModel.openChapter(next, readerQueue) },
         )
+        return
+    }
+    if ((item.kind == MediaKind.VIDEO || item.kind == MediaKind.PHOTO_VIDEO) && readerQueue.size > 1) {
+        val next = dev.susnowy.gallery.ui.nextSeriesItem(item, readerQueue)
+        var ended by remember(item.libraryId, item.id) { mutableStateOf(false) }
+        BackHandler(onBack = onBack)
+        Scaffold(topBar = {
+            TopAppBar(title = { Text(item.displayTitle, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "返回系列") } })
+        }) { padding ->
+            Column(Modifier.fillMaxSize().padding(padding)) {
+                VideoViewer(item, item.uri, viewModel, Modifier.weight(1f), onEnded = {
+                    ended = true
+                    if (autoAdvanceChapters && next != null) viewModel.openChapter(next, readerQueue)
+                })
+                dev.susnowy.gallery.ui.components.VideoSeriesControls(next, ended,
+                    onNext = { next?.let { viewModel.openChapter(it, readerQueue) } }, onBack = onBack)
+            }
+        }
         return
     }
     BackHandler(onBack = onBack)
@@ -1644,6 +1664,7 @@ private fun VideoViewer(
     viewModel: GalleryViewModel,
     modifier: Modifier = Modifier,
     active: Boolean = true,
+    onEnded: () -> Unit = {},
 ) {
     val context = LocalContext.current
     // A Work can be known from `.gallery/` while its media is not on this device. ExoPlayer
@@ -1666,6 +1687,7 @@ private fun VideoViewer(
     }
     val player = remember(item.libraryId, item.id, uri) { ExoPlayer.Builder(context).build() }
     val session = remember(player) { dev.susnowy.gallery.ui.VideoPlaybackSession() }
+    val currentOnEnded by rememberUpdatedState(onEnded)
     val saved by produceState<PlaybackProgress?>(null, player) {
         value = viewModel.progress(item) ?: PlaybackProgress(itemId = item.id)
     }
@@ -1690,6 +1712,7 @@ private fun VideoViewer(
                     session.ended()
                     if (session.initialized) viewModel.saveProgress(item,
                         positionMs = player.currentPosition.coerceAtLeast(0), finished = session.finished)
+                    if (session.finished) currentOnEnded()
                 }
             }
         }
