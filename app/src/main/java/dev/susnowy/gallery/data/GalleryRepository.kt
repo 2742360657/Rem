@@ -931,6 +931,25 @@ class GalleryRepository(context: Context) {
         }
     }
 
+    suspend fun removeRelationMembers(request: dev.susnowy.gallery.model.RelationRemoval): Int =
+        runOperation("正在移出关系成员…") {
+            withPortableWrite {
+                val store = PortableMetadataStore(storageFor(requireLibrary(request.libraryId)))
+                val count = store.removeRelationMembers(request.libraryId, request.relationId,
+                    request.isSeries, request.workIds, request.revision)
+                val catalog = store.loadCatalog(request.libraryId)
+                if (request.isSeries) {
+                    val series = catalog.series.first { it.id == request.relationId }
+                    applySeriesProjection(request.libraryId, series, request.workIds)
+                    database.upsertSeriesRow(series.toMediaSeries(request.libraryId))
+                } else {
+                    database.upsertGroup(catalog.groups.first { it.id == request.relationId }.toMediaGroup(request.libraryId))
+                }
+                refreshFromDatabase()
+                count
+            }
+        }
+
     /**
      * Renames, reorders and re-numbers one Series in a single portable write.
      *

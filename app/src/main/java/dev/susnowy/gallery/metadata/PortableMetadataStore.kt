@@ -35,6 +35,9 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.long
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
@@ -76,6 +79,49 @@ class PortableMetadataStore(
     /** Batch information edits cannot rewrite existing sources or relationships. */
     fun saveBatchFields(items: List<MediaItem>): List<PortableItemMetadata> =
         saveItemUpdates(items.map { it to it.revision }, batchFieldsOnly = true)
+
+    /** Remove explicit members only, preserving unknown fields and every surviving member's position. */
+    fun removeRelationMembers(
+        libraryId: String, relationId: String, isSeries: Boolean, workIds: Set<String>, expectedRevision: Long,
+    ): Int {
+        loadCatalog(libraryId) // Validate identity, schema and references before touching JSON.
+        val root = read(CATALOG_PATH)?.let { json.parseToJsonElement(it).jsonObject }
+            ?: throw RevisionConflictException("目录已不存在，请刷新")
+        val key = if (isSeries) "series" else "groups"
+        val relations = root.getValue(key).jsonArray
+        val target = relations.firstOrNull { it.jsonObject["id"]?.jsonPrimitive?.content == relationId }?.jsonObject
+            ?: throw RevisionConflictException("目标关系已被删除，请刷新")
+        if (target.getValue("revision").jsonPrimitive.long != expectedRevision) {
+            throw RevisionConflictException("目标关系已变化，请刷新后重新选择")
+        }
+        val members = target.getValue("members").jsonArray
+        val removed = members.map { it.jsonObject.getValue("work_id").jsonPrimitive.content }.toSet().intersect(workIds)
+        if (removed.isEmpty()) return 0
+        val now = JsonPrimitive(Instant.now().toString())
+        val changed = target.toMutableMap().apply {
+            put("members", JsonArray(members.filter { it.jsonObject.getValue("work_id").jsonPrimitive.content !in removed }))
+            put("revision", JsonPrimitive(expectedRevision + 1))
+            put("updated_at", now)
+            if (!isSeries && target["cover_work_id"]?.jsonPrimitive?.content in removed) put("cover_work_id", JsonNull)
+        }
+        val result = root.toMutableMap().apply {
+            put(key, JsonArray(relations.map { if (it == target) JsonObject(changed) else it }))
+            put("revision", JsonPrimitive(root.getValue("revision").jsonPrimitive.long + 1))
+            put("updated_at", now)
+            if (isSeries) put("works", JsonArray(root.getValue("works").jsonArray.map { value ->
+                val work = value.jsonObject
+                if (work.getValue("id").jsonPrimitive.content !in removed) value else JsonObject(work + mapOf(
+                    "field_sources" to JsonObject(work["field_sources"]?.jsonObject.orEmpty() + ("series" to JsonPrimitive("manual"))),
+                    "revision" to JsonPrimitive(work.getValue("revision").jsonPrimitive.long + 1),
+                    "updated_at" to now,
+                ))
+            }))
+        }
+        val encoded = json.encodeToString(JsonObject(result))
+        validate(json.decodeFromString<PortableCatalog>(encoded))
+        writeSafely(CATALOG_PATH, encoded, "application/json")
+        return removed.size
+    }
 
     private fun saveItemUpdates(updates: List<Pair<MediaItem, Long>>, batchFieldsOnly: Boolean = false): List<PortableItemMetadata> {
         if (updates.isEmpty()) return emptyList()

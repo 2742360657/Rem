@@ -61,12 +61,22 @@ fun SelectableMediaGrid(
     var confirmTrash by remember { mutableStateOf(false) }
     var groupPicker by remember { mutableStateOf(false) }
     var seriesPicker by remember { mutableStateOf(false) }
+    var removeRelation by remember { mutableStateOf(false) }
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val selectedItems = remember(items, selected) { items.filter { it.id in selected } }
     val canJoinGroup = selectedItems.any { it.kind in GROUPABLE_KINDS }
     val canJoinSeries = selectedItems.any { it.kind in SERIES_KINDS }
 
-    BackHandler(enabled = selectionMode && !showBatchEditor && !confirmTrash && !groupPicker && !seriesPicker) {
+    LaunchedEffect(state.activeLibraryId) {
+        removeRelation = false
+        confirmTrash = false
+        groupPicker = false
+        seriesPicker = false
+        showBatchEditor = false
+        selected = emptySet()
+    }
+
+    BackHandler(enabled = selectionMode && !showBatchEditor && !confirmTrash && !groupPicker && !seriesPicker && !removeRelation) {
         selectionMode = false
         selected = emptySet()
     }
@@ -109,6 +119,9 @@ fun SelectableMediaGrid(
                 FilledTonalButton(enabled = canJoinSeries, onClick = { seriesPicker = true }) {
                     Icon(Icons.Rounded.FormatListNumbered, contentDescription = null)
                     Text(" 加入系列")
+                }
+                FilledTonalButton(enabled = selected.isNotEmpty(), onClick = { removeRelation = true }) {
+                    Text("移出关系")
                 }
                 FilledTonalButton(
                     enabled = selected.isNotEmpty(),
@@ -164,6 +177,16 @@ fun SelectableMediaGrid(
         )
     }
 
+    if (removeRelation) {
+        RelationRemovalDialog(selectedItems, state.groups, state.series,
+            onDismiss = { removeRelation = false },
+            onConfirm = { request ->
+                viewModel.removeRelationMembers(request)
+                removeRelation = false
+                selectionMode = false
+                selected = emptySet()
+            })
+    }
     if (showBatchEditor) {
         BatchMetadataDialog(
             items = selectedItems,

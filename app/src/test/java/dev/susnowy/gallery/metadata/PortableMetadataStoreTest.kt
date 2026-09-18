@@ -22,6 +22,44 @@ import org.junit.Test
 
 class PortableMetadataStoreTest {
     @Test
+    fun batchRemovalPreservesNumberingAndLocksRemovedSeriesMembers() {
+        store.saveItems(listOf(item.copy(series = SeriesRef("s", "S", chapter = 1.0)),
+            item.copy(id = "b", relativePath = "b.cbz", series = SeriesRef("s", "S", chapter = 7.0))))
+        val before = store.loadCatalog(item.libraryId)
+        val series = before.series.single()
+        assertEquals(1, store.removeRelationMembers(item.libraryId, "s", true, setOf(item.id), series.revision))
+        val after = store.loadCatalog(item.libraryId)
+        assertEquals(before.assets, after.assets)
+        assertEquals(before.editions, after.editions)
+        assertEquals(series.members.filter { it.workId == "b" }, after.series.single().members)
+        assertEquals("manual", after.works.first { it.id == item.id }.fieldSources["series"])
+        val raw = access.read(PortableMetadataStore.CATALOG_PATH)
+        assertThrows(RevisionConflictException::class.java) {
+            store.removeRelationMembers(item.libraryId, "s", true, setOf("b"), series.revision)
+        }
+        assertEquals(raw, access.read(PortableMetadataStore.CATALOG_PATH))
+        store.removeRelationMembers(item.libraryId, "s", true, setOf("b"), after.series.single().revision)
+        assertTrue(store.loadCatalog(item.libraryId).series.single().members.isEmpty())
+        assertEquals(2, store.loadCatalog(item.libraryId).works.size)
+    }
+
+    @Test
+    fun batchGroupRemovalClearsCoverAndRefusesDeletedTarget() {
+        store.saveItem(item, 0)
+        val group = store.upsertGroup(item.libraryId, dev.susnowy.gallery.model.PortableGroup(
+            id = "g", title = "G", members = listOf(dev.susnowy.gallery.model.PortableGroupMember(item.id)),
+            coverWorkId = item.id, updatedAt = "2026-09-19T00:00:00Z"))
+        assertEquals(1, store.removeRelationMembers(item.libraryId, "g", false, setOf(item.id), group.revision))
+        val after = store.loadCatalog(item.libraryId)
+        assertTrue(after.groups.single().members.isEmpty())
+        assertEquals(null, after.groups.single().coverWorkId)
+        store.deleteGroup(item.libraryId, "g")
+        assertThrows(RevisionConflictException::class.java) {
+            store.removeRelationMembers(item.libraryId, "g", false, setOf(item.id), group.revision)
+        }
+    }
+
+    @Test
     fun batchFieldsPreserveSourcesRelationshipsAndUnknownExtensions() {
         val saved = store.saveItem(item.copy(series = SeriesRef("series-id", "Series")), 0)
         val before = store.loadCatalog(item.libraryId)

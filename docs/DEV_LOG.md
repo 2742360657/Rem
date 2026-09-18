@@ -17,6 +17,7 @@
 - 审查发现旧 saveItems 会重建 Asset、Edition 与 Series；新增 saveBatchFields 收窄已有 Work 写入，保留来源、关系及根/实体扩展字段，新增 Inbox Work 仍创建初始来源。回归覆盖来源哈希、系列关系、未知扩展、过期 revision 拒绝且无部分写入。
 - Windows / Java 17：testDebugUnitTest、lintDebug、assembleDebug、assembleDebugAndroidTest 通过。API 36 emulator-5556：BatchMetadataInteractionTest 两项及 BatchMetadataRepositoryTest 一项通过。测试 Provider 无系统持久授权，仓储 fixture 直接登记；跨 storage 实例读回重新打开，避免旧文档 URI 缓存影响测试。
 - 未涉及真实媒体或 Schema；未取得本轮真机字段编辑证据。批量草稿界面重建后重置，避免新基线套用旧草稿；多文档/多库非整体原子事务，外部写入者仍需互斥。
+- 随后补充批量移出关系：按打开时的 Library、关系 revision 和成员集合提交；分组保留空关系并清除被移出的封面，系列保留剩余编号并给退出成员写 `series=manual`。过期或已删除关系拒绝提交。单测及 API 36 模拟器交互测试通过。
 
 ## 2026-09-18：接入目录返回无反馈的排查与可观测性修正
 

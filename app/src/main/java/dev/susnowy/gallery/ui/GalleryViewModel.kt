@@ -611,6 +611,14 @@ class GalleryViewModel(
         }
     }
 
+    fun removeRelationMembers(request: dev.susnowy.gallery.model.RelationRemoval) {
+        launchLongOperation {
+            runCatching { repository.removeRelationMembers(request) }
+                .onSuccess { message.value = "已从 ${request.title} 移出 $it 项；作品仍保留" }
+                .onFailure(::showError)
+        }
+    }
+
     fun updateSearch(query: String) {
         searchQuery.value = query
         savedStateHandle[SEARCH_QUERY_KEY] = query
