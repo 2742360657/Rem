@@ -179,6 +179,7 @@ fun SeriesEditor(
                     }
                 }
             }
+            dev.susnowy.gallery.ui.components.ListPositionButton(listState, memberIds.size)
             LazyColumn(
                 state = listState,
                 modifier = Modifier.weight(1f),

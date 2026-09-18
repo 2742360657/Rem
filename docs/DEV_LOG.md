@@ -6,6 +6,12 @@
 
 条目按时间倒序。同一问题的后续进展追加到原条目，不另起新条。
 
+## 2026-09-19：管理列表定位与 Inbox 分区状态
+
+- R07/R08：复用 ListPositionButton 接入 Inbox 三个路径列表与 Group/Series 编辑器。Inbox 的 SaveableStateHolder 在空内容分支前建立，每个分区保存独立位置，外层 GalleryApp 已按 Library 和页面隔离。已忽略媒体选择改用现有 StringSetSaver。
+- 先通过三个聚焦设备场景，再加入忽略媒体选择重建测试。Windows 298 单测、lint、debug/test APK 构建及 API 36（swiftshader_indirect，禁用 Vulkan）全量 55 项设备测试通过。每个管理路径列表用 150 项，分别跳 100/50/75 并切换与重建；分组/系列定位后返回不出现未保存修改确认。
+- 无便携或原媒体变更。未验证真机、真实介质；分组书架、系统相册等长界面定位仍有缺口。
+
 ## 2026-09-19：章节及关系选择列表快速定位
 
 - R07/R08：ListPositionButton 复用已有 PositionJumpDialog，接入 SeriesChapterList、WorkPickerDialog、TargetPickerDialog。章节的 LazyListState 保持可保存；定位使用当前过滤结果的顺序，不增删成员或改变便携关系。

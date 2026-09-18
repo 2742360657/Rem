@@ -377,6 +377,7 @@ fun GroupDetail(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
             )
+            dev.susnowy.gallery.ui.components.ListPositionButton(listState, memberIds.size)
             LazyColumn(
                 state = listState,
                 modifier = Modifier.weight(1f),

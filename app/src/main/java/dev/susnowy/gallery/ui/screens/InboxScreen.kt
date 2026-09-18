@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.InsertDriveFile
@@ -28,6 +29,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -39,6 +41,7 @@ import dev.susnowy.gallery.model.InboxDisposition
 import dev.susnowy.gallery.model.MediaItem
 import dev.susnowy.gallery.ui.GalleryViewModel
 import dev.susnowy.gallery.ui.components.MediaGrid
+import dev.susnowy.gallery.ui.components.ListPositionButton
 
 /**
  * Everything Inbox can show, already split by the portable decision behind it.
@@ -80,6 +83,7 @@ private val StringSetSaver = Saver<Set<String>, ArrayList<String>>(
 
 @Composable
 fun InboxScreen(content: InboxContent, viewModel: GalleryViewModel) {
+    val sectionStates = rememberSaveableStateHolder()
     var selectionMode by rememberSaveable { mutableStateOf(false) }
     // Selection mode and the selection have to survive together: the mode is saveable, so a plain
     // `remember` selection came back empty after a rotation or a trip to another tab and left the
@@ -87,7 +91,9 @@ fun InboxScreen(content: InboxContent, viewModel: GalleryViewModel) {
     var selected by rememberSaveable(stateSaver = StringSetSaver) {
         mutableStateOf(emptySet<String>())
     }
-    var selectedIgnored by remember { mutableStateOf(emptySet<String>()) }
+    var selectedIgnored by rememberSaveable(stateSaver = StringSetSaver) {
+        mutableStateOf(emptySet<String>())
+    }
     var section by rememberSaveable {
         mutableStateOf(
             when {
@@ -149,23 +155,25 @@ fun InboxScreen(content: InboxContent, viewModel: GalleryViewModel) {
                 )
             }
         }
-        when (section) {
-            InboxSection.MEDIA -> PendingMediaSection(
-                content = content,
-                viewModel = viewModel,
-                selectionMode = selectionMode,
-                onSelectionModeChange = { selectionMode = it },
-                selected = selected,
-                onSelectedChange = { selected = it },
-            )
-            InboxSection.OTHER -> PendingDiscoverySection(content, viewModel)
-            InboxSection.IGNORED -> IgnoredSection(
-                content = content,
-                viewModel = viewModel,
-                selected = selectedIgnored,
-                onSelectedChange = { selectedIgnored = it },
-            )
-            InboxSection.HANDLED -> HandledSection(content, viewModel)
+        sectionStates.SaveableStateProvider(section.name) {
+            when (section) {
+                InboxSection.MEDIA -> PendingMediaSection(
+                    content = content,
+                    viewModel = viewModel,
+                    selectionMode = selectionMode,
+                    onSelectionModeChange = { selectionMode = it },
+                    selected = selected,
+                    onSelectedChange = { selected = it },
+                )
+                InboxSection.OTHER -> PendingDiscoverySection(content, viewModel)
+                InboxSection.IGNORED -> IgnoredSection(
+                    content = content,
+                    viewModel = viewModel,
+                    selected = selectedIgnored,
+                    onSelectedChange = { selectedIgnored = it },
+                )
+                InboxSection.HANDLED -> HandledSection(content, viewModel)
+            }
         }
     }
 }
@@ -253,6 +261,7 @@ private fun PendingMediaSection(
 @Composable
 private fun PendingDiscoverySection(content: InboxContent, viewModel: GalleryViewModel) {
     val entries = content.pendingDiscoveries
+    val listState = rememberLazyListState()
     Column(Modifier.fillMaxSize()) {
         Text(
             "这些路径已被发现，但当前不能安全分类或打开。忽略或标记已处理后不会移动、删除或伪装它们，" +
@@ -261,7 +270,9 @@ private fun PendingDiscoverySection(content: InboxContent, viewModel: GalleryVie
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        ListPositionButton(listState, entries.size)
         LazyColumn(
+            state = listState,
             modifier = Modifier.weight(1f),
             contentPadding = PaddingValues(bottom = 96.dp),
         ) {
@@ -296,6 +307,7 @@ private fun IgnoredSection(
     selected: Set<String>,
     onSelectedChange: (Set<String>) -> Unit,
 ) {
+    val listState = rememberLazyListState()
     Column(Modifier.fillMaxSize()) {
         Text(
             "被忽略的内容仍在原位置，只是不再出现在普通视图。撤销后按扫描结果重新决定归属。",
@@ -351,7 +363,9 @@ private fun IgnoredSection(
             )
         }
         if (content.ignoredDiscoveries.isNotEmpty()) {
+            ListPositionButton(listState, content.ignoredDiscoveries.size)
             LazyColumn(
+                state = listState,
                 modifier = Modifier.weight(1f, fill = content.ignoredMedia.isEmpty()),
                 contentPadding = PaddingValues(bottom = 96.dp),
             ) {
@@ -369,6 +383,7 @@ private fun IgnoredSection(
 
 @Composable
 private fun HandledSection(content: InboxContent, viewModel: GalleryViewModel) {
+    val listState = rememberLazyListState()
     Column(Modifier.fillMaxSize()) {
         Text(
             "这些路径已经由你确认无需 Rem 处理；撤销后会重新回到“其他待判断”。",
@@ -376,7 +391,9 @@ private fun HandledSection(content: InboxContent, viewModel: GalleryViewModel) {
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        ListPositionButton(listState, content.handledDiscoveries.size)
         LazyColumn(
+            state = listState,
             modifier = Modifier.weight(1f),
             contentPadding = PaddingValues(bottom = 96.dp),
         ) {
