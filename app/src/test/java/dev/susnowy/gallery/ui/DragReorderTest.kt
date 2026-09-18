@@ -147,6 +147,78 @@ class DragReorderTest {
 
         assertEquals(listOf(1 to 2, 2 to 3), moves)
         assertEquals(3, state.draggingIndex)
-        assertEquals(30f, state.rowOffset, 0.001f)
+        // The visual offset keeps the row under the finger; the two completed swaps are already
+        // expressed by its new position in the list, so only the 30px remainder is left over.
+        assertEquals(230f, state.dragRowOffset, 0.001f)
+    }
+
+    /**
+     * A held finger at the list edge must be able to cross many rows on auto-scroll alone: the
+     * member order has to follow the distance the list actually scrolled, not the pixels the row
+     * was nudged by.
+     */
+    @Test
+    fun holdingTheEdgeCrossesManyRowsWithoutMovingTheFinger() {
+        val state = DragReorderState().apply {
+            rowHeightPx = 100f
+            itemCount = 40
+            start(index = 2, pointerInViewport = 1_900f)
+        }
+        val moves = mutableListOf<Pair<Int, Int>>()
+
+        repeat(5) { state.scrolledBy(100f) { from, to -> moves += from to to } }
+
+        assertEquals(listOf(2 to 3, 3 to 4, 4 to 5, 5 to 6, 6 to 7), moves)
+        assertEquals(7, state.draggingIndex)
+        // 500px of list scroll is 500px of visual displacement and exactly five rows of order.
+        assertEquals(500f, state.dragRowOffset, 0.001f)
+    }
+
+    @Test
+    fun draggingWithTheFingerKeepsTheRowUnderTheFinger() {
+        val state = DragReorderState().apply {
+            rowHeightPx = 100f
+            itemCount = 10
+            start(index = 0, pointerInViewport = 500f)
+        }
+        val moves = mutableListOf<Pair<Int, Int>>()
+
+        state.drag(250f) { from, to -> moves += from to to }
+
+        assertEquals(listOf(0 to 1, 1 to 2), moves)
+        assertEquals(2, state.draggingIndex)
+        assertEquals(250f, state.dragRowOffset, 0.001f)
+        assertEquals(750f, state.pointerY, 0.001f)
+    }
+
+    /** Auto-scroll moves the list, not the finger, so the edge speed must stay constant. */
+    @Test
+    fun autoScrollDoesNotDriftTheFingerTowardsTheMiddleOfTheList() {
+        val state = DragReorderState().apply {
+            rowHeightPx = 100f
+            itemCount = 100
+            start(index = 0, pointerInViewport = 1_980f)
+        }
+
+        repeat(10) { state.scrolledBy(60f) { _, _ -> } }
+
+        assertEquals("自动滚动不是手指移动", 1_980f, state.pointerY, 0.001f)
+        assertTrue(
+            "仍然贴着底边，因此仍然保持滚动速度",
+            dragAutoScrollSpeed(state.pointerY, 2_000f) > 0f,
+        )
+    }
+
+    @Test
+    fun aFingerDragStillMovesTheFingerPosition() {
+        val state = DragReorderState().apply {
+            rowHeightPx = 100f
+            itemCount = 10
+            start(index = 0, pointerInViewport = 1_000f)
+        }
+
+        state.drag(-120f) { _, _ -> }
+
+        assertEquals(880f, state.pointerY, 0.001f)
     }
 }

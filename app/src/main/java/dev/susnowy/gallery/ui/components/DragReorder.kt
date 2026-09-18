@@ -50,34 +50,54 @@ import androidx.compose.ui.unit.dp
 class DragReorderState internal constructor() {
     var draggingIndex by mutableStateOf<Int?>(null)
         internal set
-    var dragOffset by mutableFloatStateOf(0f)
+
+    /**
+     * How far the dragged row is displaced from its laid-out position. This is what the user sees,
+     * so it accumulates every movement: a finger drag and an auto-scroll both move the row.
+     */
+    var dragRowOffset by mutableFloatStateOf(0f)
         internal set
+
+    /**
+     * Distance already converted into member swaps.
+     *
+     * Kept apart from [dragRowOffset] on purpose: each swap moves the row by exactly one row
+     * height, so the pixels that produced a swap must not be applied a second time as a visual
+     * translation. Mixing the two is what made a long auto-scroll look like it moved the row while
+     * the member order barely changed.
+     */
+    private var reorderOffset = 0f
+
     var rowHeightPx by mutableFloatStateOf(0f)
     var itemCount by mutableIntStateOf(0)
 
-    /** The finger's position in the list viewport, which is what the auto-scroll follows. */
+    /**
+     * The finger's position in the list viewport, which is what the auto-scroll follows.
+     *
+     * It moves only when the finger moves: auto-scroll shifts the list, not the finger, and a
+     * finger that keeps its screen position must keep its scroll speed.
+     */
     var pointerY by mutableFloatStateOf(0f)
         internal set
 
     val dragging: Boolean get() = draggingIndex != null
 
-    /** Visual displacement of the dragged row from its laid-out position. */
-    val rowOffset: Float get() = dragOffset
-
     internal fun start(index: Int, pointerInViewport: Float) {
         draggingIndex = index
-        dragOffset = 0f
+        dragRowOffset = 0f
+        reorderOffset = 0f
         pointerY = pointerInViewport
     }
 
     fun drag(deltaY: Float, onMove: (from: Int, to: Int) -> Unit) {
+        pointerY += deltaY
         applyDelta(deltaY, onMove)
     }
 
     /**
-     * Auto-scroll is movement of the list underneath the stationary finger. It must feed the
-     * same reorder arithmetic as a finger drag; a visual translation alone scrolls the original
-     * row out of composition without ever changing the member order.
+     * Auto-scroll is movement of the list underneath a stationary finger. It must feed the same
+     * reorder arithmetic as a finger drag; a visual translation alone scrolls the dragged row out
+     * of composition without ever changing the member order.
      */
     internal fun scrolledBy(delta: Float, onMove: (from: Int, to: Int) -> Unit) {
         applyDelta(delta, onMove)
@@ -85,15 +105,17 @@ class DragReorderState internal constructor() {
 
     private fun applyDelta(delta: Float, onMove: (from: Int, to: Int) -> Unit) {
         val index = draggingIndex ?: return
-        val result = reorderStep(index, dragOffset + delta, rowHeightPx, itemCount)
+        dragRowOffset += delta
+        val result = reorderStep(index, reorderOffset + delta, rowHeightPx, itemCount)
         result.moves.forEach { (from, to) -> onMove(from, to) }
         draggingIndex = result.index
-        dragOffset = result.offset
+        reorderOffset = result.offset
     }
 
     fun finish() {
         draggingIndex = null
-        dragOffset = 0f
+        dragRowOffset = 0f
+        reorderOffset = 0f
     }
 }
 
@@ -183,22 +205,24 @@ fun rememberDragReorderState(rowHeight: Dp): DragReorderState {
 /**
  * Attaches the drag gesture to a handle (never to the whole row, so a list can still scroll).
  *
- * [pointerInViewport] converts a position inside the handle into list-viewport coordinates, which
- * is what the auto-scroll needs to know whether the finger is held near an edge of the list.
+ * [rowViewportTop] reports where the row currently sits in the list viewport. It is read once, at
+ * drag start, to place the finger in viewport coordinates. It must **not** be re-read while the
+ * drag runs: auto-scroll moves the row under a stationary finger, so deriving the finger position
+ * from the row's layout position would make the finger look like it is drifting back to the middle
+ * of the list and the auto-scroll would slow itself down.
  */
 fun Modifier.dragReorderHandle(
     state: DragReorderState,
     index: Int,
     onMove: (from: Int, to: Int) -> Unit,
-    pointerInViewport: (Float) -> Float,
+    rowViewportTop: () -> Float,
 ): Modifier = pointerInput(index) {
     detectDragGesturesAfterLongPress(
-        onDragStart = { offset -> state.start(index, pointerInViewport(offset.y)) },
+        onDragStart = { offset -> state.start(index, rowViewportTop() + offset.y) },
         onDragEnd = { state.finish() },
         onDragCancel = { state.finish() },
         onDrag = { change, dragAmount ->
             change.consume()
-            state.pointerY = pointerInViewport(change.position.y)
             state.drag(dragAmount.y, onMove)
         },
     )
@@ -246,6 +270,8 @@ fun ReorderableRow(
                     viewportHeight = (info.viewportEndOffset - info.viewportStartOffset).toFloat(),
                 )
                 if (speed != 0f && elapsed > 0) {
+                    // The distance the list actually consumed is what moves the member across
+                    // rows; `scrollBy` returns 0 at the ends, so the order stops with the list.
                     val consumed = listState.scrollBy(dragAutoScrollDelta(speed, elapsed))
                     if (consumed != 0f) state.scrolledBy(consumed, onMove)
                 }
@@ -263,7 +289,7 @@ fun ReorderableRow(
                 if (!dragging) rowTop = coordinates.positionInParent().y
             }
             .graphicsLayer {
-                translationY = if (dragging) state.rowOffset else 0f
+                translationY = if (dragging) state.dragRowOffset else 0f
             }
             .background(
                 if (dragging) MaterialTheme.colorScheme.surfaceContainerHigh
@@ -284,7 +310,7 @@ fun ReorderableRow(
                     state = state,
                     index = index,
                     onMove = onMove,
-                    pointerInViewport = { localY -> rowTop + handleOffsetInRow + localY },
+                    rowViewportTop = { rowTop + handleOffsetInRow },
                 ),
         )
         Box(
