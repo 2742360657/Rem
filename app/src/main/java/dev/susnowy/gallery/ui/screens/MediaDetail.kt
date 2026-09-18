@@ -12,6 +12,7 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -113,6 +114,7 @@ import coil3.request.ImageRequest
 import coil3.size.Precision
 import coil3.SingletonImageLoader
 import dev.susnowy.gallery.media.ImagePage
+import dev.susnowy.gallery.media.readComicPageDimensions
 import dev.susnowy.gallery.media.comicPreloadOrder
 import dev.susnowy.gallery.model.MediaItem
 import dev.susnowy.gallery.model.MediaDomain
@@ -1400,12 +1402,28 @@ private fun ZoomableComicPage(
 }
 
 @Composable
-internal fun DirectComicPage(request: ImageRequest, description: String) {
+internal fun DirectComicPage(
+    request: ImageRequest,
+    description: String,
+    imageLoader: coil3.ImageLoader = SingletonImageLoader.get(LocalContext.current),
+) {
+    val resolver = LocalContext.current.contentResolver
+    var aspect by rememberSaveable(request.memoryCacheKey, request.data.toString()) { mutableFloatStateOf(0f) }
+    var headerReady by remember(request) { mutableStateOf(aspect > 0f) }
+    LaunchedEffect(request) {
+        if (aspect <= 0f) aspect = readComicPageDimensions(resolver, request.data)?.aspectRatio ?: 0f
+        headerReady = true
+    }
+    if (!headerReady) {
+        ComicPageLoading()
+        return
+    }
     SubcomposeAsyncImage(
         model = request,
+        imageLoader = imageLoader,
         contentDescription = description,
         contentScale = ContentScale.FillWidth,
-        modifier = Modifier.fillMaxWidth(),
+        modifier = if (aspect > 0f) Modifier.fillMaxWidth().aspectRatio(aspect) else Modifier.fillMaxWidth(),
     ) {
         val imageState by painter.state.collectAsState()
         when (imageState) {
@@ -1415,7 +1433,9 @@ internal fun DirectComicPage(request: ImageRequest, description: String) {
                 onRetry = painter::restart,
             )
             // Empty also needs height, otherwise a jump can be clamped against an empty book.
-            else -> ComicPageLoading()
+            else -> if (aspect <= 0f) ComicPageLoading() else Box(
+                Modifier.fillMaxSize(), contentAlignment = Alignment.Center,
+            ) { CircularProgressIndicator(color = Color.White) }
         }
     }
 }
