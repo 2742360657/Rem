@@ -6,6 +6,14 @@
 
 条目按时间倒序。同一问题的后续进展追加到原条目，不另起新条。
 
+## 2026-09-19：S:\Rem-lib 真实库只读盘点
+
+- 用户已将包含大量真实内容的 `S:\Rem-lib` 接入并扫描过一遍。本次仅使用 PowerShell 读取目录、扩展名和 `.gallery` JSON，未写入 S 盘，未访问或修改媒体内容，也未触发重新扫描。
+- 顶层目录为 `Comics`、`Works`、`gallery`、`pixiv`、`DCIM`、`Photos`；物理统计约 99,000 个文件，其中 JPG 74,873、WebP 13,321、GIF 2,052、PNG 1,529、CBZ 1,260、MP4 542、HEIC 143、MOV 18。
+- `.gallery/items/catalog.json` 为 Schema v4，包含 3,973 Asset/Work/Edition、62 Series、0 Group。来源为 file 2,489、archive 1,229、directory 177、system_import 78；媒体类型为 image 2,248、image_set 1,406、video 241、photo 73、photo_video 5。
+- 识别覆盖：domain 为 classified 2,348、works 1,547、album 78；仅 177 个 Work 有作者、870 个有标签、0 个有 Collection。结论是基础来源/格式识别已有价值，但内容语义覆盖有限，符合 Android 只做弱识别原则；不应据此批量猜作者、分类、Group 或 Series。
+- S 盘是真实数据，本条统计不等同于媒体可播放性、完整扫描正确性或性能验收；后续必须先做介质外备份，再进行任何便携写入或批量操作。
+
 ## 2026-09-19：千作品冷接入与全量回归
 
 - R11：新增合成 1000 Work catalog，媒体 Books 子目录的子项查询被 Provider 设为失败，接入仍成功；断言全部作品/人工标签进入数据库和仓库 StateFlow，Books 查询数为 0，不创建原媒体。
