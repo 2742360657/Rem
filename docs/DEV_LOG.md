@@ -6,6 +6,12 @@
 
 条目按时间倒序。同一问题的后续进展追加到原条目，不另起新条。
 
+## 2026-09-19：千作品冷接入与全量回归
+
+- R11：新增合成 1000 Work catalog，媒体 Books 子目录的子项查询被 Provider 设为失败，接入仍成功；断言全部作品/人工标签进入数据库和仓库 StateFlow，Books 查询数为 0，不创建原媒体。
+- API 36 Rem_API_36 单独运行记录 attachMs=1694。计时包括 repository.attach，不包括 fixture 建立及 UI 首帧；使用测试 Context 模拟权限预检，实际读写走合成 Provider。没有大批进度/Inbox 数据，不外推真实慢介质性能。
+- Windows / Java 17 的 305 单测、lint、debug/test APK 与 API 36 全部 80 项设备测试通过。测试初版因 Log.i 返回 Int 导致 JUnit 要求 void 失败，显式 Unit 后通过。无产品代码或真实媒体改动。
+
 ## 2026-09-19：接入本机投影统一事务
 
 - R11：新增同步 attachTransaction，把登记、媒体、Inbox、进度、分组、系列纳入外层 SQLite 事务；内部既有嵌套事务由外层统一提交。进度通知、内存 Edition 计划和界面刷新在提交后执行。

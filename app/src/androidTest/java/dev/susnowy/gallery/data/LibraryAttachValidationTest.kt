@@ -90,4 +90,40 @@ class LibraryAttachValidationTest {
             assertNotNull(database.library(identity.libraryId))
         } finally { database.removeLibrary(identity.libraryId); database.close() }
     }
+
+    @Test fun thousandPortableWorksAttachWithoutQueryingMediaDirectories() = runBlocking {
+        val context = context()
+        val root = DocumentsContract.buildTreeDocumentUri(TestDocumentsProvider.AUTHORITY, TestDocumentsProvider.ROOT_ID)
+        context.contentResolver.call(root, TestDocumentsProvider.METHOD_RESET, null, Bundle())
+        val storage = DocumentTreeStorage(context, root)
+        val identity = PortableLibraryManager(storage).initialize("Large cold fixture")
+        storage.ensureDirectory("Books")
+        val mediaDirectory = DocumentsContract.getDocumentId(android.net.Uri.parse(requireNotNull(storage.entry("Books")).uri))
+        val store = dev.susnowy.gallery.metadata.PortableMetadataStore(storage)
+        val works = (1..1000).map { index ->
+            dev.susnowy.gallery.model.MediaItem("${identity.libraryId}-$index", identity.libraryId,
+                "Books/$index.cbz", "", dev.susnowy.gallery.model.MediaKind.IMAGE_SET,
+                sourceKind = dev.susnowy.gallery.model.SourceKind.ARCHIVE, displayTitle = "Book $index",
+                tags = listOf("portable"))
+        }
+        store.saveItems(works)
+        // Any media traversal now fails. Metadata under .gallery remains available.
+        context.contentResolver.call(root, TestDocumentsProvider.METHOD_FAIL_CHILDREN, mediaDirectory, Bundle())
+        val database = GalleryDatabase(context)
+        try {
+            val repository = GalleryRepository(context)
+            val started = android.os.SystemClock.elapsedRealtime()
+            repository.attach(root)
+            val elapsed = android.os.SystemClock.elapsedRealtime() - started
+            val projected = database.media(identity.libraryId)
+            assertEquals(1000, projected.size)
+            assertTrue(projected.all { it.tags == listOf("portable") && !it.inInbox && it.missingMedia && !it.needsRepair })
+            assertEquals(1000, repository.media.value.count { it.libraryId == identity.libraryId })
+            val queries = context.contentResolver.call(root, TestDocumentsProvider.METHOD_CHILD_QUERY_COUNT, mediaDirectory, Bundle())!!
+                .getInt(TestDocumentsProvider.RESULT_COUNT)
+            assertEquals("Attach must not enumerate Books", 0, queries)
+            android.util.Log.i("RemAttachBenchmark", "1000 portable works, media queries=$queries, attachMs=$elapsed")
+            Unit
+        } finally { database.removeLibrary(identity.libraryId); database.close() }
+    }
 }
