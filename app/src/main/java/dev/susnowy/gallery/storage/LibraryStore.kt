@@ -156,6 +156,8 @@ fun indexOf(
     violations: List<String>,
     /** Paths whose metadata has already been read. Everything else is still waiting for the pass. */
     metadataDone: Set<String> = emptySet(),
+    /** 画集 projects whose subtree the listing walk has finished, so a resumed pass can skip them. */
+    doneProjects: Collection<String> = emptyList(),
 ): Index =
     Index(
         // Stated explicitly: the data class default is the *legacy* version, because that is what
@@ -164,4 +166,5 @@ fun indexOf(
         entries = entries.map { it.toStored(metadataRead = it.path in metadataDone) },
         folders = folders.sorted(),
         violations = violations,
+        doneProjects = doneProjects.sorted(),
     )

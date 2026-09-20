@@ -31,6 +31,7 @@ import dev.susnowy.gallery.ui.OpenWith.Outcome
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -314,6 +315,16 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
     private val readThisPass = mutableSetOf<String>()
 
     /**
+     * 画集 projects the listing walk has finished, across passes.
+     *
+     * The walk cannot be shortened — no provider reports a folder's modification time — so on a
+     * real Library it runs for minutes, and it is routinely stopped before the end. This is the
+     * resume point: an interrupted pass leaves the projects it finished behind, and the next one
+     * starts at the first project that was never reached instead of listing everything again.
+     */
+    private val doneProjects = mutableSetOf<String>()
+
+    /**
      * Paths whose capture time and place have been read.
      *
      * Kept across passes and written into the index, which is what makes the metadata pass resumable:
@@ -322,7 +333,41 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
      */
     private val metadataDone = mutableSetOf<String>()
 
+    /**
+     * Set when an index write has been asked for, drained by [writer].
+     *
+     * Sending never suspends — the buffer holds one — so a scan's progress callback can ask for a
+     * write from inside the walk without waiting for a volume round-trip. Requests collapse: a
+     * second one while the first is still pending is the same request, because what gets written
+     * is read when the write starts, not when it was asked for.
+     */
+    private val writeRequests = Channel<Unit>(Channel.CONFLATED)
+
+    /**
+     * The one writer. Every index write goes through it, one at a time.
+     *
+     * Writes used to be launched independently and the previous one cancelled. That reads as
+     * harmless — the newest state wins — and it is not: `persist` reads `known` and then encodes
+     * it, so a write started before the walk added its last projects and encoding after them
+     * overwrote the walk's own, complete, write with an older picture of the Library. Measured on
+     * a test Library: the last four projects walked were missing from the cache afterwards, 5562
+     * entries down to 5518, with nothing to show for it but a file that looked fine.
+     */
+    private val writer: Job by lazy {
+        viewModelScope.launch(Dispatchers.IO) {
+            for (ignored in writeRequests) persist()
+        }
+    }
+
+    /** Asks for the index to be written without waiting for it. */
+    private fun requestWrite() {
+        writeRequests.trySend(Unit)
+    }
+
     init {
+        // Started here rather than left to first use: `requestWrite` only posts to the channel, so
+        // nothing else would ever touch the lazy value and the drain loop would never run.
+        writer
         openAttachedLibrary()
         refreshThumbnailSize()
     }
@@ -483,17 +528,27 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
         if (scanJob?.isActive == true) return
         known.clear()
         metadataDone.clear()
+        // The resume record is part of the cache, so rebuilding has to forget it too. Leaving it
+        // was worse than not rebuilding at all: the deleted cache made the walk start from nothing,
+        // while the record still claimed every project was finished, so the pass skipped all of them
+        // and the Library came back as album-only — measured on a test Library, 5562 entries down
+        // to 2200. This is also the supported way to see a file added inside an existing project,
+        // because a resumed walk deliberately does not re-list finished projects.
+        doneProjects.clear()
         folders = emptyList()
         violations = emptyList()
         lastWritten = 0
         _state.update {
             it.copy(entries = emptyList(), folders = emptyList(), violations = emptyList())
         }
+        RemLog.info(SCOPE, "重建索引：已丢弃缓存，重新扫描")
+        // The file is dropped before the walk starts, not alongside it. Launched separately, the
+        // walk could write a fresh index first and the drop then deleted it, leaving a Library that
+        // had just been walked with no cache at all.
         viewModelScope.launch {
             withContext(Dispatchers.IO) { store.dropIndex(current) }
+            refresh()
         }
-        RemLog.info(SCOPE, "重建索引：已丢弃缓存，重新扫描")
-        refresh()
     }
 
     fun dismissMessage() = _state.update { it.copy(message = null) }
@@ -565,15 +620,6 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
     private var metadataJob: Job? = null
 
     /**
-     * The index write in flight, if any.
-     *
-     * Held so a report arriving while the previous write is still running cancels it instead of
-     * queueing a second write of the same, newer, state. Writes are reconciled by the last one
-     * winning, and the last one always carries everything the earlier ones did.
-     */
-    private var writeJob: Job? = null
-
-    /**
      * The running `.nomedia` change, if any.
      *
      * Held so a second tap cannot start a parallel change: both would read the root before either
@@ -596,13 +642,60 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
     fun refresh() {
         val current = tree ?: return
         if (scanJob?.isActive == true) return
+        // The catch-up pass is stopped first, for two reasons that both matter.
+        //
+        // Only one of the two should be reading the volume: the listing walk is the one the user is
+        // waiting for, and the metadata pass is resumable, so interrupting it costs at most one
+        // batch. And both write the whole index, so overlapping them means the index is written
+        // from whichever pass happens to run last — measured on a test Library, a metadata
+        // checkpoint landing mid-walk left the cache claiming a project was finished while holding
+        // none of its files. It restarts below, after the walk's own write.
+        //
+        // Joined, not just cancelled: a cancelled pass can still be inside its write, and that
+        // write is the stale one this is here to keep out of the way.
+        val interruptedMetadata = metadataJob?.takeIf { it.isActive }
+        if (interruptedMetadata != null) {
+            RemLog.info(SCOPE, "重新扫描打断了元数据补齐，等遍历结束后继续")
+            interruptedMetadata.cancel()
+        }
         // Reuse decides by path, so the cached readings stay in `known` while the pass runs — the
         // grid must not go blank for the tens of seconds a large Library takes. What the pass reads
         // is recorded separately, and anything the pass never saw is dropped when it finishes.
         val cachedSnapshot = known.toMap()
         readThisPass.clear()
+        // A resumed pass does not walk the projects an earlier pass finished, so by the usual
+        // bookkeeping nothing under them was "seen" — and the pass, being complete, would then
+        // treat every one of their files as deleted and drop it from the cache. Measured on a test
+        // Library: a resumed pass took 5123 entries down to 2470.
+        //
+        // They are accounted for, just not re-listed: the resume record is the pass's own statement
+        // that this subtree was listed and has not been touched since. Counting them as present is
+        // what separates "the whole Library is accounted for" from "the whole Library was re-listed
+        // this time" — and only the second is a reason to forget anything.
+        val resumed = doneProjects.toList()
+        readThisPass += known.keys.filter { path ->
+            if (!path.startsWith(COLLECTION_PREFIX)) {
+                false
+            } else {
+                // Exactly the project segment, so a project is matched without building a string
+                // for it. A Library of tens of thousands of entries is compared once each.
+                var separator = path.indexOf('/', COLLECTION_PREFIX.length)
+                while (separator > 0) {
+                    if (path.substring(0, separator) in resumed) return@filter true
+                    separator = path.indexOf('/', separator + 1)
+                }
+                false
+            }
+        }
         lastWritten = known.size
+        RemLog.info(
+            SCOPE,
+            "刷新开始 缓存条目=${known.size} 已保留=${readThisPass.size} 续扫记录=${resumed.size}",
+        )
         scanJob = viewModelScope.launch {
+            // Waited for here rather than in `refresh` itself, which is not a suspend function:
+            // the walk must not start while the pass it just interrupted is still writing.
+            interruptedMetadata?.join()
             _state.update {
                 it.copy(refreshing = true, scanProgress = ScanProgress(known.size, known.size))
             }
@@ -648,8 +741,24 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
                     if (known.size - lastWritten < PERSIST_EVERY_ENTRIES) return
                     lastWritten = known.size
                     // A write still running is dropped in favour of this newer one.
-                    writeJob?.cancel()
-                    writeJob = viewModelScope.launch(Dispatchers.IO) { persist() }
+                    requestWrite()
+                }
+
+                /**
+                 * Checkpointed the moment a project is finished, not at the end of the pass.
+                 *
+                 * The end of the pass is what an interrupted walk never reaches, and the whole
+                 * point of recording this is to survive exactly that. It is a small write — the
+                 * index is already being written every couple of seconds — and it means a kill
+                 * costs at most the one project in flight rather than the whole walk.
+                 */
+                override fun onProjectDone(path: String) {
+                    // Only projects walked this pass arrive here now; the ones that were skipped
+                    // are already in the set and reporting them again would rewrite the whole
+                    // index once per project for no new information.
+                    doneProjects += path
+                    RemLog.info(SCOPE, "项目已遍历完成：$path（累计 ${doneProjects.size} 个，已记录可续扫）")
+                    requestWrite()
                 }
             }
             runCatching {
@@ -660,16 +769,51 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
                 // Listing only: no media file is opened, so a Library of tens of thousands of files
                 // becomes browsable in seconds. Capture times follow in the metadata pass below.
                 val result = Scanner(getApplication(), current)
-                    .scan(cachedSnapshot, sink, readMetadata = false)
-                withContext(Dispatchers.IO) { persist(result) }
+                    .scan(
+                        cached = cachedSnapshot,
+                        sink = sink,
+                        readMetadata = false,
+                        // Where the previous pass stopped. Projects listed here are already in
+                        // `known`, so the pass walks only what was never reached.
+                        doneProjects = doneProjects.toList(),
+                    )
+                // The pass is the only thing that has actually looked at 画集, so its list of what
+                // is there replaces the resume set. Building that set any other way cannot work:
+                // the old record may name a project that has been deleted (which would keep being
+                // skipped), and a project added since the last pass is in no record at all.
+                doneProjects.clear()
+                doneProjects += result.allProjects
+                // Deliberately not written here.
+                //
+                // `result.entries` holds only the projects this pass walked, and after a resume
+                // that is not the Library — the skipped ones are absent from it. Writing that view
+                // raced the progress callbacks' own writes, which carry the full picture, and the
+                // loser of the race decided what the cache said: measured on a test Library, a
+                // resumed pass left 284 of 303 projects behind. The write belongs after the walk,
+                // once, from the merged set.
                 result
             }.fold(
-                onSuccess = {
-                    val vanished = known.keys.filterNot { it in readThisPass }
-                    vanished.forEach { known.remove(it) }
-                    metadataDone.retainAll { it in readThisPass }
-                    if (vanished.isNotEmpty()) {
-                        RemLog.info(SCOPE, "本次扫描发现 ${vanished.size} 个文件已不在库中，已从列表移除")
+                onSuccess = { result ->
+                    // Only a pass that covered the whole tree can say what is gone. A partial one
+                    // never saw most of the Library, and pruning on its evidence would delete the
+                    // cache of every project it had not reached yet.
+                    if (result.complete) {
+                        val vanished = known.keys.filterNot { it in readThisPass }
+                        RemLog.info(
+                            SCOPE,
+                            "剪枝前 条目=${known.size} 本轮已见=${readThisPass.size} " +
+                                "待移除=${vanished.size} 库方返回=${result.entries.size}",
+                        )
+                        vanished.forEach { known.remove(it) }
+                        metadataDone.retainAll { it in readThisPass }
+                        if (vanished.isNotEmpty()) {
+                            RemLog.info(SCOPE, "本次扫描发现 ${vanished.size} 个文件已不在库中，已从列表移除")
+                        }
+                    } else {
+                        RemLog.info(
+                            SCOPE,
+                            "本次只走了一部分项目，保留未遍历项目的缓存；下次刷新会接着走",
+                        )
                     }
                     _state.update {
                         it.copy(
@@ -681,7 +825,11 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
                             metadataPending = pendingCount(),
                         )
                     }
-                    RemLog.info(SCOPE, "刷新完成 条目=${known.size} 文件夹=${folders.size}")
+                    RemLog.info(
+                        SCOPE,
+                        "刷新完成 条目=${known.size} 文件夹=${folders.size} " +
+                            "已完成项目=${doneProjects.size}",
+                    )
                     withContext(Dispatchers.IO) { persist() }
                     startMetadataPass(current)
                 },
@@ -752,26 +900,66 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
                         metadataPending = pendingCount(),
                     )
                 }
-                // Checkpointed per batch: the index is written with what has been read so far.
-                withContext(Dispatchers.IO) { persist() }
+                // Checkpointed per batch: the index is written with what has been read so far, but
+                // without the resume record — only the listing walk may say which projects it has
+                // finished, because only it knows.
+                withContext(Dispatchers.IO) { persist(fromWalk = false) }
             }
             RemLog.info(SCOPE, "元数据补齐完成 本次读=$read 剩余=${pendingCount()}")
         }
     }
 
-    /** Writes what is known so far. Called before, during and after a pass. */
-    private suspend fun persist(result: ScanResult? = null) {
+    /**
+     * Writes what is known so far. Called before, during and after a pass.
+     *
+     * Always the whole picture, never a pass's own slice of it. A resumed pass walks only the
+     * projects an earlier one had not reached, so its own result describes a fraction of the
+     * Library — writing that was how a resume ended up replacing a full cache with a partial one.
+     */
+    private suspend fun persist(fromWalk: Boolean = true) {
         val current = tree ?: return
         // A volume that is not readable cannot be written either, and asking anyway produced a
         // stream of "无法创建或打开文件" errors for every report while the drive was still mounting.
         if (!runCatching { current.isAvailable }.getOrDefault(false)) return
+        val snapshot = known.values.toList()
+        // A project may only be recorded as finished once the files under it are in the same
+        // snapshot. A batch still waiting to be handed over — `report` is throttled — would
+        // otherwise leave the cache claiming a project is fully listed while holding none of it,
+        // and the next pass would skip it and show an empty folder.
+        //
+        // Walked as a set of directories rather than a search per project: this runs on every
+        // write, and comparing every project against every entry would be millions of comparisons
+        // per write on a real Library.
+        val covered = mutableSetOf<String>()
+        snapshot.forEach { entry ->
+            var slash = entry.path.indexOf('/')
+            while (slash > 0) {
+                covered += entry.path.substring(0, slash)
+                slash = entry.path.indexOf('/', slash + 1)
+            }
+        }
+        // The metadata pass reads one file at a time and knows nothing about the listing walk, so
+        // letting it write the resume record meant writing the record it happened to see. Measured
+        // on a test Library: one project left marked finished with its files absent, because a
+        // metadata checkpoint landed between the walk finishing that project and the walk's own
+        // write. It is a better checkpoint while a walk is running — the walk writes on its own,
+        // and the metadata it just read is not lost by leaving the record alone.
+        val writeable = if (fromWalk) doneProjects else emptySet()
+        val claimable = writeable.intersect(covered)
+        if (claimable.size != writeable.size) {
+            RemLog.warn(
+                SCOPE,
+                "续扫记录里有 ${writeable.size - claimable.size} 个项目尚无条目，本次不写入，留待重走",
+            )
+        }
         store.writeIndex(
             current,
             indexOf(
-                entries = result?.entries ?: known.values.toList(),
-                folders = result?.folders ?: folders,
-                violations = result?.violations ?: violations,
+                entries = snapshot,
+                folders = folders,
+                violations = violations,
                 metadataDone = metadataDone,
+                doneProjects = claimable,
             ),
         )
     }
@@ -805,10 +993,14 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
         val cached = store.readIndex(current)
         known.clear()
         metadataDone.clear()
+        doneProjects.clear()
         cached?.entries?.forEach { stored ->
             known[stored.path] = stored.toEntry()
             if (stored.metadataRead) metadataDone += stored.path
         }
+        // Restored so a refresh continues the listing walk instead of starting it over. Only
+        // projects still present can match, and the walk drops the rest on its own.
+        doneProjects += cached?.doneProjects.orEmpty()
         folders = cached?.folders.orEmpty()
         violations = cached?.violations.orEmpty()
         _state.update {
@@ -879,6 +1071,13 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
     }
 }
 
+/**
+ * Start of every path under `画集/`, used to pull a project out of an entry path.
+ *
+ * Built from the one place the folder is named, so renaming the collection cannot leave this
+ * matching nothing and silently switching the resume logic off.
+ */
+private val COLLECTION_PREFIX = "$COLLECTION/"
 /**
  * A one-slot memo for a derived list.
  *

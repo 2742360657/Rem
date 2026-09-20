@@ -32,6 +32,31 @@ data class ScanResult(
     val violations: List<String>,
     /** True when every entry came from the cache, so nothing had to be re-read. */
     val reusedCache: Boolean,
+    /**
+     * 画集 projects this pass walked to the end.
+     *
+     * Written back to the cache so a pass that is interrupted resumes after them instead of
+     * listing the same hundreds of folders over again.
+     */
+    val doneProjects: List<String> = emptyList(),
+    /**
+     * Every 画集 project the pass found on the volume, walked or skipped.
+     *
+     * The caller cannot work this out for itself: the cached resume record may name projects that
+     * are no longer there, and a project added since the last pass is not in it either. This list
+     * is the walk's own evidence of what the volume holds, which is what makes the resume record
+     * trustworthy as "everything here is listed" rather than just "everything here was reached
+     * once, some time ago".
+     */
+    val allProjects: List<String> = emptyList(),
+    /**
+     * True when the walk reached the end of 画集 rather than being stopped partway.
+     *
+     * Only a finished walk can speak for the whole Library, so this is what gates forgetting files
+     * that are gone: a partial pass never saw most of the tree, and pruning on its evidence would
+     * throw away the cache of every project it had not reached yet.
+     */
+    val complete: Boolean = false,
 )
 
 /**
@@ -55,6 +80,14 @@ interface ScanSink {
         total: Int,
     )
 
+    /**
+     * One 画集 project finished walking; everything below `path` is now accounted for.
+     *
+     * Reported where it happens rather than at the end of the pass, because the end of the pass is
+     * exactly what an interrupted walk never reaches. This is the unit the next pass resumes from,
+     * so a kill loses at most the one project that was in flight.
+     */
+    fun onProjectDone(path: String) = Unit
 }
 
 /**
@@ -84,19 +117,27 @@ class Scanner(private val context: Context, private val tree: LibraryTree) {
         cached: Map<String, Entry>,
         sink: ScanSink? = null,
         readMetadata: Boolean = true,
+        /** 画集 projects a previous, unfinished pass already walked; their subtrees are skipped. */
+        doneProjects: Collection<String> = emptyList(),
     ): ScanResult {
         val startedAt = System.currentTimeMillis()
         // Directory listings are never reused between scans; only the per-file readings are. The
         // listing is the only way a new or removed file becomes visible at all.
         tree.invalidateListings()
-        RemLog.info(SCOPE, "开始扫描 root='${tree.rootDocumentId()}' 缓存条目=${cached.size} 并发=$WORKERS")
-        val pass = Pass(cached, sink, readMetadata)
+        RemLog.info(
+            SCOPE,
+            "开始扫描 root='${tree.rootDocumentId()}' 缓存条目=${cached.size} 并发=$WORKERS " +
+                "续扫跳过项目=${doneProjects.size}",
+        )
+        val pass = Pass(cached, sink, readMetadata, doneProjects)
         return pass.run().also { result ->
             RemLog.info(
                 SCOPE,
                 "扫描结束 条目=${result.entries.size} 文件夹=${result.folders.size} " +
                     "复用=${if (result.reusedCache) "全部" else "部分"} " +
-                    "违规=${result.violations.size} 用时=${System.currentTimeMillis() - startedAt}ms",
+                    "违规=${result.violations.size} " +
+                    "完成=${if (result.complete) "全部项目" else "部分项目（可续扫）"} " +
+                    "用时=${System.currentTimeMillis() - startedAt}ms",
             )
             logViolations(result.violations)
         }
@@ -140,6 +181,8 @@ class Scanner(private val context: Context, private val tree: LibraryTree) {
         private val cached: Map<String, Entry>,
         private val sink: ScanSink?,
         private val readMetadata: Boolean,
+        /** Projects a previous pass finished; their subtrees are taken as read and skipped. */
+        private val doneProjects: Collection<String>,
     ) {
         /** Written from concurrent readers, so this list is synchronized. */
         private val violations = Collections.synchronizedList(mutableListOf<String>())
@@ -155,6 +198,9 @@ class Scanner(private val context: Context, private val tree: LibraryTree) {
         /** Folders found since the last report. Grows as the tree is walked. */
         private val folders = mutableListOf<String>()
 
+        /** Projects this pass walked to the end, in walk order. Rewritten, never accumulated. */
+        private val finished = mutableListOf<String>()
+
         suspend fun run(): ScanResult {
             val entries = mutableListOf<Entry>()
 
@@ -164,6 +210,11 @@ class Scanner(private val context: Context, private val tree: LibraryTree) {
             // `画集/` is a tree. Its first level must be project folders; below that anything goes.
             val firstLevel = tree.list(COLLECTION)
             RemLog.info(SCOPE, "'$COLLECTION' 直属项 ${firstLevel.size}")
+            var skipped = 0
+            // Everything the volume holds, and the part of it this pass has to cover. They differ
+            // only by what an earlier, interrupted pass already finished.
+            val allProjects = mutableListOf<String>()
+            val projects = mutableListOf<String>()
             for (child in firstLevel.sortedBy { it.name }) {
                 if (child.name.startsWith('.')) continue
                 if (!child.isDirectory) {
@@ -174,15 +225,52 @@ class Scanner(private val context: Context, private val tree: LibraryTree) {
                 if (splitProjectFolder(child.name) == null) {
                     violations += "${child.path}：项目文件夹必须命名为「作者名称-项目名称」"
                 }
+                allProjects += child.path
+                if (child.path in doneProjects) {
+                    // Already listed by a pass that was interrupted further along. Re-listing it
+                    // would buy nothing: the listing is the expensive part, and this project's files
+                    // are still in the cached index, where `cachedEntry` reuses the ones that match.
+                    skipped++
+                    continue
+                }
+                projects += child.path
                 entries += walk(child)
+                // Forced, because what follows is a promise that this project is listed and can be
+                // skipped next time. `report` is otherwise throttled to two seconds, so the batch
+                // just read can still be sitting in `pending` — and the checkpoint would then record
+                // a finished project whose files were never handed over. Measured on a test Library:
+                // 45 projects were marked done with no entries for them in the cache at all.
+                report(force = true)
+                finished += child.path
+                sink?.onProjectDone(child.path)
             }
 
             report(force = true)
+            // A project the resume record called finished but that is not here any more means the
+            // cache still describes files that were deleted outside Rem. The pass that notices this
+            // has the tree covered, but its evidence about what is gone is not complete until a pass
+            // has run with the corrected record.
+            val vanished = doneProjects.filterNot { it in allProjects }
+            // Reaching the end of the list is what makes a pass complete — not the absence of
+            // skipped projects. Every project the volume has was either walked here or skipped
+            // because an earlier pass finished it, and both mean it is accounted for.
+            val covered = skipped + projects.size == allProjects.size
+            RemLog.info(
+                SCOPE,
+                "项目遍历 完成=${finished.size} 续扫跳过=$skipped 本次待走=${projects.size} " +
+                    "全库项目=${allProjects.size} 续扫记录=${doneProjects.size} 缓存中已消失=${vanished.size}",
+            )
+            vanished.forEach { RemLog.info(SCOPE, "续扫记录的项目已不在库中：$it") }
             return ScanResult(
                 entries = entries,
                 folders = synchronized(pendingLock) { folders.toList() },
                 violations = violations.toList(),
                 reusedCache = reused.get() == total.get(),
+                doneProjects = projects,
+                allProjects = allProjects,
+                // Only a pass that reached the end of the tree and found no vanished project
+                // describes the Library completely enough to forget what is missing from it.
+                complete = covered && vanished.isEmpty(),
             )
         }
 

@@ -40,9 +40,26 @@ data class Index(
     val folders: List<String> = emptyList(),
     /** Relative paths the last scan could not file under the rules. Reported, never corrected. */
     val violations: List<String> = emptyList(),
+    /**
+     * First-level 画集 projects whose whole subtree the last listing pass walked.
+     *
+     * Directory listing is the one part of a scan that cannot be shortened: no provider reports a
+     * folder's modification time, so finding out whether anything changed means asking for every
+     * folder's contents again. On a real Library that is tens of thousands of files across hundreds
+     * of folders, and on a removable volume it takes minutes — long enough that the process is
+     * often killed first. Without this the next pass starts that walk from the top again and the
+     * work is lost, which is what "it rescans everything from scratch" looked like.
+     *
+     * Only projects the pass actually finished are listed, and the list is rewritten from the walk
+     * each time rather than accumulated, so a project removed from the volume cannot linger as a
+     * phantom that would make the walk skip a project that is really there.
+     */
+    val doneProjects: List<String> = emptyList(),
 ) {
     companion object {
         /**
+         * 5 — the listing walk records which 画集 projects it has already finished.
+         *
          * 4 — entries record whether their metadata has been read at all.
          *
          * A listing pass writes entries without opening any file, so a Library is browsable in
@@ -50,7 +67,7 @@ data class Index(
          * written by that pass is indistinguishable from one whose files simply carry no capture
          * time, and the catch-up pass would either re-read everything forever or never run.
          */
-        const val VERSION = 4
+        const val VERSION = 5
 
         /** What a file written before the version key was always encoded decodes to. */
         const val LEGACY_VERSION = 1

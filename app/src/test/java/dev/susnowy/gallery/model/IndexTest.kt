@@ -30,11 +30,39 @@ class IndexTest {
                 StoredEntry(path = "画集/作者-项目/0001.mp4", size = 10L, modified = 5L),
             ),
             violations = listOf("画集/坏文件夹：项目文件夹必须命名为「作者名称-项目名称」"),
+            doneProjects = listOf("画集/作者-项目"),
         )
 
         val restored = json.decodeFromString<Index>(json.encodeToString(Index.serializer(), index))
 
         assertEquals(index, restored)
+    }
+
+    @Test
+    fun `the finished projects survive the cache so a resumed walk can skip them`() {
+        // The listing walk is the part of a scan that cannot be shortened, so where it stopped has
+        // to outlive the process. If this list is lost, the next pass lists the whole Library again
+        // — which is the behaviour this field exists to stop.
+        val written = indexOf(
+            entries = emptyList(),
+            folders = emptyList(),
+            violations = emptyList(),
+            doneProjects = listOf("画集/乙-项目", "画集/甲-项目"),
+        )
+
+        val restored = json.decodeFromString<Index>(json.encodeToString(Index.serializer(), written))
+
+        // Order is not the point — survival is. `indexOf` sorts for a stable file, not for meaning.
+        assertEquals(setOf("画集/甲-项目", "画集/乙-项目"), restored.doneProjects.toSet())
+    }
+
+    @Test
+    fun `a cache without a resume record reports no finished projects`() {
+        // Version 4 caches predate the field. Decoding one must not invent progress, and the pass
+        // has to be free to walk the whole tree rather than trust an empty-looking resume point.
+        val old = json.decodeFromString<Index>("""{"version":4,"entries":[],"violations":[]}""")
+
+        assertEquals(emptyList<String>(), old.doneProjects)
     }
 
     @Test
