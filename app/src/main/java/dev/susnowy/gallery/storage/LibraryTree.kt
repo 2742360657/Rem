@@ -98,6 +98,48 @@ class LibraryTree(private val context: Context, val treeUri: Uri) {
     /** True when the path exists at all. */
     fun exists(relativePath: String): Boolean = find(relativePath) != null
 
+    /** Whether the Library root currently carries a usable `.nomedia` marker. */
+    fun isSystemGalleryHidden(): Boolean = find(SYSTEM_GALLERY_MARKER)?.isDirectory == false
+
+    /**
+     * Creates or removes the root `.nomedia` marker without touching any media file.
+     *
+     * Returns the marker's state as the provider reports it afterwards, or `null` when the change
+     * did not happen. The value is read back rather than assumed, so the switch can never show a
+     * state the Library does not actually have.
+     *
+     * Serialised on purpose: two overlapping calls would both see "no marker" and both create one,
+     * leaving the Library with `.nomedia` and `.nomedia (1)`.
+     */
+    @Synchronized
+    fun setSystemGalleryHidden(hidden: Boolean): Boolean? {
+        val result = runCatching {
+            val root = DocumentFile.fromTreeUri(context, treeUri) ?: return@runCatching false
+            val existing = root.findFile(SYSTEM_GALLERY_MARKER)
+            when (markerAction(existing != null, existing?.isDirectory == true, hidden)) {
+                MarkerAction.None -> true
+                MarkerAction.Create -> root.createFile(OPAQUE_MIME, SYSTEM_GALLERY_MARKER) != null
+                // `Delete` only comes back for a plain file: a directory of that name is a Conflict.
+                MarkerAction.Delete -> existing != null &&
+                    DocumentsContract.deleteDocument(resolver, existing.uri)
+                MarkerAction.Conflict -> {
+                    RemLog.warn(SCOPE, "$SYSTEM_GALLERY_MARKER 已作为目录存在，拒绝改动")
+                    false
+                }
+            }
+        }
+        // The listing that answered `findFile` is stale whatever happened, so it is dropped before
+        // the read-back below — otherwise the switch would keep reporting the previous state.
+        listings.clear()
+        if (result.getOrDefault(false).not()) {
+            RemLog.error(SCOPE, "更新 Library/.nomedia 失败", result.exceptionOrNull())
+            return null
+        }
+        val nowHidden = runCatching { isSystemGalleryHidden() }.getOrDefault(hidden)
+        RemLog.info(SCOPE, "Library/.nomedia 现在${if (nowHidden) "存在" else "不存在"}")
+        return nowHidden
+    }
+
     /**
      * Writes one of Rem's own files into `.gallery/`.
      *
@@ -239,6 +281,7 @@ class LibraryTree(private val context: Context, val treeUri: Uri) {
 
     companion object {
         const val INTERNAL_DIR = ".gallery"
+        const val SYSTEM_GALLERY_MARKER = ".nomedia"
 
         private const val SCOPE = "Tree"
 
@@ -272,6 +315,26 @@ class LibraryTree(private val context: Context, val treeUri: Uri) {
         fun throwIfMissing(child: Child?): Child =
             child ?: throw FileNotFoundException("Library 目录不可用")
     }
+}
+
+/**
+ * What the hide switch has to do to the root marker, given what the root already contains.
+ *
+ * Kept apart from the provider calls so the two rules that matter can be tested without a device:
+ * asking for a state the Library is already in must change nothing, and a directory named
+ * `.nomedia` must never be deleted — Rem did not create it and cannot know what is inside.
+ */
+internal enum class MarkerAction { None, Create, Delete, Conflict }
+
+internal fun markerAction(
+    markerExists: Boolean,
+    markerIsDirectory: Boolean,
+    hidden: Boolean,
+): MarkerAction = when {
+    markerExists && markerIsDirectory -> MarkerAction.Conflict
+    markerExists == hidden -> MarkerAction.None
+    hidden -> MarkerAction.Create
+    else -> MarkerAction.Delete
 }
 
 private fun Cursor.text(column: String): String? {

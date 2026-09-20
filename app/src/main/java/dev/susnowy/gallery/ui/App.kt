@@ -180,6 +180,7 @@ fun RemApp(viewModel: RemViewModel = viewModel()) {
                     )
                     else -> SettingsScreen(
                         state = state,
+                        onHideFromSystemGallery = viewModel::setHideFromSystemGallery,
                         onOpenLog = { logOpen = true },
                     )
                 }

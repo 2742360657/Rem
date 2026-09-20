@@ -66,6 +66,9 @@ data class UiState(
     val openProject: String? = null,
     val message: String? = null,
     val violations: List<String> = emptyList(),
+    val hideFromSystemGallery: Boolean = false,
+    /** True while the `.nomedia` marker is being written or removed. */
+    val markerBusy: Boolean = false,
 ) {
     /** Album entries in newest-first order, filtered by media type. */
     val visibleAlbum: List<Entry>
@@ -118,6 +121,7 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun attach(treeUri: Uri) {
+        markerJob?.cancel()
         store.attach(treeUri)
         entries = emptyList()
         _state.update { UiState() }
@@ -125,6 +129,7 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun detach() {
+        markerJob?.cancel()
         tree = null
         entries = emptyList()
         store.detach()
@@ -148,6 +153,43 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
 
     fun dismissViolations() = _state.update { it.copy(violations = emptyList()) }
 
+    /**
+     * Creates or removes the Library root `.nomedia`.
+     *
+     * Only that one file is touched: original media is never modified and existing `MediaStore`
+     * rows are never deleted, so the message describes the resulting marker state instead of
+     * promising the system gallery is now empty.
+     *
+     * A tap while the previous one is still running is ignored. Two overlapping calls would both
+     * see "no marker" and both create one, which is exactly the duplicate the rules forbid.
+     */
+    fun setHideFromSystemGallery(hidden: Boolean) {
+        val current = tree
+        if (current == null) {
+            _state.update { it.copy(message = "尚未接入 Library，无法创建或移除 .nomedia") }
+            return
+        }
+        if (markerJob?.isActive == true) return
+        markerJob = viewModelScope.launch {
+            _state.update { it.copy(markerBusy = true) }
+            val resulting = runCatching {
+                withContext(Dispatchers.IO) { current.setSystemGalleryHidden(hidden) }
+            }.getOrNull()
+            _state.update {
+                it.copy(
+                    markerBusy = false,
+                    // The tree is the only source of truth, so a failed call keeps the old value.
+                    hideFromSystemGallery = resulting ?: it.hideFromSystemGallery,
+                    message = when (resulting) {
+                        null -> "无法更新 .nomedia，请确认 Library 仍可写入"
+                        true -> "已开启：Library 根目录存在 .nomedia，后续新媒体不再进入系统媒体索引；已有记录可能仍显示"
+                        false -> "已关闭：Library 根目录没有 .nomedia，后续新媒体可以重新进入系统媒体索引"
+                    },
+                )
+            }
+        }
+    }
+
     /** Opens one file with whatever system app claims its type. */
     fun open(entry: Entry) {
         val current = tree ?: return
@@ -161,6 +203,14 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
 
     /** The running scan, if any. Held so a second request cannot start a scan beside it. */
     private var scanJob: Job? = null
+
+    /**
+     * The running `.nomedia` change, if any.
+     *
+     * Held so a second tap cannot start a parallel change: both would read the root before either
+     * wrote, and both would then create the marker.
+     */
+    private var markerJob: Job? = null
 
     /**
      * Re-reads the Library, reusing every cached reading whose file is untouched.
@@ -243,6 +293,7 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
                     .sortedByDescending(Entry::orderTime),
                 projects = groupProjects(entries),
                 violations = cached?.violations.orEmpty(),
+                hideFromSystemGallery = current.isSystemGalleryHidden(),
             )
         }
         // Rewritten on every attach so the Library never carries a stale spec.
