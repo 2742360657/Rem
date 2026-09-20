@@ -45,4 +45,10 @@ Library/
 - [docs/STATUS.md](docs/STATUS.md)：实现状态和当前边界
 - [docs/USER_GUIDE.md](docs/USER_GUIDE.md)：当前用户操作
 
-当前不执行底层文件编辑，不自动全盘扫描，不内置备用播放器，也不实现旧的复杂关系、标签、自动整理或阅读进度功能。
+当前不执行底层文件编辑，不自动全盘扫描，也不实现旧的复杂关系、标签、自动整理或阅读进度功能。
+
+## 内置查看器
+
+方向已确认、**尚未实现**：点击媒体后改为在 Rem 内查看或播放，不再跳转到其他应用。
+
+规则见 [AGENT_PRODUCT_RULES.md](AGENT_PRODUCT_RULES.md) 第 5.1 节，实测依据见 [docs/STATUS.md](docs/STATUS.md)。系统查看器/播放器的调用路径继续保留，作为显式入口和失败回退。
