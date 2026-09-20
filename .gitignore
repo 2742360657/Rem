@@ -12,3 +12,7 @@ dist/
 *.jks
 *.keystore
 .kotlin/
+
+# Copied from AGENT_LIBRARY_RULES.md by the syncLibraryRules Gradle task.
+# Committing it would create a second copy of the file-format rules that can drift.
+app/src/main/assets/RULES.md

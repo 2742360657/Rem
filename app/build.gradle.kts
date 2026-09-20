@@ -27,8 +27,8 @@ android {
         applicationId = "com.susnowy.rem"
         minSdk = 26
         targetSdk = 36
-        versionCode = 3
-        versionName = "0.0.3"
+        versionCode = 4
+        versionName = "0.0.4"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -72,13 +72,8 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    kotlinOptions {
-        jvmTarget = "17"
-    }
-
     buildFeatures {
         compose = true
-        buildConfig = true
     }
 
     packaging {
@@ -88,44 +83,41 @@ android {
     testOptions {
         unitTests.isReturnDefaultValues = true
     }
-
-    sourceSets["main"].resources.srcDir(rootProject.layout.buildDirectory.dir("generated/library-agent-resources"))
 }
 
-tasks.named("preBuild") { dependsOn(rootProject.tasks.named("prepareLibraryAgentResources")) }
+kotlin {
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+    }
+}
 
 /**
- * Keeps the R8 mapping next to the released APK.
+ * Ships `AGENT_LIBRARY_RULES.md` to the Library as `.gallery/RULES.md`.
  *
- * The mapping is what turns an obfuscated stack trace from a user's device back into
- * readable class and method names. It is regenerated inside `build/`, which is cleaned
- * routinely, so the copy under `dist/` is the one that survives long enough to be useful.
+ * The document is copied from the repository root rather than kept as a second file under
+ * `assets/`, because a hand-maintained duplicate is exactly the thing that goes stale. Attaching a
+ * Library overwrites its copy, so the spec on disk always matches the build the user is running.
  */
-val archiveReleaseMapping by tasks.registering(Copy::class) {
-    description = "Archives the release R8 mapping for deobfuscating user crash reports."
-    val mappingFile = layout.buildDirectory.file("outputs/mapping/release/mapping.txt")
-    from(mappingFile)
-    into(rootProject.layout.projectDirectory.dir("dist"))
-    rename { "Rem-${android.defaultConfig.versionName}-mapping.txt" }
-    onlyIf { mappingFile.get().asFile.isFile }
+val syncLibraryRules by tasks.registering(Copy::class) {
+    description = "Copies the Library file-format rules into the app assets."
+    from(rootProject.layout.projectDirectory.file("AGENT_LIBRARY_RULES.md"))
+    into(layout.projectDirectory.dir("src/main/assets"))
+    // The asset name is what LibraryStore reads; the repository keeps the descriptive name.
+    rename { "RULES.md" }
 }
 
-tasks.matching { it.name == "assembleRelease" }.configureEach {
-    finalizedBy(archiveReleaseMapping)
-}
+tasks.named("preBuild") { dependsOn(syncLibraryRules) }
 
 dependencies {
     val composeBom = platform("androidx.compose:compose-bom:2025.04.01")
 
     implementation(composeBom)
-    androidTestImplementation(composeBom)
 
     implementation("androidx.core:core-ktx:1.16.0")
     implementation("androidx.activity:activity-compose:1.10.1")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
     implementation("androidx.compose.ui:ui")
-    implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.foundation:foundation")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
@@ -133,21 +125,12 @@ dependencies {
     implementation("androidx.exifinterface:exifinterface:1.4.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.3")
+
+    // Thumbnails only. Opening a file hands it to the system viewer or player.
     implementation("io.coil-kt.coil3:coil-compose:3.2.0")
     implementation("io.coil-kt.coil3:coil-gif:3.2.0")
-    implementation("io.coil-kt.coil3:coil-svg:3.2.0")
     implementation("io.coil-kt.coil3:coil-video:3.2.0")
-    implementation("androidx.media3:media3-exoplayer:1.6.1")
-    implementation("androidx.media3:media3-ui:1.6.1")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
-
-    androidTestImplementation("androidx.compose.ui:ui-test-junit4")
-    androidTestImplementation("androidx.test:core-ktx:1.6.1")
-    androidTestImplementation("androidx.test:runner:1.6.2")
-    androidTestImplementation("androidx.test.ext:junit-ktx:1.2.1")
-
-    debugImplementation("androidx.compose.ui:ui-tooling")
-    debugImplementation("androidx.compose.ui:ui-test-manifest")
 }

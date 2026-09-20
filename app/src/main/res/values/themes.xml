@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.Gallery" parent="android:style/Theme.Material.Light.NoActionBar">
+    <!-- Compose draws everything; this only avoids a mismatched flash before the first frame. -->
+    <style name="Theme.Rem" parent="android:style/Theme.Material.Light.NoActionBar">
         <item name="android:fontFamily">sans</item>
         <item name="android:windowLightStatusBar">true</item>
         <item name="android:navigationBarColor">#F7F7FA</item>
