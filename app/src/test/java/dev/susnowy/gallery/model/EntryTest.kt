@@ -29,25 +29,26 @@ class EntryTest {
     }
 
     @Test
-    fun `sequence is the four digit prefix`() {
-        assertEquals(1, collection("作者-项目", "0001.jpg").sequence)
-        assertEquals(42, collection("作者-项目", "0042.png").sequence)
+    fun `sequence is the first run of digits in the name`() {
+        assertEquals(1L, collection("作者-项目", "0001.jpg").sequence)
+        assertEquals(42L, collection("作者-项目", "0042.png").sequence)
+        // Zero padding no longer matters: names are free, so 1.jpg is item 1.
+        assertEquals(1L, collection("作者-项目", "1.jpg").sequence)
+        assertEquals(12L, collection("作者-项目", "0012.png").sequence)
     }
 
     @Test
-    fun `sequence is null when the name breaks the rule`() {
-        // The rules ask for exactly four digits; anything shorter is a violation, not item 1.
-        assertNull(collection("作者-项目", "1.jpg").sequence)
+    fun `sequence reads the first digits anywhere in the name`() {
+        assertEquals(1L, collection("作者-项目", "zz001_002.jpg").sequence)
+        assertEquals(2024L, collection("作者-项目", "IMG-2024-001.jpg").sequence)
+        // An extra extension is still just part of the stem, and the digits still count.
+        assertEquals(1L, collection("作者-项目", "0001.jpg.bak").sequence)
+    }
+
+    @Test
+    fun `a name with no digits has no sequence`() {
         assertNull(collection("作者-项目", "封面.jpg").sequence)
-        // A fifth digit would otherwise read as item 1 and collide with the real 0001.
-        assertNull(collection("作者-项目", "00012.jpg").sequence)
-    }
-
-    @Test
-    fun `an extra extension keeps the number and stays a violation elsewhere`() {
-        // The stem still starts with four digits, so it sorts as item 1 even though the scanner
-        // reports the name as malformed.
-        assertEquals(1, collection("作者-项目", "0001.jpg.bak").sequence)
+        assertNull(collection("作者-项目", "cover.png").sequence)
     }
 
     @Test

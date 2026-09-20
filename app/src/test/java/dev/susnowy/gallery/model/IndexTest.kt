@@ -74,7 +74,7 @@ class IndexTest {
 
     @Test
     fun `a cache Rem writes claims the current version`() {
-        val written = indexOf(entries = emptyList(), violations = emptyList())
+        val written = indexOf(entries = emptyList(), folders = emptyList(), violations = emptyList())
         assertEquals(Index.VERSION, written.version)
     }
 
