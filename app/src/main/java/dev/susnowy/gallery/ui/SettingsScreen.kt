@@ -75,7 +75,7 @@ fun SettingsScreen(
         )
         ReadOnlyRow("名称", state.libraryName.ifEmpty { "未接入" })
         ReadOnlyRow("目录", state.treeUri?.lastPathSegment?.replace("%3A", "：") ?: "—")
-        ReadOnlyRow("媒体", "${state.album.size} 个相册文件 · ${state.projects.size} 个项目")
+        ReadOnlyRow("媒体", "${state.entries.size} 个媒体文件 · ${state.folders.size} 个文件夹")
 
         Spacer(Modifier.height(16.dp))
         Text(

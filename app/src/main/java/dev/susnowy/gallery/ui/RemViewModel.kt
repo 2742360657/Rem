@@ -2,19 +2,25 @@ package dev.susnowy.gallery.ui
 
 import android.app.Application
 import android.net.Uri
-import androidx.lifecycle.AndroidViewModel
-import androidx.lifecycle.viewModelScope
+import android.provider.DocumentsContract
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Collections
 import androidx.compose.material.icons.rounded.PhotoLibrary
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
 import dev.susnowy.gallery.logging.RemLog
+import dev.susnowy.gallery.model.COLLECTION
 import dev.susnowy.gallery.model.Entry
+import dev.susnowy.gallery.model.Folder
 import dev.susnowy.gallery.model.MediaType
-import dev.susnowy.gallery.model.Project
+import dev.susnowy.gallery.model.NATURAL_ORDER
+import dev.susnowy.gallery.model.SortMode
 import dev.susnowy.gallery.model.splitProjectFolder
 import dev.susnowy.gallery.model.toEntry
+import dev.susnowy.gallery.scan.ScanResult
+import dev.susnowy.gallery.scan.ScanSink
 import dev.susnowy.gallery.scan.Scanner
 import dev.susnowy.gallery.storage.LibraryStore
 import dev.susnowy.gallery.storage.LibraryTree
@@ -51,6 +57,18 @@ enum class MediaFilter(val title: String) {
     }
 }
 
+/** How far the running scan has got, so a pass that takes minutes is visibly alive. */
+data class ScanProgress(val scanned: Int, val total: Int)
+
+/** One row of the collection's folder list: the folder, and what it holds. */
+data class FolderRow(
+    val folder: Folder,
+    val mediaCount: Int,
+    val folderCount: Int,
+    /** True when the folder has both, which is the case the rules show one kind at a time. */
+    val mixed: Boolean,
+)
+
 data class UiState(
     val attached: Boolean = false,
     /** The attached tree, needed to build thumbnail requests and to open files. */
@@ -59,11 +77,16 @@ data class UiState(
     val tab: Tab = Tab.ALBUM,
     val filter: MediaFilter = MediaFilter.ALL,
     val search: String = "",
-    val album: List<Entry> = emptyList(),
-    val projects: List<Project> = emptyList(),
-    /** True while the silent refresh runs, shown as a progress line only. */
+    /** Everything the index holds. Every visible list is derived from this one field. */
+    val entries: List<Entry> = emptyList(),
+    /** Every folder the index recorded, as paths, so an empty folder stays browsable. */
+    val folders: List<String> = emptyList(),
+    /** Null while the collection shows its top level. */
+    val openFolder: String? = null,
+    val sortMode: SortMode = SortMode.SEQUENCE,
     val refreshing: Boolean = false,
-    val openProject: String? = null,
+    /** Non-null only while a scan is running. */
+    val scanProgress: ScanProgress? = null,
     val message: String? = null,
     val violations: List<String> = emptyList(),
     val hideFromSystemGallery: Boolean = false,
@@ -72,31 +95,122 @@ data class UiState(
 ) {
     /** Album entries in newest-first order, filtered by media type. */
     val visibleAlbum: List<Entry>
-        get() = album.filter { filter.accepts(it.mediaType) }
+        get() = entries.asSequence()
+            .filter { it.projectFolder == null }
+            .sortedByDescending(Entry::orderTime)
+            .filter { filter.accepts(it.mediaType) }
+            .toList()
 
     /**
-     * Projects after the search box and the media filter are applied.
+     * Every known folder, once each, including folders an entry path implies but the index did not
+     * list — which is what a pass still in progress looks like.
      *
-     * Matching is the minimum the rules ask for: the typed text has to appear somewhere in the
-     * author or project name, so `abcde` finds both `abc` and `cde`.
+     * Built once per state: the alternative is rebuilding a list of every folder on every
+     * recomposition of the grid, which on a large collection is work the user can feel.
      */
-    val visibleProjects: List<Project>
-        get() {
-            val query = search.trim()
-            return projects.mapNotNull { project ->
-                if (!query.isEmpty() &&
-                    !project.author.contains(query, ignoreCase = true) &&
-                    !project.name.contains(query, ignoreCase = true)
-                ) {
-                    return@mapNotNull null
-                }
-                val files = project.entries.filter { filter.accepts(it.mediaType) }
-                if (files.isEmpty()) null else project.copy(entries = files)
+    private val allFolders: List<Folder> by lazy {
+        (folders + entries.mapNotNull { it.path.substringBeforeLast('/', "").ifEmpty { null } })
+            .distinct()
+            .map(::Folder)
+    }
+
+    /**
+     * How much is inside each folder, counting everything below it.
+     *
+     * Counted once per state instead of per row: a folder row has to say what it holds, and a
+     * folder whose media all sits two levels down would otherwise claim to be empty. Only direct
+     * children are walked at each step, so the whole map costs one pass over the tree.
+     */
+    private val subtreeCounts: Map<String, IntArray> by lazy {
+        val direct = HashMap<String, Int>()
+        val childFolders = HashMap<String, MutableList<String>>()
+        entries.forEach { entry ->
+            entry.parentFolder?.let { direct[it] = (direct[it] ?: 0) + 1 }
+        }
+        allFolders.forEach { folder ->
+            folder.parent?.let { parent ->
+                childFolders.getOrPut(parent) { mutableListOf() }.add(folder.path)
             }
         }
+        val counted = HashMap<String, IntArray>()
+        fun count(path: String): IntArray = counted.getOrPut(path) {
+            var media = direct[path] ?: 0
+            var folders = 0
+            childFolders[path]?.forEach { child ->
+                val below = count(child)
+                media += below[0]
+                folders += 1 + below[1]
+            }
+            intArrayOf(media, folders)
+        }
+        allFolders.forEach { count(it.path) }
+        counted
+    }
 
-    val currentProject: Project?
-        get() = projects.firstOrNull { it.folder == openProject }
+    val currentFolder: Folder?
+        get() = openFolder?.let(::Folder)
+
+    /**
+     * The folders shown at the current level.
+     *
+     * A level shows folders when it has any, and its own media when it has none. That is the agreed
+     * rule: a folder and a picture never share a level, so a level with subfolders hides its media
+     * rather than mixing the two.
+     */
+    val folderRows: List<FolderRow>
+        get() {
+            val parent = openFolder ?: COLLECTION
+            val query = search.trim()
+            return allFolders.asSequence()
+                .filter { it.parent == parent }
+                .filter { query.isEmpty() || it.name.contains(query, ignoreCase = true) }
+                .map { folder ->
+                    val counts = subtreeCounts[folder.path] ?: IntArray(2)
+                    FolderRow(
+                        folder = folder,
+                        mediaCount = counts[0],
+                        folderCount = counts[1],
+                        mixed = counts[0] > 0 && counts[1] > 0,
+                    )
+                }
+                .sortedWith(compareBy(NATURAL_ORDER) { it.folder.name })
+                .toList()
+        }
+
+    /** True when the current level shows folders instead of media. */
+    val showsFolders: Boolean get() = folderRows.isNotEmpty()
+
+    /** The media of the current level, shown only when that level has no subfolders. */
+    val folderMedia: List<Entry>
+        get() {
+            val folder = openFolder ?: return emptyList()
+            if (showsFolders) return emptyList()
+            val media = entriesIn(folder).filter { filter.accepts(it.mediaType) }
+            return media.sortedWith(mediaOrder())
+        }
+
+    /** Breadcrumbs from the first level down to the open folder, excluding the `画集` root. */
+    val breadcrumb: List<Folder>
+        get() {
+            val folder = currentFolder ?: return emptyList()
+            return (folder.ancestorsWithinCollection() + folder.path).map(::Folder)
+        }
+
+    private fun entriesIn(folderPath: String): List<Entry> =
+        entries.filter { it.path.substringBeforeLast('/', "") == folderPath }
+
+    /** What「序号/名称/拍摄时间/修改时间/文件大小」mean for a list of files. */
+    private fun mediaOrder(): Comparator<Entry> = when (sortMode) {
+        // A name with no number at all sorts after every numbered one.
+        SortMode.SEQUENCE -> compareBy<Entry> { it.sequence == null }
+            .thenBy { it.sequence ?: Long.MAX_VALUE }
+            .thenBy(NATURAL_ORDER) { it.fileName }
+        SortMode.NAME -> compareBy(NATURAL_ORDER) { it.fileName }
+        SortMode.CAPTURED -> compareByDescending<Entry> { it.captured ?: Long.MIN_VALUE }
+            .thenBy(NATURAL_ORDER) { it.fileName }
+        SortMode.MODIFIED -> compareByDescending(Entry::modified).thenBy(NATURAL_ORDER) { it.fileName }
+        SortMode.SIZE -> compareByDescending(Entry::size).thenBy(NATURAL_ORDER) { it.fileName }
+    }
 }
 
 /**
@@ -114,7 +228,12 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
     val state: StateFlow<UiState> = _state.asStateFlow()
 
     private var tree: LibraryTree? = null
-    private var entries: List<Entry> = emptyList()
+
+    /** Everything read or reused so far, keyed by path. Seeded from the cache, then extended. */
+    private val known = linkedMapOf<String, Entry>()
+
+    private var folders: List<String> = emptyList()
+    private var violations: List<String> = emptyList()
 
     init {
         openAttachedLibrary()
@@ -122,18 +241,26 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
 
     fun attach(treeUri: Uri) {
         markerJob?.cancel()
+        scanJob?.cancel()
         store.attach(treeUri)
-        entries = emptyList()
-        _state.update { UiState() }
+        resetLibraryState()
+        _state.update { UiState(sortMode = it.sortMode) }
         openAttachedLibrary()
     }
 
     fun detach() {
         markerJob?.cancel()
+        scanJob?.cancel()
         tree = null
-        entries = emptyList()
         store.detach()
-        _state.update { UiState() }
+        resetLibraryState()
+        _state.update { UiState(sortMode = it.sortMode) }
+    }
+
+    private fun resetLibraryState() {
+        known.clear()
+        folders = emptyList()
+        violations = emptyList()
     }
 
     /** Surfaces a message that a screen wants to show without owning a snackbar host. */
@@ -145,9 +272,19 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
 
     fun search(text: String) = _state.update { it.copy(search = text) }
 
-    fun openProject(folder: String) = _state.update { it.copy(openProject = folder) }
+    /** Opens one folder of the collection. */
+    fun openFolder(path: String) = _state.update { it.copy(openFolder = path, search = "") }
 
-    fun closeProject() = _state.update { it.copy(openProject = null) }
+    /** Goes back one level, or to the collection's top level from a first-level folder. */
+    fun closeFolder() = _state.update {
+        it.copy(openFolder = it.currentFolder?.parent, search = "")
+    }
+
+    /** Remembers the collection order; it survives restarts, unlike the browsing position. */
+    fun selectSortMode(mode: SortMode) {
+        store.sortMode = mode
+        _state.update { it.copy(sortMode = mode) }
+    }
 
     fun dismissMessage() = _state.update { it.copy(message = null) }
 
@@ -212,6 +349,15 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
     private var scanJob: Job? = null
 
     /**
+     * The index write in flight, if any.
+     *
+     * Held so a report arriving while the previous write is still running cancels it instead of
+     * queueing a second write of the same, newer, state. Writes are reconciled by the last one
+     * winning, and the last one always carries everything the earlier ones did.
+     */
+    private var writeJob: Job? = null
+
+    /**
      * The running `.nomedia` change, if any.
      *
      * Held so a second tap cannot start a parallel change: both would read the root before either
@@ -222,55 +368,97 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
     /**
      * Re-reads the Library, reusing every cached reading whose file is untouched.
      *
-     * Runs off the main thread because a provider on a removable volume answers slowly; the
-     * already-displayed entries stay on screen the whole time.
+     * The index is written as the pass advances rather than only at the end. On a removable volume
+     * a full scan of a real Library runs for many minutes, and the process can be killed long
+     * before it finishes — measured on device: nine minutes of scanning lost because the app was
+     * swiped away. Everything reported so far is therefore already on disk, and the next pass
+     * reuses it instead of starting over.
      *
-     * A scan already in progress makes this a no-op. Two scans walking the same tree would each do
-     * the same content reads and then race to write the index, and the user gains nothing: the
-     * running scan reads the Library as it is now.
+     * A scan already in progress makes this a no-op: two scans walking the same tree would each do
+     * the same content reads and then race to write the index.
      */
     fun refresh() {
         val current = tree ?: return
         if (scanJob?.isActive == true) return
-        val cached = entries.associateBy(Entry::path)
-        val cachedViolations = _state.value.violations
         scanJob = viewModelScope.launch {
-            _state.update { it.copy(refreshing = true) }
-            runCatching { withContext(Dispatchers.IO) { Scanner(getApplication(), current).scan(cached) } }
-                .fold(
-                    onSuccess = { scanned ->
-                        entries = scanned.entries
-                        _state.update {
-                            it.copy(
-                                refreshing = false,
-                                album = scanned.entries
-                                    .filter { entry -> entry.projectFolder == null }
-                                    .sortedByDescending(Entry::orderTime),
-                                projects = groupProjects(scanned.entries),
-                                violations = scanned.violations,
-                            )
-                        }
-                        // Reusing every entry means the media on disk is unchanged — but the
-                        // violation list is rebuilt from the directory listings on every pass, so
-                        // it can move without any entry moving. Skipping the write then left the
-                        // cache asserting a violation set the Library no longer had.
-                        if (!scanned.reusedCache || scanned.violations != cachedViolations) {
-                            withContext(Dispatchers.IO) {
-                                store.writeIndex(current, indexOf(entries, scanned.violations))
-                            }
-                        }
-                    },
-                    onFailure = { error ->
-                        if (error is CancellationException) throw error
-                        _state.update {
-                            it.copy(
-                                refreshing = false,
-                                message = "读取 Library 失败：${error.message ?: "未知错误"}",
-                            )
-                        }
-                    },
-                )
+            _state.update {
+                it.copy(refreshing = true, scanProgress = ScanProgress(known.size, known.size))
+            }
+            val sink = object : ScanSink {
+                override fun onProgress(
+                    entries: List<Entry>,
+                    folders: List<String>,
+                    violations: List<String>,
+                    scanned: Int,
+                    total: Int,
+                ) {
+                    entries.forEach { known[it.path] = it }
+                    this@RemViewModel.folders = folders
+                    this@RemViewModel.violations = violations
+                    _state.update {
+                        it.copy(
+                            entries = known.values.toList(),
+                            folders = folders,
+                            scanProgress = ScanProgress(scanned, total),
+                        )
+                    }
+                    RemLog.debug(SCOPE, "进度上报 已读=$scanned 发现=$total 新增=${entries.size}")
+                    // Durable now, not at the end of the pass: this callback is the whole reason a
+                    // scan killed halfway still leaves its work behind for the next one to reuse.
+                    // A write still running is dropped in favour of this newer one.
+                    writeJob?.cancel()
+                    writeJob = viewModelScope.launch(Dispatchers.IO) { persist() }
+                }
+            }
+            runCatching {
+                // Seed the cache file before reading, so an interrupted first pass still leaves
+                // whatever the previous one had instead of an empty file.
+                withContext(Dispatchers.IO) { persist() }
+                val result = Scanner(getApplication(), current).scan(known.toMap(), sink)
+                withContext(Dispatchers.IO) { persist(result) }
+                result
+            }.fold(
+                onSuccess = {
+                    _state.update {
+                        it.copy(
+                            refreshing = false,
+                            scanProgress = null,
+                            entries = known.values.toList(),
+                            folders = folders,
+                            violations = violations,
+                        )
+                    }
+                    RemLog.info(SCOPE, "刷新完成 条目=${known.size} 文件夹=${folders.size}")
+                },
+                onFailure = { error ->
+                    if (error is CancellationException) throw error
+                    // Whatever was read before the failure is still cached; say so rather than
+                    // pretending the Library is empty.
+                    _state.update {
+                        it.copy(
+                            refreshing = false,
+                            scanProgress = null,
+                            entries = known.values.toList(),
+                            folders = folders,
+                            message = "读取 Library 失败：${error.message ?: "未知错误"}",
+                        )
+                    }
+                },
+            )
         }
+    }
+
+    /** Writes what is known so far. Called before, during and after a pass. */
+    private suspend fun persist(result: ScanResult? = null) {
+        val current = tree ?: return
+        store.writeIndex(
+            current,
+            indexOf(
+                entries = result?.entries ?: known.values.toList(),
+                folders = result?.folders ?: folders,
+                violations = result?.violations ?: violations,
+            ),
+        )
     }
 
     /** Shows the cached index immediately, then starts the refresh in the background. */
@@ -278,7 +466,7 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
         val current = store.tree()
         if (current == null) {
             RemLog.info(SCOPE, "没有已接入的 Library")
-            _state.update { UiState() }
+            _state.update { UiState(sortMode = store.sortMode) }
             return
         }
         tree = current
@@ -294,16 +482,19 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
         RemLog.info(SCOPE, "根目录直属项 ${rootNames.size}：${rootNames.joinToString("、")}")
 
         val cached = store.readIndex(current)
-        entries = cached?.entries?.map { it.toEntry() }.orEmpty()
+        known.clear()
+        cached?.entries?.forEach { known[it.path] = it.toEntry() }
+        folders = cached?.folders.orEmpty()
+        violations = cached?.violations.orEmpty()
         _state.update {
             it.copy(
                 attached = true,
                 treeUri = current.treeUri,
                 libraryName = current.name,
-                album = entries.filter { entry -> entry.projectFolder == null }
-                    .sortedByDescending(Entry::orderTime),
-                projects = groupProjects(entries),
-                violations = cached?.violations.orEmpty(),
+                entries = known.values.toList(),
+                folders = folders,
+                violations = violations,
+                sortMode = store.sortMode,
                 hideFromSystemGallery = current.isSystemGalleryHidden(),
             )
         }
@@ -315,30 +506,21 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
         refresh()
     }
 
-    /**
-     * Groups collection files by their project folder.
-     *
-     * Files are ordered by their `0001` prefix, and an off-rule name is kept but pushed to the
-     * end so a malformed file never displaces the numbered run. Projects sort by author then
-     * name; a folder that breaks the naming rule sorts last under its raw name.
-     */
-    private fun groupProjects(all: List<Entry>): List<Project> = all
-        .mapNotNull { entry -> entry.projectFolder?.let { it to entry } }
-        .groupBy({ it.first }, { it.second })
-        .map { (folder, files) ->
-            val parts = splitProjectFolder(folder)
-            Project(
-                folder = folder,
-                author = parts?.first ?: folder,
-                name = parts?.second ?: folder,
-                entries = files.sortedWith(
-                    compareBy({ it.sequence == null }, { it.sequence ?: Int.MAX_VALUE }, Entry::fileName),
-                ),
-            )
-        }
-        .sortedWith(compareBy({ splitProjectFolder(it.folder) == null }, Project::author, Project::name))
-
     private companion object {
         const val SCOPE = "Rem"
     }
+}
+
+/** `作者名称-项目名称` split for a row label, or null when the folder does not follow the rule. */
+fun authorOf(folder: Folder): String? = splitProjectFolder(folder.name)?.first
+
+/** The second line of a folder row: what is inside, without promising an order. */
+fun FolderRow.detail(): String = buildString {
+    if (folderCount > 0) append("$folderCount 个文件夹")
+    if (mediaCount > 0) {
+        if (isNotEmpty()) append(" · ")
+        append("$mediaCount 个媒体文件")
+    }
+    if (mixed) append(" · 两者都有，先显示文件夹")
+    if (isEmpty()) append("空文件夹")
 }

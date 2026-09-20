@@ -98,8 +98,8 @@ fun RemApp(viewModel: RemViewModel = viewModel()) {
             AttachLibraryScreen(onChoose = { picker.launch(null) })
             return@RemTheme
         }
-        val project = state.currentProject
-        BackHandler(enabled = project != null) { viewModel.closeProject() }
+        val insideFolder = state.currentFolder != null
+        BackHandler(enabled = insideFolder) { viewModel.closeFolder() }
         Scaffold(
             snackbarHost = { SnackbarHost(snackbarHostState) },
             topBar = {
@@ -149,9 +149,9 @@ fun RemApp(viewModel: RemViewModel = viewModel()) {
                 )
             },
             bottomBar = {
-                // Hidden while a project is open: the drill-down has its own back arrow, and a
-                // tab bar underneath it would suggest the project is a fourth destination.
-                if (project == null) {
+                // Hidden while a folder is open: the drill-down has its own breadcrumb, and a tab
+                // bar underneath it would suggest the folder is a fourth destination.
+                if (state.currentFolder == null) {
                     NavigationBar {
                         Tab.entries.forEach { tab ->
                             NavigationBarItem(
@@ -171,17 +171,9 @@ fun RemApp(viewModel: RemViewModel = viewModel()) {
                     .padding(padding),
             ) {
                 if (state.refreshing) {
-                    LinearProgressIndicator(Modifier.fillMaxWidth())
+                    ScanningBar(progress = state.scanProgress)
                 }
                 when {
-                    project != null -> ProjectScreen(
-                        project = project,
-                        thumbnail = thumbnails,
-                        onOpen = { index ->
-                            ViewerState.request(project.entries, index)?.let { viewerRequest = it }
-                        },
-                        onBack = viewModel::closeProject,
-                    )
                     state.tab == Tab.ALBUM -> AlbumScreen(
                         state = state,
                         onSelectFilter = viewModel::selectFilter,
@@ -195,7 +187,14 @@ fun RemApp(viewModel: RemViewModel = viewModel()) {
                         state = state,
                         onSearch = viewModel::search,
                         onSelectFilter = viewModel::selectFilter,
-                        onOpenProject = { viewModel.openProject(it.folder) },
+                        onSelectSort = viewModel::selectSortMode,
+                        onOpenFolder = { viewModel.openFolder(it.path) },
+                        onBack = viewModel::closeFolder,
+                        thumbnail = thumbnails,
+                        onOpen = { index ->
+                            // Only the folder being browsed: the viewer never pages across folders.
+                            ViewerState.request(state.folderMedia, index)?.let { viewerRequest = it }
+                        },
                     )
                     else -> SettingsScreen(
                         state = state,
@@ -241,6 +240,26 @@ private fun AttachLibraryScreen(onChoose: () -> Unit) {
             )
             TextButton(onClick = onChoose) { Text("接入 Library") }
         }
+    }
+}
+
+/**
+ * The scan line: a bar plus how far the pass has got.
+ *
+ * A real count matters here. A first pass over a Library on a removable volume runs for minutes,
+ * and a bare indeterminate bar looks identical to a frozen app.
+ */
+@Composable
+private fun ScanningBar(progress: ScanProgress?) {
+    Column(Modifier.fillMaxWidth()) {
+        LinearProgressIndicator(Modifier.fillMaxWidth())
+        Text(
+            text = progress?.takeIf { it.total > 0 }?.let { "正在扫描 ${it.scanned} / ${it.total}" }
+                ?: "正在读取目录…",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 2.dp),
+        )
     }
 }
 

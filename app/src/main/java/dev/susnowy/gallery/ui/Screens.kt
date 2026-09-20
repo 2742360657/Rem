@@ -1,7 +1,7 @@
 package dev.susnowy.gallery.ui
 
-import android.content.Context
-import android.net.Uri
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,22 +13,28 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil3.request.ImageRequest
 import dev.susnowy.gallery.model.Entry
-import dev.susnowy.gallery.model.Project
+import dev.susnowy.gallery.model.Folder
+import dev.susnowy.gallery.model.SortMode
 import kotlinx.coroutines.launch
 
 /** The image/video/both selector shared by both sections. */
@@ -46,7 +52,7 @@ fun FilterRow(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         MediaFilter.entries.forEach { option ->
-            androidx.compose.material3.FilterChip(
+            FilterChip(
                 selected = option == selected,
                 onClick = { onSelect(option) },
                 label = { Text(option.title) },
@@ -67,7 +73,7 @@ fun EmptyHint(text: String, modifier: Modifier = Modifier) {
     }
 }
 
-/** `相册/`: every file in capture order, newest first. */
+/** `相册/`: every file in capture order, newest first. One fixed order, so no sort selector. */
 @Composable
 fun AlbumScreen(
     state: UiState,
@@ -78,26 +84,40 @@ fun AlbumScreen(
     Column(Modifier.fillMaxSize()) {
         FilterRow(selected = state.filter, onSelect = onSelectFilter)
         if (state.visibleAlbum.isEmpty()) {
-            EmptyHint(if (state.album.isEmpty()) "相册里还没有可浏览的图片或视频" else "没有符合当前筛选的媒体")
+            EmptyHint(if (state.entries.isEmpty()) "相册里还没有可浏览的图片或视频" else "没有符合当前筛选的媒体")
         } else {
             MediaGrid(entries = state.visibleAlbum, thumbnail = thumbnail, onOpen = onOpen)
         }
     }
 }
 
-/** `画集/`: the project folders, with the author/project search box above them. */
+/**
+ * `画集/`: a tree of folders, with the search box and the order selector above them.
+ *
+ * A level shows its folders when it has any and its own media when it has none — the two never
+ * share a level, which is the agreed rule and the reason this screen branches on `folderRows`.
+ */
 @Composable
 fun CollectionScreen(
     state: UiState,
     onSearch: (String) -> Unit,
     onSelectFilter: (MediaFilter) -> Unit,
-    onOpenProject: (Project) -> Unit,
+    onSelectSort: (SortMode) -> Unit,
+    onOpenFolder: (Folder) -> Unit,
+    onBack: () -> Unit,
+    thumbnail: (Entry) -> ImageRequest?,
+    onOpen: (Int) -> Unit,
 ) {
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
-    val projects = state.visibleProjects
+    val rows = state.folderRows
+    val media = state.folderMedia
+    val folder = state.currentFolder
 
     Column(Modifier.fillMaxSize()) {
+        if (folder != null) {
+            FolderHeader(breadcrumb = state.breadcrumb, onBack = onBack, onJump = onOpenFolder)
+        }
         OutlinedTextField(
             value = state.search,
             onValueChange = onSearch,
@@ -105,82 +125,143 @@ fun CollectionScreen(
                 .fillMaxWidth()
                 .padding(horizontal = 12.dp, vertical = 8.dp),
             singleLine = true,
-            label = { Text("搜索作者或项目名称") },
+            label = { Text("搜索作者或文件夹名称") },
             leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
         )
         FilterRow(selected = state.filter, onSelect = onSelectFilter)
-        if (projects.isEmpty()) {
-            EmptyHint(if (state.projects.isEmpty()) "画集里还没有项目文件夹" else "没有匹配的项目")
-        } else {
-            Box(Modifier.fillMaxSize()) {
+        SortRow(selected = state.sortMode, onSelect = onSelectSort)
+
+        when {
+            rows.isNotEmpty() -> Box(Modifier.fillMaxSize()) {
                 LazyColumn(
                     state = listState,
                     contentPadding = PaddingValues(end = TRACK_WIDTH),
                 ) {
-                    items(projects, key = Project::folder) { project ->
-                        ProjectRow(
-                            name = project.name,
-                            detail = detailOf(project),
-                            onOpen = { onOpenProject(project) },
-                        )
+                    items(rows, key = { it.folder.path }) { row ->
+                        FolderRowItem(row = row, onOpen = { onOpenFolder(row.folder) })
                     }
                 }
-                if (projects.size > 1) {
+                if (rows.size > 1) {
                     Scrollbar(
-                        fraction = listFraction(listState, projects.size),
-                        onJump = { fraction -> scope.launch { jumpList(listState, projects.size, fraction) } },
+                        fraction = listFraction(listState, rows.size),
+                        onJump = { fraction -> scope.launch { jumpList(listState, rows.size, fraction) } },
                         labelAt = { fraction ->
-                            val project = projects.getOrNull(targetIndex(projects.size, fraction))
+                            val row = rows.getOrNull(targetIndex(rows.size, fraction))
                             ScrollLabel(
-                                primary = project?.name.orEmpty(),
-                                secondary = project?.author.orEmpty(),
+                                primary = row?.folder?.name.orEmpty(),
+                                secondary = row?.folder?.let(::authorOf).orEmpty(),
                             )
                         },
                         modifier = Modifier.align(Alignment.CenterEnd),
                     )
                 }
             }
+            media.isNotEmpty() -> MediaGrid(entries = media, thumbnail = thumbnail, onOpen = onOpen)
+            folder != null -> EmptyHint(
+                if (state.filter == MediaFilter.ALL) "这个文件夹里没有媒体文件" else "没有符合当前筛选的媒体",
+            )
+            else -> EmptyHint(if (state.folders.isEmpty()) "画集里还没有文件夹" else "没有匹配的文件夹")
         }
     }
 }
 
-/** One project's files, numbered, with a way back to the project list. */
+/** Where the user is in the tree, and the way back up. Every crumb is a jump target. */
 @Composable
-fun ProjectScreen(
-    project: Project,
-    thumbnail: (Entry) -> ImageRequest?,
-    onOpen: (Int) -> Unit,
+private fun FolderHeader(
+    breadcrumb: List<Folder>,
     onBack: () -> Unit,
+    onJump: (Folder) -> Unit,
 ) {
-    Column(Modifier.fillMaxSize()) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 4.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            IconButton(onClick = onBack) {
-                Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回画集")
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = 4.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        IconButton(onClick = onBack) {
+            Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回上一级")
+        }
+        breadcrumb.forEachIndexed { index, folder ->
+            if (index > 0) {
+                Text("›", style = MaterialTheme.typography.bodyMedium)
             }
-            Column {
-                Text(project.name, style = MaterialTheme.typography.titleMedium)
+            TextButton(onClick = { onJump(folder) }) {
                 Text(
-                    text = "${project.author} · ${detailOf(project)}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    text = folder.name,
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 1,
+                    color = if (index == breadcrumb.lastIndex) {
+                        MaterialTheme.colorScheme.onSurface
+                    } else {
+                        MaterialTheme.colorScheme.primary
+                    },
                 )
             }
         }
-        if (project.entries.isEmpty()) {
-            EmptyHint("这个项目里还没有可浏览的媒体")
-        } else {
-            MediaGrid(entries = project.entries, thumbnail = thumbnail, onOpen = onOpen)
+    }
+}
+
+/** The collection's order selector. Remembered, because it is how one person reads a library. */
+@Composable
+fun SortRow(
+    selected: SortMode,
+    onSelect: (SortMode) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = 12.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = "排序",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        SortMode.entries.forEach { mode ->
+            FilterChip(
+                selected = mode == selected,
+                onClick = { onSelect(mode) },
+                label = { Text(mode.title) },
+            )
         }
     }
 }
 
-/** `作者 · 12 张图片 3 个视频`, plus a warning when the folder breaks the naming rule. */
-private fun detailOf(project: Project): String = buildString {
-    append("${project.imageCount} 张图片 · ${project.videoCount} 个视频")
-    if (project.offRuleCount > 0) append(" · ${project.offRuleCount} 个文件命名不规范")
+/** One folder row: the name, what is inside, and a chevron that says it opens. */
+@Composable
+private fun FolderRowItem(row: FolderRow, onOpen: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onOpen)
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Icon(
+            imageVector = Icons.Rounded.Folder,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+        )
+        Column(Modifier.weight(1f)) {
+            Text(
+                text = row.folder.name,
+                style = MaterialTheme.typography.titleMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = row.detail(),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
 }
