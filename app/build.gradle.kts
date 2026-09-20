@@ -126,10 +126,17 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.3")
 
-    // Thumbnails only. Opening a file hands it to the system viewer or player.
+    // Thumbnails, and the built-in viewer's images.
     implementation("io.coil-kt.coil3:coil-compose:3.2.0")
     implementation("io.coil-kt.coil3:coil-gif:3.2.0")
     implementation("io.coil-kt.coil3:coil-video:3.2.0")
+
+    // Built-in viewer. Both versions were measured on device in the throwaway probe project
+    // before being adopted here; see docs/STATUS.md for the format results.
+    // Telephoto 0.19.0 pulls Coil 3.2.0 and Compose runtime 1.8.0, which is this project's line.
+    implementation("me.saket.telephoto:zoomable-image-coil3:0.19.0")
+    implementation("androidx.media3:media3-exoplayer:1.11.1")
+    implementation("androidx.media3:media3-ui:1.11.1")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
