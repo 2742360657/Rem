@@ -716,6 +716,10 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
      */
     private fun startMetadataPass(current: LibraryTree) {
         if (metadataJob?.isActive == true) return
+        if (!_state.value.libraryReadable) {
+            RemLog.info(SCOPE, "卷当前不可读，跳过补齐")
+            return
+        }
         val pending = known.values.filter { it.path !in metadataDone }
         if (pending.isEmpty()) {
             _state.update { it.copy(metadataPending = 0) }
@@ -738,6 +742,10 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
                     metadataDone += entry.path
                 }
                 read += readBatch.size
+                RemLog.info(
+                    SCOPE,
+                    "补齐批次完成 已读=$read/${ordered.size} 待补剩余=${pendingCount()}",
+                )
                 _state.update {
                     it.copy(
                         entries = known.values.toList(),
@@ -754,6 +762,9 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
     /** Writes what is known so far. Called before, during and after a pass. */
     private suspend fun persist(result: ScanResult? = null) {
         val current = tree ?: return
+        // A volume that is not readable cannot be written either, and asking anyway produced a
+        // stream of "无法创建或打开文件" errors for every report while the drive was still mounting.
+        if (!runCatching { current.isAvailable }.getOrDefault(false)) return
         store.writeIndex(
             current,
             indexOf(
@@ -821,7 +832,25 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
             store.cleanUpMangledFiles(current)
             store.writeRules(current)
         }
-        refresh()
+
+        // Deliberately no scan here.
+        //
+        // Walking the tree used to start on every launch, and on a real Library of 48 000 files
+        // across hundreds of folders on a USB volume that walk takes minutes even when every entry
+        // is reused. The app was therefore busy re-listing a Library that had not changed, and a
+        // walk that did not finish in time was killed and started again from the top — which is
+        // exactly what "it scans from scratch every time" was.
+        //
+        // The cached index is what makes the Library usable immediately, and the metadata pass
+        // below continues whatever reading is still outstanding. Re-listing happens when the user
+        // asks for it (the refresh button or 重建索引), or when the volume appears after being
+        // unreadable.
+        if (known.isEmpty()) {
+            refresh()
+        } else {
+            RemLog.info(SCOPE, "使用缓存直接打开，共 ${known.size} 条；不自动遍历")
+            startMetadataPass(current)
+        }
     }
 
     private companion object {
