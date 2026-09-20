@@ -100,4 +100,10 @@ class LibraryStore(private val context: Context) {
 
 /** Freezes a scan's result into the cache that [LibraryStore.writeIndex] writes. */
 fun indexOf(entries: List<Entry>, violations: List<String>): Index =
-    Index(entries = entries.map { it.toStored() }, violations = violations)
+    Index(
+        // Stated explicitly: the data class default is the *legacy* version, because that is what
+        // a file predating the version key decodes to. A cache Rem writes must claim the current one.
+        version = Index.VERSION,
+        entries = entries.map { it.toStored() },
+        violations = violations,
+    )

@@ -1,5 +1,6 @@
 package dev.susnowy.gallery.model
 
+import dev.susnowy.gallery.storage.indexOf
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -50,8 +51,31 @@ class IndexTest {
     @Test
     fun `tolerates a field written by a newer reader`() {
         // An editor may add its own key; that must not cost the user a rescan.
-        val text = """{"version":1,"entries":[],"violations":[],"extra":"ignored"}"""
-        assertEquals(Index(), json.decodeFromString<Index>(text))
+        val text = """{"version":${Index.VERSION},"entries":[],"violations":[],"extra":"ignored"}"""
+        assertEquals(Index(version = Index.VERSION), json.decodeFromString<Index>(text))
+    }
+
+    @Test
+    fun `the version is always written so a reader can compare it`() {
+        // The whole invalidation mechanism rests on this: a version that is never encoded decodes
+        // back to the default and matches every file ever written.
+        val text = json.encodeToString(Index.serializer(), Index(version = Index.VERSION))
+        assertEquals(true, text.contains("\"version\""))
+        assertEquals(true, text.contains(Index.VERSION.toString()))
+    }
+
+    @Test
+    fun `a cache written before the version key existed is not trusted`() {
+        // `encodeDefaults = false` used to drop the key entirely, so such a file has no version.
+        val legacy = json.decodeFromString<Index>("""{"entries":[],"violations":[]}""")
+        assertEquals(Index.LEGACY_VERSION, legacy.version)
+        assertEquals(false, legacy.version == Index.VERSION)
+    }
+
+    @Test
+    fun `a cache Rem writes claims the current version`() {
+        val written = indexOf(entries = emptyList(), violations = emptyList())
+        assertEquals(Index.VERSION, written.version)
     }
 
     @Test

@@ -98,6 +98,20 @@ class LibraryTree(private val context: Context, val treeUri: Uri) {
     /** True when the path exists at all. */
     fun exists(relativePath: String): Boolean = find(relativePath) != null
 
+    /**
+     * Drops every remembered directory listing.
+     *
+     * A scan has to start from what the provider holds right now. The cache exists so one scan
+     * never lists the same directory twice — it lists a folder and then resolves the files inside
+     * each child — and that is all it is for. Keeping it *between* scans was a defect: once a scan
+     * reused its whole entry cache, nothing wrote to `.gallery/` either, so nothing cleared this
+     * map, and every later refresh re-read the same stale listing. A refresh then reported success
+     * without ever asking the provider about a new file.
+     */
+    fun invalidateListings() {
+        listings.clear()
+    }
+
     /** Whether the Library root currently carries a usable `.nomedia` marker. */
     fun isSystemGalleryHidden(): Boolean = find(SYSTEM_GALLERY_MARKER)?.isDirectory == false
 

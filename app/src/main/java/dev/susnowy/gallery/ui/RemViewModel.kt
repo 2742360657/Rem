@@ -226,6 +226,7 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
         val current = tree ?: return
         if (scanJob?.isActive == true) return
         val cached = entries.associateBy(Entry::path)
+        val cachedViolations = _state.value.violations
         scanJob = viewModelScope.launch {
             _state.update { it.copy(refreshing = true) }
             runCatching { withContext(Dispatchers.IO) { Scanner(getApplication(), current).scan(cached) } }
@@ -242,8 +243,11 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
                                 violations = scanned.violations,
                             )
                         }
-                        // Nothing was re-read, so the file on disk already says the same thing.
-                        if (!scanned.reusedCache) {
+                        // Reusing every entry means the media on disk is unchanged — but the
+                        // violation list is rebuilt from the directory listings on every pass, so
+                        // it can move without any entry moving. Skipping the write then left the
+                        // cache asserting a violation set the Library no longer had.
+                        if (!scanned.reusedCache || scanned.violations != cachedViolations) {
                             withContext(Dispatchers.IO) {
                                 store.writeIndex(current, indexOf(entries, scanned.violations))
                             }

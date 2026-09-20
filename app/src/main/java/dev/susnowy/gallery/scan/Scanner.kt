@@ -35,6 +35,9 @@ class Scanner(private val context: Context, private val tree: LibraryTree) {
 
     fun scan(cached: Map<String, Entry>): ScanResult {
         val startedAt = System.currentTimeMillis()
+        // Directory listings are never reused between scans; only the per-file readings are. The
+        // listing is the only way a new or removed file becomes visible at all.
+        tree.invalidateListings()
         RemLog.info(
             SCOPE,
             "开始扫描 root='${tree.rootDocumentId()}' 缓存条目=${cached.size}",
