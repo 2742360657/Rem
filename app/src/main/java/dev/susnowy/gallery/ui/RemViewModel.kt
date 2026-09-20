@@ -190,11 +190,18 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** The URI of one Library file, for the viewer and for handing a file to another app. */
+    fun documentUri(entry: Entry): Uri? = tree?.find(entry.path)?.uri
+
     /** Opens one file with whatever system app claims its type. */
     fun open(entry: Entry) {
-        val current = tree ?: return
         val type = entry.mediaType ?: return
-        val outcome = OpenWith.launch(getApplication(), current.documentUri(entry.path), type)
+        val uri = documentUri(entry)
+        if (uri == null) {
+            _state.update { it.copy(message = "找不到 ${entry.fileName}，可能已被移动或删除") }
+            return
+        }
+        val outcome = OpenWith.launch(getApplication(), uri, type)
         RemLog.info(SCOPE, "打开 '${entry.path}' type=$type -> $outcome")
         if (outcome is Outcome.NoHandler) {
             _state.update { it.copy(message = "系统没有可以打开 ${entry.fileName} 的应用") }

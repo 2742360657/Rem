@@ -9,7 +9,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -34,7 +34,7 @@ import kotlinx.coroutines.launch
 fun MediaGrid(
     entries: List<Entry>,
     thumbnail: (Entry) -> ImageRequest?,
-    onOpen: (Entry) -> Unit,
+    onOpen: (Int) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val gridState = rememberLazyGridState()
@@ -63,8 +63,14 @@ fun MediaGrid(
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            items(entries, key = Entry::path) { entry ->
-                MediaCell(entry = entry, thumbnail = thumbnail(entry), onOpen = onOpen)
+            itemsIndexed(entries, key = { _, entry -> entry.path }) { index, entry ->
+                // The index travels with the tap: the viewer opens on this cell and pages through
+                // the very list the grid is showing, without re-deriving either.
+                MediaCell(
+                    entry = entry,
+                    thumbnail = thumbnail(entry),
+                    onOpen = { index },
+                )
             }
         }
         if (entries.size > 1) {

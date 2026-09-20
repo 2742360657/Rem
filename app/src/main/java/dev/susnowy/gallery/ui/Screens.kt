@@ -73,7 +73,7 @@ fun AlbumScreen(
     state: UiState,
     onSelectFilter: (MediaFilter) -> Unit,
     thumbnail: (Entry) -> ImageRequest?,
-    onOpen: (Entry) -> Unit,
+    onOpen: (Int) -> Unit,
 ) {
     Column(Modifier.fillMaxSize()) {
         FilterRow(selected = state.filter, onSelect = onSelectFilter)
@@ -149,7 +149,7 @@ fun CollectionScreen(
 fun ProjectScreen(
     project: Project,
     thumbnail: (Entry) -> ImageRequest?,
-    onOpen: (Entry) -> Unit,
+    onOpen: (Int) -> Unit,
     onBack: () -> Unit,
 ) {
     Column(Modifier.fillMaxSize()) {

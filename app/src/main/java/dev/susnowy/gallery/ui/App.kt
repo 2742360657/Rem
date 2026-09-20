@@ -61,6 +61,9 @@ fun RemApp(viewModel: RemViewModel = viewModel()) {
     var menuExpanded by remember { mutableStateOf(false) }
     var violationsExpanded by remember { mutableStateOf(false) }
     var logOpen by remember { mutableStateOf(false) }
+    // What the viewer is showing, if anything. Every action that changes which Library is loaded
+    // clears it first: the list it pages through belongs to the Library that was on screen.
+    var viewerRequest by remember { mutableStateOf<ViewerRequest?>(null) }
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         uri?.let(viewModel::attach)
@@ -78,6 +81,17 @@ fun RemApp(viewModel: RemViewModel = viewModel()) {
         if (logOpen) {
             BackHandler { logOpen = false }
             LogScreen(onBack = { logOpen = false })
+            return@RemTheme
+        }
+        val openViewer = viewerRequest
+        if (openViewer != null) {
+            BackHandler { viewerRequest = null }
+            ViewerScreen(
+                request = openViewer,
+                fileUri = viewModel::documentUri,
+                onOpenWith = viewModel::open,
+                onClose = { viewerRequest = null },
+            )
             return@RemTheme
         }
         if (!state.attached) {
@@ -163,14 +177,19 @@ fun RemApp(viewModel: RemViewModel = viewModel()) {
                     project != null -> ProjectScreen(
                         project = project,
                         thumbnail = thumbnails,
-                        onOpen = viewModel::open,
+                        onOpen = { index ->
+                            ViewerState.request(project.entries, index)?.let { viewerRequest = it }
+                        },
                         onBack = viewModel::closeProject,
                     )
                     state.tab == Tab.ALBUM -> AlbumScreen(
                         state = state,
                         onSelectFilter = viewModel::selectFilter,
                         thumbnail = thumbnails,
-                        onOpen = viewModel::open,
+                        onOpen = { index ->
+                            // The viewer pages through exactly what the grid shows, filter included.
+                            ViewerState.request(state.visibleAlbum, index)?.let { viewerRequest = it }
+                        },
                     )
                     state.tab == Tab.COLLECTION -> CollectionScreen(
                         state = state,

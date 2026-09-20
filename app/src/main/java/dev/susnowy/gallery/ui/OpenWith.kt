@@ -9,8 +9,9 @@ import dev.susnowy.gallery.model.MediaType
 /**
  * Hands a file to whichever app the system has registered for its type.
  *
- * Rem deliberately ships no viewer or player of its own, so this is the whole "open" path. The
- * read grant is attached to the intent because the receiving app has no access to the Library
+ * This is no longer the whole "open" path — the built-in viewer handles the tap — but it stays on
+ * every surface as an explicit action and as the fallback when the viewer cannot decode a file.
+ * The read grant rides along on the intent because the receiving app has no access to the Library
  * tree on its own, and an app that cannot read the URI would otherwise open on a blank screen.
  */
 object OpenWith {
@@ -31,8 +32,8 @@ object OpenWith {
     } catch (_: ActivityNotFoundException) {
         Outcome.NoHandler
     } catch (_: SecurityException) {
-        // The grant was revoked between the scan and the tap; reporting "nothing can open it"
-        // is the honest answer, since Rem has no fallback viewer.
+        // The grant was revoked between the scan and the tap; reporting that nothing can open it is
+        // still the honest answer.
         Outcome.NoHandler
     }
 }
