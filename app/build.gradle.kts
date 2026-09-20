@@ -9,7 +9,7 @@ plugins {
 
 val releaseSigningPropertiesFile = providers.gradleProperty("rem.signingProperties")
     .orElse(providers.environmentVariable("REM_SIGNING_PROPERTIES"))
-    .orElse("T:/jks/keystore.properties")
+    .orElse("jks/keystore.properties")
     .map(::file)
     .get()
 val releaseSigningProperties = Properties().apply {

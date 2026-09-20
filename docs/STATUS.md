@@ -80,7 +80,7 @@ Telephoto 0.19.0 的传递依赖为 Coil 3.2.0、Kotlin 2.1.21、Compose runtime
 
 ### 真机实现验证（2026-09-20，本轮）
 
-设备仍为小米 `23127PN0CC`（Android 16 / API 36，arm64-v8a）。Library 为 `/sdcard/任启敬/rem-test`，由本机用 SAF 选择器接入；验证样本为该库原有的 17 项相册内容（含 3382 万像素大图）与三个本机生成并推入的测试视频（`ver-0099-short.mp4`、`ver-0100-seektest.flv`、`ver-0101-unsupported.wmv`）。全部操作由用户手动完成，结论取自设备上的 `cache/logs/rem.log` 与界面表现。
+设备仍为小米 `23127PN0CC`（Android 16 / API 36，arm64-v8a）。本轮验证使用的是**临时测试 Library** `/sdcard/任启敬/rem-test`（由本机用 SAF 选择器接入，另有更早的合成 Library 用于模拟器验证），**不是用户的正式 Library**；真实 Library 的验证由用户自行进行。验证样本为该库原有的相册内容（含 3382 万像素大图）与三个本机生成并推入的测试视频（`ver-0099-short.mp4`、`ver-0100-seektest.flv`、`ver-0101-unsupported.wmv`，验证后已从设备删除）。全部操作由用户手动完成，结论取自设备上的 `cache/logs/rem.log` 与界面表现。
 
 | 验证项 | 结果 |
 | --- | --- |
