@@ -1,19 +1,20 @@
-﻿# Rem Agent 开发协议
+# Rem Agent 开发协议
 
 ## 唯一有效入口
 
 开始任何任务前只读取：
 
 1. [AGENT_PRODUCT_RULES.md](AGENT_PRODUCT_RULES.md)：当前产品和文件模式；
-2. [docs/PRODUCT.md](docs/PRODUCT.md)：产品目标摘要；
-3. [docs/STATUS.md](docs/STATUS.md)：当前实现状态和未完成事项；
-4. 相关代码和测试。
+2. [AGENT_LIBRARY_RULES.md](AGENT_LIBRARY_RULES.md)：写入 Library 的文件模式说明，也是实际整理底层文件的依据；
+3. [docs/PRODUCT.md](docs/PRODUCT.md)：产品目标摘要；
+4. [docs/STATUS.md](docs/STATUS.md)：当前实现状态和未完成事项；
+5. 相关代码和测试。
 
 `docs/USER_GUIDE.md` 只在修改用户可见操作时读取。其他旧文档已删除，不得从 Git 历史或旧提交自行恢复产品要求。
 
 ## 开工声明
 
-每项任务开始时说明：目标、范围、非目标、将修改的文件、是否影响 Library 文件、验收条件和验证命令。目标不清或要求互斥时先提问；普通实现选择由 Agent 按当前产品规范做最小决定。
+每项任务开始时说明：目标、范围、非目标、将修改的文件、是否影响 Library 文件、验收条件和验证命令。目标不清或要求互斥时先提问；普通实现选择由 Agent 按当前产品规范做最小决定。编辑工作区时分步分模块执行中文commit，管理好git内容。
 
 ## 目标边界
 
@@ -31,9 +32,11 @@ Library/
   画集/
   待分类/
   .gallery/
+    RULES.md
+    index.json
 ```
 
-扫描只能由用户显式触发，只读取 `相册/` 和 `画集/` 的规定层级。`待分类/` 不扫描、不索引、不展示、不整理。原始媒体优先，索引必须可重建。
+`.gallery/RULES.md` 由构建从仓库根目录 `AGENT_LIBRARY_RULES.md` 复制为 assets，接入时覆写到 Library；`index.json` 是可重建缓存。扫描先展示缓存，再后台增量比对 `size` 和修改时间，只重读变化的文件。只读取 `相册/` 和 `画集/` 的规定层级，不递归。`待分类/` 不扫描、不索引、不展示、不整理。原始媒体优先，索引必须可重建，应用不写任何媒体文件。
 
 ## Agent 协作
 
