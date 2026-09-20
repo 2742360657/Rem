@@ -256,6 +256,9 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
     private var folders: List<String> = emptyList()
     private var violations: List<String> = emptyList()
 
+    /** How many entries the cache file held at the last incremental write. */
+    private var lastWritten = 0
+
     init {
         openAttachedLibrary()
     }
@@ -401,6 +404,7 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
     fun refresh() {
         val current = tree ?: return
         if (scanJob?.isActive == true) return
+        lastWritten = known.size
         scanJob = viewModelScope.launch {
             _state.update {
                 it.copy(refreshing = true, scanProgress = ScanProgress(known.size, known.size))
@@ -426,15 +430,22 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
                     RemLog.debug(SCOPE, "进度上报 已读=$scanned 发现=$total 新增=${entries.size}")
                     // Durable now, not at the end of the pass: this callback is the whole reason a
                     // scan killed halfway still leaves its work behind for the next one to reuse.
+                    //
+                    // Written only when the progress is worth a whole-index rewrite. Each write is
+                    // the entire index — 1.6 MB for nine thousand files — and on a removable volume
+                    // that write competes with the reads the scan itself is waiting for.
+                    if (known.size - lastWritten < PERSIST_EVERY_ENTRIES) return
+                    lastWritten = known.size
                     // A write still running is dropped in favour of this newer one.
                     writeJob?.cancel()
                     writeJob = viewModelScope.launch(Dispatchers.IO) { persist() }
                 }
             }
             runCatching {
-                // Seed the cache file before reading, so an interrupted first pass still leaves
-                // whatever the previous one had instead of an empty file.
-                withContext(Dispatchers.IO) { persist() }
+                // No seed write. It used to rewrite the cache with "whatever is known so far" before
+                // the pass started, which on a resumed Library replaced a large cached index with a
+                // handful of entries — measured on device: 5562 entries became one. A pass that is
+                // interrupted now leaves the previous cache untouched; only real progress overwrites.
                 val result = Scanner(getApplication(), current).scan(known.toMap(), sink)
                 withContext(Dispatchers.IO) { persist(result) }
                 result
@@ -530,6 +541,15 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
 
     private companion object {
         const val SCOPE = "Rem"
+
+        /**
+         * How much new progress justifies rewriting the whole index.
+         *
+         * The cache file is rewritten in full, so the cost is proportional to the Library, not to
+         * what changed. Two hundred entries is a few seconds of scanning on a slow volume and keeps
+         * the exposure to a lost pass small without writing constantly.
+         */
+        const val PERSIST_EVERY_ENTRIES = 200
     }
 }
 

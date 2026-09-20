@@ -53,8 +53,6 @@ interface ScanSink {
         total: Int,
     )
 
-    /** Called once the pass has ended, successfully or not, so a half-written index can be finished. */
-    fun onFinished() = Unit
 }
 
 /**
@@ -78,19 +76,14 @@ class Scanner(private val context: Context, private val tree: LibraryTree) {
         tree.invalidateListings()
         RemLog.info(SCOPE, "开始扫描 root='${tree.rootDocumentId()}' 缓存条目=${cached.size} 并发=$WORKERS")
         val pass = Pass(cached, sink)
-        return try {
-            pass.run().also { result ->
-                RemLog.info(
-                    SCOPE,
-                    "扫描结束 条目=${result.entries.size} 文件夹=${result.folders.size} " +
-                        "复用=${if (result.reusedCache) "全部" else "部分"} " +
-                        "违规=${result.violations.size} 用时=${System.currentTimeMillis() - startedAt}ms",
-                )
-                logViolations(result.violations)
-            }
-        } finally {
-            // Also on cancellation: the caller has already written whatever progress arrived.
-            sink?.onFinished()
+        return pass.run().also { result ->
+            RemLog.info(
+                SCOPE,
+                "扫描结束 条目=${result.entries.size} 文件夹=${result.folders.size} " +
+                    "复用=${if (result.reusedCache) "全部" else "部分"} " +
+                    "违规=${result.violations.size} 用时=${System.currentTimeMillis() - startedAt}ms",
+            )
+            logViolations(result.violations)
         }
     }
 
@@ -127,7 +120,7 @@ class Scanner(private val context: Context, private val tree: LibraryTree) {
 
             // `画集/` is a tree. Its first level must be project folders; below that anything goes.
             val firstLevel = tree.list(COLLECTION)
-            RemLog.info(SCOPE, "'$COLLECTION' 直属项 ${firstLevel.size}：" + firstLevel.names())
+            RemLog.info(SCOPE, "'$COLLECTION' 直属项 ${firstLevel.size}")
             for (child in firstLevel.sortedBy { it.name }) {
                 if (child.name.startsWith('.')) continue
                 if (!child.isDirectory) {
@@ -152,7 +145,7 @@ class Scanner(private val context: Context, private val tree: LibraryTree) {
 
         private suspend fun readAlbum(): List<Entry> {
             val children = tree.list(ALBUM)
-            RemLog.info(SCOPE, "'$ALBUM' 直属项 ${children.size}：" + children.names())
+            RemLog.info(SCOPE, "'$ALBUM' 直属项 ${children.size}")
             children.forEach { child ->
                 if (child.isDirectory) violations += "${child.path}：相册下不允许建立子文件夹"
             }
@@ -175,7 +168,7 @@ class Scanner(private val context: Context, private val tree: LibraryTree) {
                 synchronized(pendingLock) { folders += current.path }
 
                 val children = tree.list(current.path)
-                RemLog.debug(SCOPE, "目录 '${current.path}' 内含 ${children.size} 项：" + children.names())
+                RemLog.debug(SCOPE, "目录 '${current.path}' 内含 ${children.size} 项")
 
                 result += readFiles(children.filter { !it.isDirectory })
                 report(force = false)
@@ -187,8 +180,6 @@ class Scanner(private val context: Context, private val tree: LibraryTree) {
             }
             return result
         }
-
-        private fun List<Child>.names(): String = joinToString("、") { it.name }.take(LOG_NAME_LIMIT)
 
         /**
          * Reads one folder's files, reporting everything that cannot be an entry.
@@ -270,19 +261,21 @@ class Scanner(private val context: Context, private val tree: LibraryTree) {
     private companion object {
         const val SCOPE = "Scan"
         const val MAX_LOGGED_VIOLATIONS = 50
-        const val LOG_NAME_LIMIT = 300
 
         /**
          * Metadata reads in flight inside one folder.
          *
-         * Six is a deliberate middle: the provider answers concurrently, but a removable volume has
-         * a real throughput ceiling, and firing thousands of binder calls at it makes the whole scan
-         * slower instead of faster.
+         * Two, not six. Measured on a real device against a USB SSD: six concurrent readers each
+         * forcing a metadata read saturated the volume (`/proc/pressure/io` full avg10 16.6), and
+         * every worker ended up queued behind the content-provider lock the reads take. The app
+         * froze for five seconds at a time, ANR'd, was killed, and the next launch re-read the same
+         * files — a loop that never finished. Overlapping a few waits helps; stampeding the volume
+         * and the provider makes it strictly worse.
          */
-        private const val WORKERS = 6
+        private const val WORKERS = 2
 
         /** Progress is written at most this often, plus once at the end of every folder. */
-        private const val REPORT_INTERVAL_MS = 400L
+        private const val REPORT_INTERVAL_MS = 2000L
 
         private val READERS = Dispatchers.IO.limitedParallelism(WORKERS)
     }
