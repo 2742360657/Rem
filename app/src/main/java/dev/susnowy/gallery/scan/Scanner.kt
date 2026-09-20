@@ -169,9 +169,11 @@ class Scanner(private val context: Context, private val tree: LibraryTree) {
 
             while (stack.isNotEmpty()) {
                 val current = stack.removeFirst()
-                if (current.path != directory.path) {
-                    synchronized(pendingLock) { folders += current.path }
-                }
+                // The folder itself is recorded, not just the ones found below it. Leaving out the
+                // starting directory dropped every first-level project, and an empty folder has no
+                // media whose path could imply it — both are browsable and must be in the index.
+                synchronized(pendingLock) { folders += current.path }
+
                 val children = tree.list(current.path)
                 RemLog.debug(SCOPE, "目录 '${current.path}' 内含 ${children.size} 项：" + children.names())
 

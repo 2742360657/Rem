@@ -194,6 +194,45 @@ class UiStateTest {
     }
 
     @Test
+    fun `an empty subfolder is listed and opens`() {
+        // Regression: the folder list used to be flattened to direct children of the level, so a
+        // folder with no subfolders of its own — the only thing that can reveal an empty folder —
+        // never showed it. A project whose media sits under an empty subfolder looked empty.
+        val state = state(
+            entries = listOf(collection("作者-项目/子/0001.jpg")),
+            folders = listOf("画集/作者-项目", "画集/作者-项目/空"),
+            openFolder = "画集/作者-项目",
+        )
+        // 子 U+5B50 < 空 U+7A7A, so codepoint order puts 子 first.
+        assertEquals(listOf("子", "空"), state.folderRows.map { it.folder.name })
+    }
+
+    @Test
+    fun `a folder holding only a deeper folder is still listed`() {
+        val state = state(
+            // 文件在两层之下，所以「中间」这一层自己没有文件。
+            entries = listOf(collection("作者-项目/中间/再深一层/0001.jpg")),
+            folders = listOf("画集/作者-项目", "画集/作者-项目/中间", "画集/作者-项目/中间/再深一层"),
+            openFolder = "画集/作者-项目",
+        )
+        assertEquals(listOf("中间"), state.folderRows.map { it.folder.name })
+        // Its own level is empty, but the media below it is counted so the row does not read as空.
+        assertEquals(1, state.folderRows.single().mediaCount)
+    }
+
+    @Test
+    fun `deep media is rejected by the folder above it`() {
+        // Regression: a search term is compared against folder names at the current level, so a
+        // term matching a deeper folder must not pull the parent into the list.
+        val state = state(
+            folders = listOf("画集/作者-项目", "画集/作者-项目/花絮"),
+            openFolder = null,
+            search = "花絮",
+        )
+        assertTrue(state.folderRows.isEmpty())
+    }
+
+    @Test
     fun `a deeper folder is not listed at the top level`() {
         val state = state(folders = listOf("画集/作者-项目", "画集/作者-项目/子"))
         assertEquals(listOf("作者-项目"), state.folderRows.map { it.folder.name })

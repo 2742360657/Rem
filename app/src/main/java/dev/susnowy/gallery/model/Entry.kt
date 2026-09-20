@@ -69,23 +69,29 @@ data class Entry(
 /**
  * One folder inside the browsable tree.
  *
- * Kept as a path rather than an object: its name is the last segment, its parent is everything
+ * Kept as a path rather than an object: its name is the last segment, its parent is the segment
  * before it, and nothing else about it needs storing. Folders appear in the list even when they
  * hold no media, because an empty folder the user made is still part of their library.
+ *
+ * The tree is rooted at the section, not at the Library: the first level of `画集/Alice` is `Alice`,
+ * and it has no parent folder at all. Treating `画集` as its parent listed every second-level folder
+ * a level too high.
  */
 data class Folder(val path: String) {
     val name: String get() = path.substringAfterLast('/')
 
     /** The folder that contains this one, or `null` when this is a first-level folder. */
-    val parent: String? get() = path.substringBeforeLast('/', "").ifEmpty { null }
+    val parent: String?
+        get() {
+            // A path looks like `画集/名称` or `画集/名称/子/更深`. There is a parent folder only
+            // once a second separator exists; the one after the section name separates the section.
+            val separator = path.lastIndexOf('/')
+            val sectionEnd = path.indexOf('/')
+            return if (sectionEnd < 0 || separator <= sectionEnd) null else path.substring(0, separator)
+        }
 
-    /**
-     * Every folder between the collection root and this one, outermost first.
-     *
-     * `画集` itself is left out: it is the section's name, not a step the user took, and the tab
-     * bar already says where they are.
-     */
-    fun ancestorsWithinCollection(): List<String> {
+    /** Every folder between the section root and this one, outermost first, excluding this one. */
+    fun ancestors(): List<String> {
         val segments = path.split('/')
         return (2 until segments.size).map { segments.take(it).joinToString("/") }
     }
@@ -136,6 +142,11 @@ fun sequenceOf(fileName: String): Long? =
  *
  * Plain string order puts `10.jpg` before `2.jpg`, which is wrong for every folder of numbered
  * images. Digits are therefore split out and compared numerically at the same position.
+ *
+ * When one name is a prefix of the other the shorter one wins, and when both run out at the same
+ * place they fall back to a plain comparison: two names that contain no digits at all would
+ * otherwise be declared equal — measured by a test, the first version of this returned 0 for every
+ * pair of pure-text names, so a level of Chinese folder names kept whatever order it arrived in.
  */
 val NATURAL_ORDER: Comparator<String> = Comparator { left, right ->
     var i = 0
@@ -162,7 +173,11 @@ val NATURAL_ORDER: Comparator<String> = Comparator { left, right ->
             j++
         }
     }
-    (left.length - i).compareTo(right.length - j)
+    when {
+        i < left.length -> 1
+        j < right.length -> -1
+        else -> left.compareTo(right)
+    }
 }
 
 /** Scrollbar rows are one line wide, so minutes are the finest useful unit. */

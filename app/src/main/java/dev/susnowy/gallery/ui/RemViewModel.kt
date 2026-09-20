@@ -102,16 +102,44 @@ data class UiState(
             .toList()
 
     /**
-     * Every known folder, once each, including folders an entry path implies but the index did not
-     * list — which is what a pass still in progress looks like.
+     * Every known folder, once each: the folders the index recorded, plus the ones an entry path
+     * implies while a pass is still running and has not reported its folder list yet.
      *
-     * Built once per state: the alternative is rebuilding a list of every folder on every
+     * The section itself is deliberately not in here. It is not a folder the user can be inside of
+     * as a folder, and giving it an entry made it both a parent key and its own child, which put it
+     * in the tree and sent the subtree counts into infinite recursion.
+     *
+     * Built once per state. The alternative is rebuilding a list of every folder on every
      * recomposition of the grid, which on a large collection is work the user can feel.
      */
     private val allFolders: List<Folder> by lazy {
-        (folders + entries.mapNotNull { it.path.substringBeforeLast('/', "").ifEmpty { null } })
-            .distinct()
-            .map(::Folder)
+        (folders + entries.mapNotNull { it.parentFolder }).distinct().map(::Folder)
+    }
+
+    /**
+     * Direct children of every folder, keyed by parent path.
+     *
+     * A level is derived from this rather than from [allFolders], because a child has to stay
+     * visible no matter how deep it sits: a folder holding only a deeper folder, or one holding
+     * nothing at all, would otherwise vanish from the tree.
+     */
+    private val childFolders: Map<String, List<Folder>> by lazy {
+        allFolders.groupBy { it.parent.orEmpty() }
+    }
+
+    /**
+     * Entries grouped by the folder that directly contains them.
+     *
+     * Built once per state. Every folder row needs its own contents, and filtering the whole entry
+     * list per row made one recomposition cost folders × entries — on a real library that is tens
+     * of millions of path comparisons for a single frame.
+     */
+    private val entriesByParent: Map<String, List<Entry>> by lazy {
+        // Keyed by the containing folder. A file at a browsable root has none, and the bare
+        // substring before its last separator is the section name — which must never become a
+        // folder that the tree then shows as if it were a project.
+        entries.mapNotNull { entry -> entry.parentFolder?.let { it to entry } }
+            .groupBy({ it.first }, { it.second })
     }
 
     /**
@@ -119,25 +147,15 @@ data class UiState(
      *
      * Counted once per state instead of per row: a folder row has to say what it holds, and a
      * folder whose media all sits two levels down would otherwise claim to be empty. Only direct
-     * children are walked at each step, so the whole map costs one pass over the tree.
+     * children are walked at each step, so the whole map costs one pass over the folder tree.
      */
     private val subtreeCounts: Map<String, IntArray> by lazy {
-        val direct = HashMap<String, Int>()
-        val childFolders = HashMap<String, MutableList<String>>()
-        entries.forEach { entry ->
-            entry.parentFolder?.let { direct[it] = (direct[it] ?: 0) + 1 }
-        }
-        allFolders.forEach { folder ->
-            folder.parent?.let { parent ->
-                childFolders.getOrPut(parent) { mutableListOf() }.add(folder.path)
-            }
-        }
         val counted = HashMap<String, IntArray>()
         fun count(path: String): IntArray = counted.getOrPut(path) {
-            var media = direct[path] ?: 0
+            var media = entriesIn(path).size
             var folders = 0
             childFolders[path]?.forEach { child ->
-                val below = count(child)
+                val below = count(child.path)
                 media += below[0]
                 folders += 1 + below[1]
             }
@@ -159,10 +177,10 @@ data class UiState(
      */
     val folderRows: List<FolderRow>
         get() {
-            val parent = openFolder ?: COLLECTION
             val query = search.trim()
-            return allFolders.asSequence()
-                .filter { it.parent == parent }
+            // The top level has no path of its own; its children are the folders with no parent.
+            val parent = openFolder.orEmpty()
+            return childFolders[parent].orEmpty().asSequence()
                 .filter { query.isEmpty() || it.name.contains(query, ignoreCase = true) }
                 .map { folder ->
                     val counts = subtreeCounts[folder.path] ?: IntArray(2)
@@ -185,7 +203,10 @@ data class UiState(
         get() {
             val folder = openFolder ?: return emptyList()
             if (showsFolders) return emptyList()
-            val media = entriesIn(folder).filter { filter.accepts(it.mediaType) }
+            val query = search.trim()
+            val media = entriesIn(folder)
+                .filter { filter.accepts(it.mediaType) }
+                .filter { query.isEmpty() || it.fileName.contains(query, ignoreCase = true) }
             return media.sortedWith(mediaOrder())
         }
 
@@ -193,11 +214,11 @@ data class UiState(
     val breadcrumb: List<Folder>
         get() {
             val folder = currentFolder ?: return emptyList()
-            return (folder.ancestorsWithinCollection() + folder.path).map(::Folder)
+            return (folder.ancestors() + folder.path).map(::Folder)
         }
 
-    private fun entriesIn(folderPath: String): List<Entry> =
-        entries.filter { it.path.substringBeforeLast('/', "") == folderPath }
+    /** The files directly inside one folder. Grouped once per state, not scanned per call. */
+    private fun entriesIn(folderPath: String): List<Entry> = entriesByParent[folderPath].orEmpty()
 
     /** What「序号/名称/拍摄时间/修改时间/文件大小」mean for a list of files. */
     private fun mediaOrder(): Comparator<Entry> = when (sortMode) {
