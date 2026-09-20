@@ -1,64 +1,53 @@
-# Rem 当前状态
+﻿# Rem 当前状态
 
 ## 规范基线
 
-2026-09-20 已根据用户确认重置产品规范。当前唯一有效的详细规则见 [AGENT_PRODUCT_RULES.md](../AGENT_PRODUCT_RULES.md)，Library 文件模式说明见 [AGENT_LIBRARY_RULES.md](../AGENT_LIBRARY_RULES.md)。
+2026-09-20 已根据用户确认重置产品规范。详细规则见 [AGENT_PRODUCT_RULES.md](../AGENT_PRODUCT_RULES.md)，Library 文件模式见 [AGENT_LIBRARY_RULES.md](../AGENT_LIBRARY_RULES.md)。
 
-## 本轮完成：整体重构
+## 当前实现
 
-旧的 Tag、Collection、Work/Series/Edition 关系模型、自动识别、Organizer、Inbox、Trash、阅读进度、内置播放器、系统相册导入、批量元数据编辑、图片集排序、归档漫画阅读、日志与崩溃导出、以及旧的可移植 JSON 目录（`.gallery` v4 及 `library-tool` CLI）已全部删除，未保留任何代码路径。
+应用已从零实现最小 Library 接入和浏览流程：
 
-应用从零重建，当前实现：
-
-| 模块 | 位置 | 职责 |
+| 模块 | 位置 | 当前职责 |
 | --- | --- | --- |
-| 模型 | `model/Entry.kt`、`model/Index.kt` | 条目、项目分组、媒体类型判定、索引序列化 |
-| 存储 | `storage/LibraryTree.kt` | SAF 单次投影查询列举，一次 Binder 往返读一个目录 |
-| 存储 | `storage/LibraryStore.kt` | 接入的 tree URI、`index.json` 读写、`RULES.md` 覆写 |
-| 媒体 | `media/MediaProbe.kt` | 图片读 EXIF，视频读容器元数据；只报告文件自带的时间和地点 |
-| 扫描 | `scan/Scanner.kt` | 只读 `相册/` 直属文件与 `画集/*/` 直属文件，记录不规范项 |
-| 界面 | `ui/` | 相册网格、画集项目列表、项目详情、右侧滑块、系统查看器/播放器调用 |
+| 模型 | `model/Entry.kt`、`model/Index.kt` | 目录条目、媒体类型和索引序列化 |
+| 存储 | `storage/LibraryTree.kt`、`storage/LibraryStore.kt` | SAF 目录读取、`.gallery/index.json` 缓存和 `RULES.md` 写入 |
+| 媒体 | `media/MediaProbe.kt` | 读取图片 EXIF 和视频容器元数据 |
+| 扫描 | `scan/Scanner.kt` | 读取 `相册/` 直属文件与 `画集/*/` 直属文件，报告不规范内容 |
+| 界面 | `ui/` | 相册网格、画集项目列表、项目详情、右侧滑块和系统查看器/播放器调用 |
 
-## 关键行为
+接入后先展示缓存，再进行后台增量扫描；扫描只读取 `size` 或修改时间变化的文件。应用不修改任何媒体文件。
 
-- 接入后先展示 `.gallery/index.json` 缓存，再在后台增量扫描；扫描不阻塞阅读。
-- 增量扫描只在 `size` 或修改时间变化时重读文件内容，其余沿用缓存。
-- 用户点「重新扫描」触发同样路径；扫描进行中重复点击不叠加。
-- 不规范内容只在界面弹窗列出，不做任何自动修正。
+## “从系统相册隐藏”验证
 
-## 已知限制：无法从系统相册隐藏
+该能力尚未恢复为正式功能。2026-09-20 在已连接真机上完成隔离复测：
 
-曾经实现过「从系统相册隐藏」开关（在 `相册/`、`画集/` 或库根目录写入 `.nomedia`，再请求媒体库重扫），
-在真机上验证为**不可行**，已整体移除。证据（小米 houji / 澎湃 OS3.0 / Android 16）：
+- 设备：小米 `23127PN0CC`（`houji`）
+- 系统：Android 16，澎湃 OS `3.0`（`V816`）
+- 测试目录：`/Download/RemNomediaProbe/`
+- 测试结果：带 `.nomedia` 的 `hidden/` 图片没有出现在 `MediaStore`；未带 `.nomedia` 的 `open/` 图片被正常索引。
+- 测试目录已删除，未触碰用户 Library。
 
-| 检查项 | 结果 |
-| --- | --- |
-| 库根 `.nomedia` | 已建立 |
-| `MediaScannerConnection` 重扫根目录 | 已执行 |
-| `MediaStore` 图片行 | 仍然存在，`is_pending=0 is_trashed=0` |
-| 全新目录：先建 `.nomedia` 再放图片 | 新图片**照样被索引** |
-| 小米相册「其他相册」 | 越过 `.nomedia`，按最内层文件夹聚合显示 |
+小米官方说明路径任一层存在 `.nomedia` 时，该路径下图片不会被系统媒体服务记录：[KA-09388](https://www.mi.com/global/support/article/KA-09388/)。这与本次真机隔离测试一致。
 
-结论：该系统上 `.nomedia` 对**新增**文件即已无效，不是旧条目残留问题。小米相册另有自己的扫描与
-聚合逻辑，且小米官方没有任何关于 `.nomedia` 的文档或承诺。要在小米相册里隐藏相册，只能用相册
-自带的「隐藏相册」功能，应用无法通过标准 API 触发。
+当前结论：
 
-Android 官方确实提供 `MediaStore.createDeleteRequest` / `createTrashRequest`（需用户确认、需媒体
-读取权限），但那只作用于 `MediaStore`，对小米相册自有数据库是否有效未经验证；在明确需求前不实现。
+1. 对尚未进入系统媒体库的新文件，创建 `.nomedia` 可阻止后续索引。
+2. 对已经存在于 `MediaStore` 或系统相册的媒体，仅创建 `.nomedia` 不等于清除已有记录；删除或移入回收站需要单独验证、权限和用户确认。
+3. 小米相册自身的相册聚合行为尚未完成独立 UI 验证，不能宣称 `.nomedia` 能隐藏所有已经显示的系统相册内容。
+
+因此当前不把“隐藏”标记为已实现，也不恢复一个无条件成功的开关。后续若实现，应先明确开关作用范围，再分别验证新文件、已有媒体记录和关闭后的重新扫描行为。
+
+## 当前不做
+
+不实现底层文件改名、移动、删除、覆盖或其他编辑；不读取 `待分类/`；不做后台全盘扫描、自动识别整理、复杂关系、阅读进度或内置备用播放器。
 
 ## 验证证据
 
-- `.\gradlew.bat :app:testDebugUnitTest`：38 个测试通过，0 失败。
-- `.\gradlew.bat :app:assembleDebug`：构建成功，产物 `app/build/outputs/apk/debug/app-debug.apk`。
-- `aapt2 dump badging`：`com.susnowy.rem.debug`，versionCode 4，versionName `0.0.4-debug`，label `Rem`。
-- 合并后 Manifest 不含任何 `READ_MEDIA_*` 或存储权限。
+- 真机 ADB：`baff50eb` 在线；设备信息见上文。
+- `.nomedia` 隔离测试：新文件的 `MediaStore` 索引结果见上文。
+- 其他代码行为以本轮实际运行的测试和构建结果为准，历史数字不作为本轮证据。
 
 ## 未验证
 
-- 真机上的 SAF 读取、EXIF/视频元数据解码、缩略图加载、右侧滑块手势、系统查看器调用均未在设备上验证。
-- 当前只有单元测试，未重建 androidTest；涉及 Android 框架的行为没有仪器测试覆盖。
-- 应用名与图标沿用旧版资源（`@mipmap/ic_launcher`），未重新设计。
-
-## 清理结论
-
-旧的 Tag、Collection、复杂关系模型、自动识别整理、阅读进度、复杂页面跳转、后台全盘扫描、内置播放器和未来文件编辑的预置逻辑均不再作为当前需求依据，且已从代码中移除。后续若需要，必须重新提出并确认。
+真实 Library 的 SAF 接入规模、EXIF/视频元数据完整覆盖、右侧滑块真机手势、系统查看器/播放器在所有媒体格式上的兼容性，以及 Xiaomi Gallery 已有媒体记录的隐藏/恢复行为，仍需独立场景验证。
