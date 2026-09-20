@@ -1,12 +1,18 @@
 package dev.susnowy.gallery.media
 
 import android.content.Context
+import android.media.MediaDataSource
 import android.media.MediaMetadataRetriever
 import android.net.Uri
+import android.os.ParcelFileDescriptor
+import android.system.Os
+import android.system.OsConstants
 import androidx.exifinterface.media.ExifInterface
 import dev.susnowy.gallery.logging.RemLog
 import dev.susnowy.gallery.model.MediaType
 import dev.susnowy.gallery.model.Place
+import java.io.FileDescriptor
+import java.io.IOException
 import java.time.Instant
 import java.time.LocalDateTime
 import java.time.ZoneId
@@ -60,24 +66,143 @@ object MediaProbe {
         )
     }.getOrDefault(Metadata.NONE)
 
+    /**
+     * Reads a video's own container metadata.
+     *
+     * `MediaMetadataRetriever.setDataSource(FileDescriptor)` looks like the direct path and is not
+     * one: AOSP runs the descriptor through `FileUtils.convertToModernFd`, which asks `MediaStore`
+     * for the original media fd — a second trip through MediaProvider for every single video. On a
+     * USB volume with a few hundred videos that is measurable: an ANR trace from the real device
+     * showed MediaProvider at 42% of a CPU that was busy enough to starve the UI thread.
+     *
+     * A `MediaDataSource` skips that: the retriever calls back into `readAt`, which `pread`s the
+     * descriptor directly. It is used only when the descriptor is a seekable regular file, because
+     * `pread` is meaningless on a pipe, and every failure falls back to the old path — a video whose
+     * timestamp cannot be read would silently sort by file modification time instead.
+     */
     private fun readVideo(context: Context, uri: Uri): Metadata = runCatching {
+        val startedAt = System.nanoTime()
         val retriever = MediaMetadataRetriever()
         try {
             context.contentResolver.openFileDescriptor(uri, "r")?.use { descriptor ->
-                retriever.setDataSource(descriptor.fileDescriptor)
-                val raw = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DATE)
-                val captured = raw?.let(::parseVideoTimestamp)
-                if (raw != null && captured == null) {
-                    RemLog.warn(SCOPE, "无法解析视频拍摄时间 '$raw' uri=$uri")
+                // The descriptor stays open until the metadata has been read: with a MediaDataSource
+                // the retriever keeps reading through it, unlike the FileDescriptor path where the
+                // documentation allows closing straight after setDataSource returns.
+                val regularFile = descriptor.regularFileSize()
+                val direct = regularFile != null && setDirectDataSource(retriever, descriptor, regularFile)
+                if (!direct) {
+                    fallbacks.incrementAndGet()
+                    retriever.setDataSource(descriptor.fileDescriptor)
                 }
-                val place = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_LOCATION)
-                    ?.let(::parseIso6709)
-                Metadata(captured = captured, place = place)
+                Metadata(
+                    captured = extractCaptured(retriever, uri, direct),
+                    place = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_LOCATION)
+                        ?.let(::parseIso6709),
+                )
             } ?: Metadata.NONE
         } finally {
             runCatching { retriever.release() }
+            record(System.nanoTime() - startedAt)
         }
     }.getOrDefault(Metadata.NONE)
+
+    /** True when the retriever accepted the descriptor as a directly readable data source. */
+    private fun setDirectDataSource(
+        retriever: MediaMetadataRetriever,
+        descriptor: ParcelFileDescriptor,
+        size: Long,
+    ) = runCatching {
+        retriever.setDataSource(PreadDataSource(descriptor, size))
+        if (directAccepted.compareAndSet(false, true)) {
+            RemLog.info(SCOPE, "视频元数据改为直接读取（跳过 MediaStore），首个文件 ${size}B")
+        }
+        true
+    }.onFailure {
+        RemLog.warn(SCOPE, "直接读取失败，回退到系统路径：${it.message}")
+    }.getOrDefault(false)
+
+    private fun extractCaptured(retriever: MediaMetadataRetriever, uri: Uri, direct: Boolean): Long? {
+        val raw = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DATE)
+        val captured = raw?.let(::parseVideoTimestamp)
+        if (raw != null && captured == null) {
+            RemLog.warn(SCOPE, "无法解析视频拍摄时间 '$raw' uri=$uri")
+        }
+        if (direct && captured != null) directHits.incrementAndGet()
+        return captured
+    }
+
+    /**
+     * A descriptor the retriever reads through itself.
+     *
+     * `readAt` is what the native parser calls; it must fill what it can and never throw for a
+     * short read at the end of the file, which is how a parser detects EOF.
+     */
+    private class PreadDataSource(
+        private val descriptor: ParcelFileDescriptor,
+        private val size: Long,
+    ) : MediaDataSource() {
+        private val fd: FileDescriptor = descriptor.fileDescriptor
+
+        @Volatile
+        private var closed = false
+
+        override fun readAt(position: Long, buffer: ByteArray, offset: Int, size: Int): Int {
+            if (closed || position >= this.size) return -1
+            val wanted = minOf(size.toLong(), this.size - position).toInt()
+            if (wanted <= 0) return -1
+            return try {
+                Os.pread(fd, buffer, offset, wanted, position)
+            } catch (_: IOException) {
+                -1
+            } catch (_: android.system.ErrnoException) {
+                -1
+            }
+        }
+
+        override fun getSize(): Long = size
+
+        override fun close() {
+            closed = true
+        }
+    }
+
+    /**
+     * The file size when the descriptor is a seekable regular file, or `null` otherwise.
+     *
+     * `pread` only means anything on a regular file. A provider is allowed to hand back a pipe or a
+     * socket instead — a cloud `DocumentsProvider` streaming a download would — and reading one at
+     * a position is either meaningless or an error, so those go down the system path instead.
+     */
+    private fun ParcelFileDescriptor.regularFileSize(): Long? = runCatching {
+        val stat = Os.fstat(fileDescriptor)
+        if (OsConstants.S_ISREG(stat.st_mode)) stat.st_size else null
+    }.getOrNull()
+
+    /**
+     * Records how long video metadata took and which path served it.
+     *
+     * The A/B evidence for the direct path, kept because it is the only way to tell whether the
+     * shortcut is actually earning its place on a given device. A slow read is logged individually;
+     * the summary is logged every [SUMMARY_EVERY] reads.
+     */
+    private fun record(nanos: Long) {
+        val millis = nanos / 1_000_000
+        totalNanos.addAndGet(nanos)
+        val count = reads.incrementAndGet()
+        synchronized(slowest) {
+            if (millis > slowest[0]) slowest[0] = millis
+        }
+        if (millis >= SLOW_READ_MS) {
+            RemLog.warn(SCOPE, "视频元数据读取较慢 ${millis}ms")
+        }
+        if (count % SUMMARY_EVERY == 0) {
+            RemLog.info(
+                SCOPE,
+                "视频元数据：$count 次，平均 ${totalNanos.get() / count / 1_000_000}ms，" +
+                    "最慢 ${slowest[0]}ms，走直读 ${directHits.get()} 次，回退 ${fallbacks.get()} 次",
+            )
+        }
+    }
 
     /** `±DD.DDDD±DDD.DDDD/` as mp4 writes it, optionally with an altitude after the slash. */
     private fun parseIso6709(value: String): Place? {
@@ -89,7 +214,16 @@ object MediaProbe {
 
     private val ISO_6709 = Regex("^([+-]\\d+(?:\\.\\d+)?)([+-]\\d+(?:\\.\\d+)?)")
 
+    private val directAccepted = java.util.concurrent.atomic.AtomicBoolean(false)
+    private val reads = java.util.concurrent.atomic.AtomicInteger()
+    private val directHits = java.util.concurrent.atomic.AtomicInteger()
+    private val fallbacks = java.util.concurrent.atomic.AtomicInteger()
+    private val totalNanos = java.util.concurrent.atomic.AtomicLong()
+    private val slowest = longArrayOf(0)
+
     private const val SCOPE = "Media"
+    private const val SUMMARY_EVERY = 50
+    private const val SLOW_READ_MS = 200L
 }
 
 /**
