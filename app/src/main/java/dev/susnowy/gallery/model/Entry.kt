@@ -97,6 +97,12 @@ data class Folder(val path: String) {
     }
 }
 
+/** How a media list is laid out. Applies to the album and to a collection folder alike. */
+enum class ViewMode(val title: String) {
+    GRID("网格"),
+    LIST("列表"),
+}
+
 /** How the collection is ordered. The album has one fixed order and does not use this. */
 enum class SortMode(val title: String) {
     SEQUENCE("序号"),

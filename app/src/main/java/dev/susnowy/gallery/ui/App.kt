@@ -14,12 +14,28 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ErrorOutline
 import androidx.compose.material.icons.rounded.FolderOpen
+import androidx.compose.material.icons.rounded.Menu
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DrawerValue
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.ModalDrawerSheet
+import androidx.compose.material3.ModalNavigationDrawer
+import androidx.compose.material3.NavigationDrawerItem
+import androidx.compose.material3.rememberDrawerState
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -44,6 +60,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.compose.ui.text.style.TextOverflow
+import dev.susnowy.gallery.model.SortMode
+import dev.susnowy.gallery.model.ViewMode
 import dev.susnowy.gallery.ui.theme.RemTheme
 
 /**
@@ -64,6 +83,8 @@ fun RemApp(viewModel: RemViewModel = viewModel()) {
     // What the viewer is showing, if anything. Every action that changes which Library is loaded
     // clears it first: the list it pages through belongs to the Library that was on screen.
     var viewerRequest by remember { mutableStateOf<ViewerRequest?>(null) }
+    val drawerState = rememberDrawerState(DrawerValue.Closed)
+    val scope = rememberCoroutineScope()
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         uri?.let(viewModel::attach)
@@ -100,11 +121,36 @@ fun RemApp(viewModel: RemViewModel = viewModel()) {
         }
         val insideFolder = state.currentFolder != null
         BackHandler(enabled = insideFolder) { viewModel.closeFolder() }
+
+        // One place for everything that is not navigation: sections, filters, order, layout and the
+        // Library actions. They used to sit as rows of chips above every screen, which cost the
+        // screen space they were meant to help with.
+        ModalNavigationDrawer(
+            drawerState = drawerState,
+            gesturesEnabled = state.currentFolder == null,
+            drawerContent = {
+                RemSidebar(
+                    state = state,
+                    onSelectTab = { viewModel.selectTab(it); scope.launch { drawerState.close() } },
+                    onSelectFilter = viewModel::selectFilter,
+                    onSelectSort = viewModel::selectSortMode,
+                    onSelectViewMode = viewModel::selectViewMode,
+                    onChangeLibrary = { scope.launch { drawerState.close() }; picker.launch(null) },
+                    onDetachLibrary = { scope.launch { drawerState.close() }; viewModel.detach() },
+                    onOpenLog = { scope.launch { drawerState.close() }; logOpen = true },
+                )
+            },
+        ) {
         Scaffold(
             snackbarHost = { SnackbarHost(snackbarHostState) },
             topBar = {
                 TopAppBar(
                     title = { Text(state.libraryName.ifEmpty { "Rem" }) },
+                    navigationIcon = {
+                        IconButton(onClick = { scope.launch { drawerState.open() } }) {
+                            Icon(Icons.Rounded.Menu, contentDescription = "侧边栏")
+                        }
+                    },
                     actions = {
                         if (state.violations.isNotEmpty()) {
                             IconButton(onClick = { violationsExpanded = true }) {
@@ -118,6 +164,8 @@ fun RemApp(viewModel: RemViewModel = viewModel()) {
                             IconButton(onClick = { menuExpanded = true }) {
                                 Icon(Icons.Rounded.MoreVert, contentDescription = "更多")
                             }
+                            // Kept: the sidebar is the main way in now, but a long-press-free
+                            // second path costs nothing and the menu already held Library actions.
                             DropdownMenu(
                                 expanded = menuExpanded,
                                 onDismissRequest = { menuExpanded = false },
@@ -176,7 +224,6 @@ fun RemApp(viewModel: RemViewModel = viewModel()) {
                 when {
                     state.tab == Tab.ALBUM -> AlbumScreen(
                         state = state,
-                        onSelectFilter = viewModel::selectFilter,
                         thumbnail = thumbnails,
                         onOpen = { index ->
                             // The viewer pages through exactly what the grid shows, filter included.
@@ -186,8 +233,6 @@ fun RemApp(viewModel: RemViewModel = viewModel()) {
                     state.tab == Tab.COLLECTION -> CollectionScreen(
                         state = state,
                         onSearch = viewModel::search,
-                        onSelectFilter = viewModel::selectFilter,
-                        onSelectSort = viewModel::selectSortMode,
                         onOpenFolder = { viewModel.openFolder(it.path) },
                         onBack = viewModel::closeFolder,
                         thumbnail = thumbnails,
@@ -199,10 +244,14 @@ fun RemApp(viewModel: RemViewModel = viewModel()) {
                     else -> SettingsScreen(
                         state = state,
                         onHideFromSystemGallery = viewModel::setHideFromSystemGallery,
+                        onSelectViewMode = viewModel::selectViewMode,
+                        onClearThumbnails = viewModel::clearThumbnails,
+                        onRebuildIndex = viewModel::rebuildIndex,
                         onOpenLog = { logOpen = true },
                     )
                 }
             }
+        }
         }
         if (violationsExpanded) {
             ViolationsDialog(
@@ -278,4 +327,125 @@ private fun ViolationsDialog(violations: List<String>, onDismiss: () -> Unit) {
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("知道了") } },
     )
+}
+
+/**
+ * Everything that is not navigation, in one place.
+ *
+ * The sections are the primary axis and stay at the top; filters, order and layout apply to whatever
+ * is on screen and sit under them; the Library actions are last, because they are the ones that
+ * change what the app is even looking at.
+ */
+@Composable
+private fun RemSidebar(
+    state: UiState,
+    onSelectTab: (Tab) -> Unit,
+    onSelectFilter: (MediaFilter) -> Unit,
+    onSelectSort: (SortMode) -> Unit,
+    onSelectViewMode: (ViewMode) -> Unit,
+    onChangeLibrary: () -> Unit,
+    onDetachLibrary: () -> Unit,
+    onOpenLog: () -> Unit,
+) {
+    ModalDrawerSheet {
+        Column(Modifier.verticalScroll(rememberScrollState())) {
+            Text(
+                text = state.libraryName.ifEmpty { "Rem" },
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(horizontal = 24.dp, vertical = 16.dp),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = "${state.entries.size} 个媒体文件 · ${state.folders.size} 个文件夹",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 24.dp).padding(bottom = 12.dp),
+            )
+
+            Tab.entries.forEach { tab ->
+                NavigationDrawerItem(
+                    label = { Text(tab.title) },
+                    icon = { Icon(tab.icon, contentDescription = null) },
+                    selected = tab == state.tab,
+                    onClick = { onSelectTab(tab) },
+                    modifier = Modifier.padding(horizontal = 12.dp),
+                )
+            }
+
+            HorizontalDivider(Modifier.padding(vertical = 8.dp))
+            SidebarLabel("显示")
+            SidebarChips(
+                options = MediaFilter.entries.map { it to it.title },
+                selected = state.filter,
+                onSelect = onSelectFilter,
+            )
+            SidebarLabel("排序")
+            SidebarChips(
+                options = SortMode.entries.map { it to it.title },
+                selected = state.sortMode,
+                onSelect = onSelectSort,
+            )
+            SidebarLabel("视图")
+            SidebarChips(
+                options = ViewMode.entries.map { it to it.title },
+                selected = state.viewMode,
+                onSelect = onSelectViewMode,
+            )
+
+            HorizontalDivider(Modifier.padding(vertical = 8.dp))
+            NavigationDrawerItem(
+                label = { Text("更换 Library") },
+                selected = false,
+                onClick = onChangeLibrary,
+                modifier = Modifier.padding(horizontal = 12.dp),
+            )
+            NavigationDrawerItem(
+                label = { Text("断开 Library") },
+                selected = false,
+                onClick = onDetachLibrary,
+                modifier = Modifier.padding(horizontal = 12.dp),
+            )
+            NavigationDrawerItem(
+                label = { Text("运行日志") },
+                selected = false,
+                onClick = onOpenLog,
+                modifier = Modifier.padding(horizontal = 12.dp),
+            )
+            Spacer(Modifier.height(16.dp))
+        }
+    }
+}
+
+@Composable
+private fun SidebarLabel(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(start = 28.dp, top = 8.dp, bottom = 4.dp),
+    )
+}
+
+/** A wrapped row of choices. Wrapping matters: five orders do not fit on one phone line. */
+@Composable
+private fun <T> SidebarChips(
+    options: List<Pair<T, String>>,
+    selected: T,
+    onSelect: (T) -> Unit,
+) {
+    FlowRow(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 24.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        options.forEach { (value, label) ->
+            FilterChip(
+                selected = value == selected,
+                onClick = { onSelect(value) },
+                label = { Text(label) },
+            )
+        }
+    }
 }

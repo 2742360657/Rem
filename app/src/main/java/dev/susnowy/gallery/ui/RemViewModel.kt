@@ -10,6 +10,7 @@ import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import dev.susnowy.gallery.RemApplication
 import dev.susnowy.gallery.logging.RemLog
 import dev.susnowy.gallery.model.COLLECTION
 import dev.susnowy.gallery.model.Entry
@@ -17,6 +18,7 @@ import dev.susnowy.gallery.model.Folder
 import dev.susnowy.gallery.model.MediaType
 import dev.susnowy.gallery.model.NATURAL_ORDER
 import dev.susnowy.gallery.model.SortMode
+import dev.susnowy.gallery.model.ViewMode
 import dev.susnowy.gallery.model.splitProjectFolder
 import dev.susnowy.gallery.model.toEntry
 import dev.susnowy.gallery.scan.ScanResult
@@ -84,6 +86,9 @@ data class UiState(
     /** Null while the collection shows its top level. */
     val openFolder: String? = null,
     val sortMode: SortMode = SortMode.SEQUENCE,
+    val viewMode: ViewMode = ViewMode.GRID,
+    /** Thumbnail cache size on disk, read off the main thread. Null until it is known. */
+    val thumbnailBytes: Long? = null,
     val refreshing: Boolean = false,
     /** Non-null only while a scan is running. */
     val scanProgress: ScanProgress? = null,
@@ -259,8 +264,12 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
     /** How many entries the cache file held at the last incremental write. */
     private var lastWritten = 0
 
+    /** Paths the running pass has actually seen. Anything else is gone from the volume. */
+    private val readThisPass = mutableSetOf<String>()
+
     init {
         openAttachedLibrary()
+        refreshThumbnailSize()
     }
 
     fun attach(treeUri: Uri) {
@@ -296,8 +305,51 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
 
     fun search(text: String) = _state.update { it.copy(search = text) }
 
-    /** Opens one folder of the collection. */
-    fun openFolder(path: String) = _state.update { it.copy(openFolder = path, search = "") }
+    /**
+     * Opens one folder of the collection.
+     *
+     * The path is resolved before it becomes the current level. A folder deleted on the volume is
+     * otherwise a level that renders empty with no way to tell it apart from a folder that really is
+     * empty, and the way back is not obvious either — so the viewer of the tree stays where it is,
+     * says what happened, and refreshes.
+     */
+    fun openFolder(path: String) {
+        val current = tree
+        if (current == null) {
+            openFolderLocally(path)
+            return
+        }
+        if (hasFolder(path)) {
+            openFolderLocally(path)
+            return
+        }
+        viewModelScope.launch {
+            val stillThere = withContext(Dispatchers.IO) {
+                runCatching { current.isDirectory(path) }.getOrDefault(false)
+            }
+            if (stillThere) {
+                openFolderLocally(path)
+            } else {
+                RemLog.warn(SCOPE, "文件夹 '$path' 已不在库中，回到上级")
+                val parent = Folder(path).parent
+                _state.update {
+                    it.copy(
+                        openFolder = parent,
+                        search = "",
+                        message = "「${Folder(path).name}」已不在库中，已返回上一级",
+                    )
+                }
+                refresh()
+            }
+        }
+    }
+
+    /** True when the index already lists this folder. */
+    private fun hasFolder(path: String): Boolean = folders.any { it == path } ||
+        known.keys.any { it.startsWith("$path/") }
+
+    private fun openFolderLocally(path: String) =
+        _state.update { it.copy(openFolder = path, search = "") }
 
     /** Goes back one level, or to the collection's top level from a first-level folder. */
     fun closeFolder() = _state.update {
@@ -308,6 +360,52 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
     fun selectSortMode(mode: SortMode) {
         store.sortMode = mode
         _state.update { it.copy(sortMode = mode) }
+    }
+
+    /** Remembers the layout. A reading preference, so it survives restarts. */
+    fun selectViewMode(mode: ViewMode) {
+        store.viewMode = mode
+        _state.update { it.copy(viewMode = mode) }
+    }
+
+    /** Reads the thumbnail cache size off the main thread; a directory walk is not free. */
+    fun refreshThumbnailSize() {
+        viewModelScope.launch {
+            val bytes = withContext(Dispatchers.IO) { app.thumbnailCacheBytes(getApplication()) }
+            _state.update { it.copy(thumbnailBytes = bytes) }
+        }
+    }
+
+    fun clearThumbnails() {
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) { app.clearThumbnailCache(getApplication()) }
+            refreshThumbnailSize()
+            _state.update { it.copy(message = "缩略图缓存已清空，浏览时会重新生成") }
+        }
+    }
+
+    private val app: RemApplication get() = getApplication()
+
+    /** Drops every cached reading and re-reads the Library from scratch. */
+    fun rebuildIndex() {
+        val current = tree
+        if (current == null) {
+            _state.update { it.copy(message = "尚未接入 Library，无法重建索引") }
+            return
+        }
+        if (scanJob?.isActive == true) return
+        known.clear()
+        folders = emptyList()
+        violations = emptyList()
+        lastWritten = 0
+        _state.update {
+            it.copy(entries = emptyList(), folders = emptyList(), violations = emptyList())
+        }
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) { store.dropIndex(current) }
+        }
+        RemLog.info(SCOPE, "重建索引：已丢弃缓存，重新扫描")
+        refresh()
     }
 
     fun dismissMessage() = _state.update { it.copy(message = null) }
@@ -359,7 +457,10 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
         val type = entry.mediaType ?: return
         val uri = documentUri(entry)
         if (uri == null) {
-            _state.update { it.copy(message = "找不到 ${entry.fileName}，可能已被移动或删除") }
+            // The index still listed a file the volume no longer has. Say so, then re-read so the
+            // grid stops offering it.
+            _state.update { it.copy(message = "找不到 ${entry.fileName}，可能已被移动或删除，正在重新扫描") }
+            refresh()
             return
         }
         val outcome = OpenWith.launch(getApplication(), uri, type)
@@ -404,6 +505,11 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
     fun refresh() {
         val current = tree ?: return
         if (scanJob?.isActive == true) return
+        // Reuse decides by path, so the cached readings stay in `known` while the pass runs — the
+        // grid must not go blank for the tens of seconds a large Library takes. What the pass reads
+        // is recorded separately, and anything the pass never saw is dropped when it finishes.
+        val cachedSnapshot = known.toMap()
+        readThisPass.clear()
         lastWritten = known.size
         scanJob = viewModelScope.launch {
             _state.update {
@@ -417,7 +523,14 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
                     scanned: Int,
                     total: Int,
                 ) {
-                    entries.forEach { known[it.path] = it }
+                    // Entries are added for what the pass reads; what it never reports again is
+                    // pruned when the pass ends. Adding without removing left entries for files that
+                    // had been moved or deleted on the volume — the grid kept showing them and
+                    // opening one produced a black screen.
+                    entries.forEach {
+                        known[it.path] = it
+                        readThisPass += it.path
+                    }
                     this@RemViewModel.folders = folders
                     this@RemViewModel.violations = violations
                     _state.update {
@@ -446,11 +559,16 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
                 // the pass started, which on a resumed Library replaced a large cached index with a
                 // handful of entries — measured on device: 5562 entries became one. A pass that is
                 // interrupted now leaves the previous cache untouched; only real progress overwrites.
-                val result = Scanner(getApplication(), current).scan(known.toMap(), sink)
+                val result = Scanner(getApplication(), current).scan(cachedSnapshot, sink)
                 withContext(Dispatchers.IO) { persist(result) }
                 result
             }.fold(
                 onSuccess = {
+                    val vanished = known.keys.filterNot { it in readThisPass }
+                    vanished.forEach { known.remove(it) }
+                    if (vanished.isNotEmpty()) {
+                        RemLog.info(SCOPE, "本次扫描发现 ${vanished.size} 个文件已不在库中，已从列表移除")
+                    }
                     _state.update {
                         it.copy(
                             refreshing = false,
@@ -498,7 +616,7 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
         val current = store.tree()
         if (current == null) {
             RemLog.info(SCOPE, "没有已接入的 Library")
-            _state.update { UiState(sortMode = store.sortMode) }
+            _state.update { UiState(sortMode = store.sortMode, viewMode = store.viewMode) }
             return
         }
         tree = current
@@ -527,6 +645,7 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
                 folders = folders,
                 violations = violations,
                 sortMode = store.sortMode,
+                viewMode = store.viewMode,
                 hideFromSystemGallery = current.isSystemGalleryHidden(),
             )
         }

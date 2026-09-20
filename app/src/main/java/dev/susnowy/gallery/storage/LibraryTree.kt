@@ -207,6 +207,15 @@ class LibraryTree(private val context: Context, val treeUri: Uri) {
         listings.remove(directory.documentId)
     }
 
+    /** Deletes one of Rem's own files. Missing counts as success: the caller wanted it gone. */
+    fun deleteInternal(fileName: String): Boolean {
+        val target = find("$INTERNAL_DIR/$fileName") ?: return true
+        val removed = runCatching { DocumentsContract.deleteDocument(resolver, target.uri) }
+            .getOrDefault(false)
+        listings.clear()
+        return removed
+    }
+
     /** Reads one of Rem's own state files, or `null` when it is absent. */
     fun readInternal(fileName: String): String? {
         val child = find("$INTERNAL_DIR/$fileName")

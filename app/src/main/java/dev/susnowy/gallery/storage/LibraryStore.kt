@@ -6,6 +6,7 @@ import dev.susnowy.gallery.logging.RemLog
 import dev.susnowy.gallery.model.Entry
 import dev.susnowy.gallery.model.Index
 import dev.susnowy.gallery.model.SortMode
+import dev.susnowy.gallery.model.ViewMode
 import dev.susnowy.gallery.model.toStored
 import kotlinx.serialization.json.Json
 
@@ -55,6 +56,14 @@ class LibraryStore(private val context: Context) {
             preferences.edit().putString(KEY_SORT_MODE, value.name).apply()
         }
 
+    /** Grid or list. A reading preference, so it lives on the device and survives restarts. */
+    var viewMode: ViewMode
+        get() = ViewMode.entries.firstOrNull { it.name == preferences.getString(KEY_VIEW_MODE, null) }
+            ?: ViewMode.GRID
+        set(value) {
+            preferences.edit().putString(KEY_VIEW_MODE, value.name).apply()
+        }
+
     fun tree(): LibraryTree? = attachedTreeUri?.let { LibraryTree(context, it) }
 
     /** The cached index, or `null` when absent, unreadable, or written by a newer format. */
@@ -71,6 +80,19 @@ class LibraryStore(private val context: Context) {
         }
         RemLog.info(SCOPE, "载入缓存 ${index.entries.size} 条")
         return index
+    }
+
+    /**
+     * Deletes the cache file, so the next pass has nothing to reuse.
+     *
+     * Used by the explicit rebuild: when files were moved outside Rem the cache can describe a
+     * Library that no longer exists, and the honest fix is to start over rather than to guess which
+     * entries are still good.
+     */
+    fun dropIndex(tree: LibraryTree): Boolean {
+        val removed = runCatching { tree.deleteInternal(INDEX_FILE) }.getOrDefault(false)
+        RemLog.info(SCOPE, "删除 $INDEX_FILE：$removed")
+        return removed
     }
 
     /** Writes the index cache. A failure costs one rescan, so callers may ignore the result. */
@@ -110,6 +132,7 @@ class LibraryStore(private val context: Context) {
         private const val PREFERENCES = "rem.library"
         private const val KEY_TREE_URI = "tree_uri"
         private const val KEY_SORT_MODE = "sort_mode"
+        private const val KEY_VIEW_MODE = "view_mode"
     }
 }
 

@@ -18,7 +18,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.Search
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -34,32 +33,7 @@ import androidx.compose.ui.unit.dp
 import coil3.request.ImageRequest
 import dev.susnowy.gallery.model.Entry
 import dev.susnowy.gallery.model.Folder
-import dev.susnowy.gallery.model.SortMode
 import kotlinx.coroutines.launch
-
-/** The image/video/both selector shared by both sections. */
-@Composable
-fun FilterRow(
-    selected: MediaFilter,
-    onSelect: (MediaFilter) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        MediaFilter.entries.forEach { option ->
-            FilterChip(
-                selected = option == selected,
-                onClick = { onSelect(option) },
-                label = { Text(option.title) },
-            )
-        }
-    }
-}
 
 /** A centred explanation for a list that has nothing to show. */
 @Composable
@@ -77,16 +51,19 @@ fun EmptyHint(text: String, modifier: Modifier = Modifier) {
 @Composable
 fun AlbumScreen(
     state: UiState,
-    onSelectFilter: (MediaFilter) -> Unit,
     thumbnail: (Entry) -> ImageRequest?,
     onOpen: (Int) -> Unit,
 ) {
     Column(Modifier.fillMaxSize()) {
-        FilterRow(selected = state.filter, onSelect = onSelectFilter)
         if (state.visibleAlbum.isEmpty()) {
             EmptyHint(if (state.entries.isEmpty()) "相册里还没有可浏览的图片或视频" else "没有符合当前筛选的媒体")
         } else {
-            MediaGrid(entries = state.visibleAlbum, thumbnail = thumbnail, onOpen = onOpen)
+            MediaGrid(
+                entries = state.visibleAlbum,
+                thumbnail = thumbnail,
+                onOpen = onOpen,
+                viewMode = state.viewMode,
+            )
         }
     }
 }
@@ -101,8 +78,6 @@ fun AlbumScreen(
 fun CollectionScreen(
     state: UiState,
     onSearch: (String) -> Unit,
-    onSelectFilter: (MediaFilter) -> Unit,
-    onSelectSort: (SortMode) -> Unit,
     onOpenFolder: (Folder) -> Unit,
     onBack: () -> Unit,
     thumbnail: (Entry) -> ImageRequest?,
@@ -128,8 +103,6 @@ fun CollectionScreen(
             label = { Text("搜索作者或文件夹名称") },
             leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
         )
-        FilterRow(selected = state.filter, onSelect = onSelectFilter)
-        SortRow(selected = state.sortMode, onSelect = onSelectSort)
 
         when {
             rows.isNotEmpty() -> Box(Modifier.fillMaxSize()) {
@@ -156,7 +129,12 @@ fun CollectionScreen(
                     )
                 }
             }
-            media.isNotEmpty() -> MediaGrid(entries = media, thumbnail = thumbnail, onOpen = onOpen)
+            media.isNotEmpty() -> MediaGrid(
+                entries = media,
+                thumbnail = thumbnail,
+                onOpen = onOpen,
+                viewMode = state.viewMode,
+            )
             folder != null -> EmptyHint(
                 if (state.filter == MediaFilter.ALL) "这个文件夹里没有媒体文件" else "没有符合当前筛选的媒体",
             )
@@ -198,36 +176,6 @@ private fun FolderHeader(
                     },
                 )
             }
-        }
-    }
-}
-
-/** The collection's order selector. Remembered, because it is how one person reads a library. */
-@Composable
-fun SortRow(
-    selected: SortMode,
-    onSelect: (SortMode) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .horizontalScroll(rememberScrollState())
-            .padding(horizontal = 12.dp, vertical = 4.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(
-            text = "排序",
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        SortMode.entries.forEach { mode ->
-            FilterChip(
-                selected = mode == selected,
-                onClick = { onSelect(mode) },
-                label = { Text(mode.title) },
-            )
         }
     }
 }

@@ -39,6 +39,25 @@ class RemApplication : Application(), SingletonImageLoader.Factory {
 
     override fun newImageLoader(context: Context): ImageLoader = buildLoader(context, defaultDiskCache(context))
 
+    /** Bytes currently held by the thumbnail disk cache. Cheap: it is a directory walk. */
+    fun thumbnailCacheBytes(context: Context): Long =
+        context.cacheDir.resolve(THUMBNAIL_DIR).walkBottomUp().filter { it.isFile }.sumOf { it.length() }
+
+    /**
+     * Drops every cached thumbnail.
+     *
+     * Safe by construction: a thumbnail is rebuilt from the media file the next time it is shown.
+     * The in-memory cache is cleared too, so the grid redraws from the originals instead of
+     * re-reading entries that no longer exist on disk.
+     */
+    fun clearThumbnailCache(context: Context) {
+        val directory = context.cacheDir.resolve(THUMBNAIL_DIR)
+        val removed = runCatching { directory.deleteRecursively() }.getOrDefault(false)
+        runCatching { directory.mkdirs() }
+        SingletonImageLoader.get(context).memoryCache?.clear()
+        RemLog.info(SCOPE, "缩略图缓存已清空 目录删除=$removed")
+    }
+
     private fun buildLoader(context: Context, diskCache: DiskCache): ImageLoader = ImageLoader.Builder(context)
         .memoryCache {
             MemoryCache.Builder()
@@ -57,7 +76,7 @@ class RemApplication : Application(), SingletonImageLoader.Factory {
         .build()
 
     private fun defaultDiskCache(context: Context): DiskCache = diskCacheFor(
-        context.cacheDir.resolve("thumbnails").apply { mkdirs() }.absolutePath,
+        context.cacheDir.resolve(THUMBNAIL_DIR).apply { mkdirs() }.absolutePath,
     )
 
     private fun diskCacheFor(directory: String): DiskCache = DiskCache.Builder()
@@ -70,6 +89,7 @@ class RemApplication : Application(), SingletonImageLoader.Factory {
 
     private companion object {
         const val SCOPE = "缩略图"
+        const val THUMBNAIL_DIR = "thumbnails"
         const val MEMORY_CACHE_PERCENT = 0.25
         const val NO_CACHE_LIMIT = 512L * 1024L * 1024L * 1024L
 

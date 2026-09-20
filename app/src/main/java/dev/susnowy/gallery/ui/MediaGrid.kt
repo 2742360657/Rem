@@ -1,5 +1,21 @@
 package dev.susnowy.gallery.ui
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material3.Icon
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
+import coil3.compose.AsyncImage
+import dev.susnowy.gallery.model.MediaType
+import dev.susnowy.gallery.model.ViewMode
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -36,6 +52,7 @@ fun MediaGrid(
     thumbnail: (Entry) -> ImageRequest?,
     onOpen: (Int) -> Unit,
     modifier: Modifier = Modifier,
+    viewMode: ViewMode = ViewMode.GRID,
 ) {
     val gridState = rememberLazyGridState()
     val scope = rememberCoroutineScope()
@@ -53,6 +70,17 @@ fun MediaGrid(
         } else {
             ScrollLabel(entry.positionLabel, entry.place?.label.orEmpty())
         }
+    }
+
+    if (viewMode == ViewMode.LIST) {
+        MediaList(
+            entries = entries,
+            thumbnail = thumbnail,
+            onOpen = onOpen,
+            modifier = modifier,
+            labelAt = ::labelAt,
+        )
+        return
     }
 
     Box(modifier.fillMaxSize()) {
@@ -84,6 +112,111 @@ fun MediaGrid(
             )
         }
     }
+}
+
+/**
+ * The same list as rows: one thumbnail, the file name, and the time or number.
+ *
+ * A row is easier to scan when the names differ only at the end, and it fits far more files on a
+ * screen than a grid of squares does — which is what someone looking for one file actually wants.
+ */
+@Composable
+private fun MediaList(
+    entries: List<Entry>,
+    thumbnail: (Entry) -> ImageRequest?,
+    onOpen: (Int) -> Unit,
+    labelAt: (Float) -> ScrollLabel,
+    modifier: Modifier = Modifier,
+) {
+    val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+
+    Box(modifier.fillMaxSize()) {
+        LazyColumn(
+            state = listState,
+            contentPadding = PaddingValues(end = TRACK_WIDTH),
+        ) {
+            itemsIndexed(entries, key = { _, entry -> entry.path }) { index, entry ->
+                MediaRow(
+                    entry = entry,
+                    thumbnail = thumbnail(entry),
+                    onOpen = { onOpen(index) },
+                )
+            }
+        }
+        if (entries.size > 1) {
+            Scrollbar(
+                fraction = listFraction(listState, entries.size),
+                onJump = { fraction -> scope.launch { jumpList(listState, entries.size, fraction) } },
+                labelAt = labelAt,
+                modifier = Modifier.align(Alignment.CenterEnd),
+            )
+        }
+    }
+}
+
+/** One media file as a row. */
+@Composable
+private fun MediaRow(entry: Entry, thumbnail: ImageRequest?, onOpen: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onOpen)
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Box(
+            Modifier
+                .size(56.dp)
+                .clip(RoundedCornerShape(6.dp))
+                .background(MaterialTheme.colorScheme.surfaceContainerHighest),
+        ) {
+            if (thumbnail != null) {
+                AsyncImage(
+                    model = thumbnail,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+            if (entry.mediaType == MediaType.VIDEO) {
+                Icon(
+                    imageVector = Icons.Rounded.PlayArrow,
+                    contentDescription = "视频",
+                    tint = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.align(Alignment.BottomEnd),
+                )
+            }
+        }
+        Column(Modifier.weight(1f)) {
+            Text(
+                text = entry.fileName,
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = listOfNotNull(
+                    entry.positionLabel,
+                    entry.place?.label,
+                    humanSize(entry.size),
+                ).joinToString(" · "),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+/** `1.2 MB` — a size a person can compare at a glance. */
+fun humanSize(bytes: Long): String = when {
+    bytes >= 1024L * 1024L * 1024L -> "%.1f GB".format(bytes / 1024.0 / 1024.0 / 1024.0)
+    bytes >= 1024L * 1024L -> "%.1f MB".format(bytes / 1024.0 / 1024.0)
+    bytes >= 1024L -> "%.0f KB".format(bytes / 1024.0)
+    else -> "$bytes B"
 }
 
 /** One row in the collection's project list. */
