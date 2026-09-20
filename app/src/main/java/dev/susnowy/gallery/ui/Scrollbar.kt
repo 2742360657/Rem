@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
@@ -34,6 +35,14 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 
 /**
+ * What the scrollbar shows beside the thumb while it is being dragged.
+ *
+ * [secondary] is the place for an album file and empty for a collection file, so the bubble keeps
+ * the same two-line shape everywhere instead of changing height as the list scrolls.
+ */
+data class ScrollLabel(val primary: String, val secondary: String = "")
+
+/**
  * The right-edge drag slider the rules require on long lists.
  *
  * It reads the lazy layout's own scroll state, so it stays correct when rows are recycled, when
@@ -49,12 +58,12 @@ import kotlinx.coroutines.delay
 fun Scrollbar(
     fraction: Float,
     onJump: (Float) -> Unit,
-    labelAt: (Float) -> String,
+    labelAt: (Float) -> ScrollLabel,
     modifier: Modifier = Modifier,
 ) {
     var track by remember { mutableStateOf(IntSize.Zero) }
     var dragging by remember { mutableStateOf(false) }
-    var label by remember { mutableStateOf("") }
+    var label by remember { mutableStateOf(ScrollLabel("")) }
     var pressedY by remember { mutableFloatStateOf(0f) }
     val density = LocalDensity.current
 
@@ -83,7 +92,6 @@ fun Scrollbar(
         label = labelAt(target)
         onJump(target)
     }
-
     Box(
         modifier = modifier
             .fillMaxHeight()
@@ -131,19 +139,34 @@ fun Scrollbar(
                     )
                 },
         )
-        if (dragging && label.isNotEmpty()) {
+        if (dragging && label.primary.isNotEmpty()) {
             Surface(
                 modifier = Modifier.align(Alignment.TopStart),
-                shape = RoundedCornerShape(6.dp),
+                shape = RoundedCornerShape(8.dp),
                 color = MaterialTheme.colorScheme.inverseSurface,
                 tonalElevation = 3.dp,
             ) {
-                Text(
-                    text = label,
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                    color = MaterialTheme.colorScheme.inverseOnSurface,
-                    style = MaterialTheme.typography.labelLarge,
-                )
+                // Two stacked, horizontally centred lines: the date stays on top and the place
+                // underneath, instead of one long string that runs off the edge of the screen.
+                Column(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Text(
+                        text = label.primary,
+                        color = MaterialTheme.colorScheme.inverseOnSurface,
+                        style = MaterialTheme.typography.labelLarge,
+                        maxLines = 1,
+                    )
+                    if (label.secondary.isNotEmpty()) {
+                        Text(
+                            text = label.secondary,
+                            color = MaterialTheme.colorScheme.inverseOnSurface,
+                            style = MaterialTheme.typography.labelSmall,
+                            maxLines = 1,
+                        )
+                    }
+                }
             }
         }
     }

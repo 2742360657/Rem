@@ -90,6 +90,9 @@ class Scanner(private val context: Context, private val tree: LibraryTree) {
         /** Turns one directory listing into entries, recording everything that cannot be one. */
         private fun readFiles(children: List<Child>, nestedMessage: String): List<Entry> =
             children.mapNotNull { child ->
+                // Dot entries are Rem's own state and markers. They are not user content, and the
+                // rules only speak about media, so they are skipped without being reported.
+                if (child.name.startsWith('.')) return@mapNotNull null
                 if (child.isDirectory) {
                     violations += "${child.path}：$nestedMessage"
                     return@mapNotNull null

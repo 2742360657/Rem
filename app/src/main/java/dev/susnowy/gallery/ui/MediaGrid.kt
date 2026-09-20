@@ -44,10 +44,15 @@ fun MediaGrid(
      * The label the scrollbar shows. It is derived from the same index the jump lands on, so the
      * text always names the file the thumb skipped to.
      */
-    fun labelAt(fraction: Float): String {
-        val entry = entries.getOrNull(targetIndex(entries.size, fraction)) ?: return ""
-        val place = entry.place?.label
-        return if (place == null) entry.positionLabel else "${entry.positionLabel}  $place"
+    fun labelAt(fraction: Float): ScrollLabel {
+        val entry = entries.getOrNull(targetIndex(entries.size, fraction)) ?: return ScrollLabel("")
+        // A collection file is identified by its number, an album file by when it was taken and
+        // where. Both fit the same two-line bubble.
+        return if (entry.sequence != null) {
+            ScrollLabel(entry.positionLabel, "第 ${entry.sequence} 项")
+        } else {
+            ScrollLabel(entry.positionLabel, entry.place?.label.orEmpty())
+        }
     }
 
     Box(modifier.fillMaxSize()) {

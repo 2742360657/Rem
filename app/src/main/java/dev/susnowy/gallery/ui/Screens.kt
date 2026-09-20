@@ -131,7 +131,10 @@ fun CollectionScreen(
                         onJump = { fraction -> scope.launch { jumpList(listState, projects.size, fraction) } },
                         labelAt = { fraction ->
                             val project = projects.getOrNull(targetIndex(projects.size, fraction))
-                            project?.name.orEmpty()
+                            ScrollLabel(
+                                primary = project?.name.orEmpty(),
+                                secondary = project?.author.orEmpty(),
+                            )
                         },
                         modifier = Modifier.align(Alignment.CenterEnd),
                     )

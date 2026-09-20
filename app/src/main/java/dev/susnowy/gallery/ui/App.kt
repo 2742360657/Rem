@@ -24,11 +24,11 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.Tab
-import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -134,6 +134,22 @@ fun RemApp(viewModel: RemViewModel = viewModel()) {
                     },
                 )
             },
+            bottomBar = {
+                // Hidden while a project is open: the drill-down has its own back arrow, and a
+                // tab bar underneath it would suggest the project is a fourth destination.
+                if (project == null) {
+                    NavigationBar {
+                        Tab.entries.forEach { tab ->
+                            NavigationBarItem(
+                                selected = tab == state.tab,
+                                onClick = { viewModel.selectTab(tab) },
+                                icon = { Icon(tab.icon, contentDescription = null) },
+                                label = { Text(tab.title) },
+                            )
+                        }
+                    }
+                }
+            },
         ) { padding ->
             Column(
                 Modifier
@@ -150,31 +166,23 @@ fun RemApp(viewModel: RemViewModel = viewModel()) {
                         onOpen = viewModel::open,
                         onBack = viewModel::closeProject,
                     )
-                    else -> {
-                        TabRow(selectedTabIndex = state.tab.ordinal) {
-                            Tab.entries.forEach { tab ->
-                                Tab(
-                                    selected = tab == state.tab,
-                                    onClick = { viewModel.selectTab(tab) },
-                                    text = { Text(tab.title) },
-                                )
-                            }
-                        }
-                        when (state.tab) {
-                            Tab.ALBUM -> AlbumScreen(
-                                state = state,
-                                onSelectFilter = viewModel::selectFilter,
-                                thumbnail = thumbnails,
-                                onOpen = viewModel::open,
-                            )
-                            Tab.COLLECTION -> CollectionScreen(
-                                state = state,
-                                onSearch = viewModel::search,
-                                onSelectFilter = viewModel::selectFilter,
-                                onOpenProject = { viewModel.openProject(it.folder) },
-                            )
-                        }
-                    }
+                    state.tab == Tab.ALBUM -> AlbumScreen(
+                        state = state,
+                        onSelectFilter = viewModel::selectFilter,
+                        thumbnail = thumbnails,
+                        onOpen = viewModel::open,
+                    )
+                    state.tab == Tab.COLLECTION -> CollectionScreen(
+                        state = state,
+                        onSearch = viewModel::search,
+                        onSelectFilter = viewModel::selectFilter,
+                        onOpenProject = { viewModel.openProject(it.folder) },
+                    )
+                    else -> SettingsScreen(
+                        state = state,
+                        onHideFromSystemGallery = viewModel::setHideFromSystemGallery,
+                        onOpenLog = { logOpen = true },
+                    )
                 }
             }
         }
