@@ -521,6 +521,7 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
         }
         // Rewritten on every attach so the Library never carries a stale spec.
         viewModelScope.launch(Dispatchers.IO) {
+            current.cleanUpDuplicateInternalDirectories()
             store.cleanUpMangledFiles(current)
             store.writeRules(current)
         }

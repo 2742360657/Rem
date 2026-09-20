@@ -221,12 +221,46 @@ class LibraryTree(private val context: Context, val treeUri: Uri) {
             .also { RemLog.debug(SCOPE, "读取 $INTERNAL_DIR/$fileName -> ${it?.length ?: -1}B") }
     }
 
+    /**
+     * Rem's own directory, created if absent.
+     *
+     * A provider that has not caught up with a deletion answers `findFile` with null even though the
+     * directory is really there, and `createDirectory` then quietly produces `.gallery (1)`, a
+     * directory Rem would never read back. The created name is therefore checked: if the provider
+     * handed back a different one, this fails instead of writing state nobody will look at.
+     */
     private fun ensureInternalDirectory(): DocumentFile? {
         val root = DocumentFile.fromTreeUri(context, treeUri) ?: return null
         val existing = root.findFile(INTERNAL_DIR)
         if (existing != null && existing.isDirectory) return existing
         if (existing != null) return null
-        return root.createDirectory(INTERNAL_DIR)
+        val created = root.createDirectory(INTERNAL_DIR) ?: return null
+        if (created.name != INTERNAL_DIR) {
+            RemLog.error(SCOPE, "provider 把 $INTERNAL_DIR 建成了 '${created.name}'，拒绝在其中写入")
+            runCatching { created.delete() }
+            return null
+        }
+        return created
+    }
+
+    /**
+     * Removes `.gallery (1)` and similar copies a provider creates when its listing is stale.
+     *
+     * The same race that produced `index.json.txt` in an earlier build can produce a numbered
+     * directory instead. It is Rem's own state, so clearing it is safe, and it keeps the Library
+     * inside the documented layout: `.gallery/` holding exactly `RULES.md` and `index.json`.
+     */
+    fun cleanUpDuplicateInternalDirectories(): Int {
+        val root = DocumentFile.fromTreeUri(context, treeUri) ?: return 0
+        val duplicates = root.listFiles().filter { child ->
+            child.isDirectory && child.name?.startsWith("$INTERNAL_DIR (") == true
+        }
+        duplicates.forEach { duplicate ->
+            RemLog.warn(SCOPE, "清理重复的 ${duplicate?.name}")
+            runCatching { duplicate?.delete() }
+        }
+        if (duplicates.isNotEmpty()) listings.clear()
+        return duplicates.size
     }
 
     /** Children of one document ID, fetched at most once per instance. */
