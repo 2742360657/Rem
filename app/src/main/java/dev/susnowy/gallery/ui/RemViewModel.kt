@@ -90,6 +90,15 @@ data class UiState(
     /** Thumbnail cache size on disk, read off the main thread. Null until it is known. */
     val thumbnailBytes: Long? = null,
     val refreshing: Boolean = false,
+    /**
+     * Whether the volume was readable when it was last touched.
+     *
+     * False is a normal state right after a removable volume is mounted: the provider still lists
+     * nothing, so the Library looks empty and `.gallery/` cannot be written. It is tracked so the
+     * app can refresh by itself once the volume really answers, instead of asking the user to
+     * detach and re-attach the Library.
+     */
+    val libraryReadable: Boolean = false,
     /** Non-null only while a scan is running. */
     val scanProgress: ScanProgress? = null,
     val message: String? = null,
@@ -366,6 +375,28 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
     fun selectViewMode(mode: ViewMode) {
         store.viewMode = mode
         _state.update { it.copy(viewMode = mode) }
+    }
+
+    /**
+     * Refreshes if the volume has become readable since the last look.
+     *
+     * Called when the app returns to the foreground. A removable volume that was just mounted
+     * answers with an empty listing for a while; without this the app would sit on an empty Library
+     * until the user detached and re-attached it. The check is cheap and only runs while the last
+     * observation said "not readable", so a normal return to the foreground does no provider work.
+     */
+    fun refreshIfVolumeAppeared() {
+        val current = tree ?: return
+        if (scanJob?.isActive == true) return
+        if (_state.value.libraryReadable) return
+        viewModelScope.launch {
+            val readable = withContext(Dispatchers.IO) {
+                runCatching { current.isAvailable }.getOrDefault(false)
+            }
+            if (!readable) return@launch
+            RemLog.info(SCOPE, "卷已可读，自动刷新 Library")
+            openAttachedLibrary()
+        }
     }
 
     /** Reads the thumbnail cache size off the main thread; a directory walk is not free. */
@@ -647,6 +678,7 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
                 sortMode = store.sortMode,
                 viewMode = store.viewMode,
                 hideFromSystemGallery = current.isSystemGalleryHidden(),
+                libraryReadable = readable,
             )
         }
         // Rewritten on every attach so the Library never carries a stale spec.
