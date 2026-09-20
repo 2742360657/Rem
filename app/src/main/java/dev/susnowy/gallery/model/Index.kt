@@ -30,17 +30,23 @@ data class Index(
     @EncodeDefault(EncodeDefault.Mode.ALWAYS)
     val version: Int = LEGACY_VERSION,
     val entries: List<StoredEntry> = emptyList(),
+    /**
+     * Every directory under the browsable roots, relative to the Library root, sorted.
+     *
+     * Stored rather than derived from [entries] because a folder holding no media — or holding only
+     * deeper folders — still exists and must stay browsable. Entry paths alone cannot tell an empty
+     * folder from one that was never read.
+     */
+    val folders: List<String> = emptyList(),
     /** Relative paths the last scan could not file under the rules. Reported, never corrected. */
     val violations: List<String> = emptyList(),
 ) {
     companion object {
         /**
-         * 2 — video capture times became readable, so a cache written by version 1 can hold a
-         * `captured` of `null` for a video that does carry one. Entries are only re-read when a
-         * file's size or modification time moves, so without a bump an existing Library would keep
-         * sorting its videos by copy date indefinitely.
+         * 3 — the collection became a tree with folders of its own, so the cache gained `folders`
+         * and the rules narrowed to directory structure only. A version 2 cache predates both.
          */
-        const val VERSION = 2
+        const val VERSION = 3
 
         /** What a file written before the version key was always encoded decodes to. */
         const val LEGACY_VERSION = 1

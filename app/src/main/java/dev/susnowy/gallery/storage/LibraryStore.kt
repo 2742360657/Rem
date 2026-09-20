@@ -5,6 +5,7 @@ import android.net.Uri
 import dev.susnowy.gallery.logging.RemLog
 import dev.susnowy.gallery.model.Entry
 import dev.susnowy.gallery.model.Index
+import dev.susnowy.gallery.model.SortMode
 import dev.susnowy.gallery.model.toStored
 import kotlinx.serialization.json.Json
 
@@ -40,6 +41,19 @@ class LibraryStore(private val context: Context) {
         RemLog.info(SCOPE, "断开 Library treeUri=${preferences.getString(KEY_TREE_URI, null)}")
         preferences.edit().remove(KEY_TREE_URI).apply()
     }
+
+    /**
+     * The collection's order, remembered across restarts.
+     *
+     * Stored on the device rather than in the Library: it is how one person likes to read their
+     * collection, not a property of the files, and the Library must stay free of Rem's UI state.
+     */
+    var sortMode: SortMode
+        get() = SortMode.entries.firstOrNull { it.name == preferences.getString(KEY_SORT_MODE, null) }
+            ?: SortMode.SEQUENCE
+        set(value) {
+            preferences.edit().putString(KEY_SORT_MODE, value.name).apply()
+        }
 
     fun tree(): LibraryTree? = attachedTreeUri?.let { LibraryTree(context, it) }
 
@@ -95,15 +109,17 @@ class LibraryStore(private val context: Context) {
         private const val SCOPE = "Store"
         private const val PREFERENCES = "rem.library"
         private const val KEY_TREE_URI = "tree_uri"
+        private const val KEY_SORT_MODE = "sort_mode"
     }
 }
 
 /** Freezes a scan's result into the cache that [LibraryStore.writeIndex] writes. */
-fun indexOf(entries: List<Entry>, violations: List<String>): Index =
+fun indexOf(entries: List<Entry>, folders: List<String>, violations: List<String>): Index =
     Index(
         // Stated explicitly: the data class default is the *legacy* version, because that is what
         // a file predating the version key decodes to. A cache Rem writes must claim the current one.
         version = Index.VERSION,
         entries = entries.map { it.toStored() },
+        folders = folders.sorted(),
         violations = violations,
     )
