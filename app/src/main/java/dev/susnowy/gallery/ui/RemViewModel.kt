@@ -4,6 +4,7 @@ import android.app.Application
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import dev.susnowy.gallery.logging.RemLog
 import dev.susnowy.gallery.model.Entry
 import dev.susnowy.gallery.model.MediaType
 import dev.susnowy.gallery.model.Project
@@ -139,7 +140,9 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
     fun open(entry: Entry) {
         val current = tree ?: return
         val type = entry.mediaType ?: return
-        if (OpenWith.launch(getApplication(), current.documentUri(entry.path), type) is Outcome.NoHandler) {
+        val outcome = OpenWith.launch(getApplication(), current.documentUri(entry.path), type)
+        RemLog.info(SCOPE, "打开 '${entry.path}' type=$type -> $outcome")
+        if (outcome is Outcome.NoHandler) {
             _state.update { it.copy(message = "系统没有可以打开 ${entry.fileName} 的应用") }
         }
     }
@@ -201,10 +204,22 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
     private fun openAttachedLibrary() {
         val current = store.tree()
         if (current == null) {
+            RemLog.info(SCOPE, "没有已接入的 Library")
             _state.update { UiState() }
             return
         }
         tree = current
+        val readable = current.isAvailable
+        val rootId = current.rootDocumentId()
+        RemLog.info(SCOPE, "打开已接入的 Library root='$rootId' 可读=$readable 名称='${current.name}'")
+
+        // The root listing is what the whole scan rests on, so record exactly what the provider
+        // returns for it. An empty list here explains an empty screen everywhere else.
+        val rootNames = runCatching { current.list("").map { it.name } }
+            .onFailure { RemLog.error(SCOPE, "根目录列举失败", it) }
+            .getOrDefault(emptyList())
+        RemLog.info(SCOPE, "根目录直属项 ${rootNames.size}：${rootNames.joinToString("、")}")
+
         val cached = store.readIndex(current)
         entries = cached?.entries?.map { it.toEntry() }.orEmpty()
         _state.update {
@@ -245,4 +260,8 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
             )
         }
         .sortedWith(compareBy({ splitProjectFolder(it.folder) == null }, Project::author, Project::name))
+
+    private companion object {
+        const val SCOPE = "Rem"
+    }
 }

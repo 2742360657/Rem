@@ -60,6 +60,7 @@ fun RemApp(viewModel: RemViewModel = viewModel()) {
     val snackbarHostState = remember { SnackbarHostState() }
     var menuExpanded by remember { mutableStateOf(false) }
     var violationsExpanded by remember { mutableStateOf(false) }
+    var logOpen by remember { mutableStateOf(false) }
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         uri?.let(viewModel::attach)
@@ -74,6 +75,11 @@ fun RemApp(viewModel: RemViewModel = viewModel()) {
     }
 
     RemTheme {
+        if (logOpen) {
+            BackHandler { logOpen = false }
+            LogScreen(onBack = { logOpen = false })
+            return@RemTheme
+        }
         if (!state.attached) {
             AttachLibraryScreen(onChoose = { picker.launch(null) })
             return@RemTheme
@@ -114,6 +120,13 @@ fun RemApp(viewModel: RemViewModel = viewModel()) {
                                     onClick = {
                                         menuExpanded = false
                                         viewModel.detach()
+                                    },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("运行日志") },
+                                    onClick = {
+                                        menuExpanded = false
+                                        logOpen = true
                                     },
                                 )
                             }

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Only the log directory is shared, and only through a content URI granted per share.
+    Nothing under a Library or the cached index is ever exposed.
+-->
+<paths>
+    <cache-path
+        name="logs"
+        path="logs/" />
+</paths>

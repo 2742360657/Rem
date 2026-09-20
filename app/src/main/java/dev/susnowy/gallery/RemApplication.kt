@@ -10,6 +10,7 @@ import coil3.gif.AnimatedImageDecoder
 import coil3.gif.GifDecoder
 import coil3.memory.MemoryCache
 import coil3.video.VideoFrameDecoder
+import dev.susnowy.gallery.logging.RemLog
 import okio.Path.Companion.toOkioPath
 
 /**
@@ -20,6 +21,12 @@ import okio.Path.Companion.toOkioPath
  * alternative — re-decoding while the user scrolls — is what makes a media browser feel slow.
  */
 class RemApplication : Application(), SingletonImageLoader.Factory {
+
+    override fun onCreate() {
+        super.onCreate()
+        // First, so every later line has somewhere to go.
+        RemLog.initialize(this)
+    }
 
     override fun newImageLoader(context: Context): ImageLoader = ImageLoader.Builder(context)
         .memoryCache {

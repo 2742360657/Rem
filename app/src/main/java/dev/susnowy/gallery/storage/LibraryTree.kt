@@ -6,6 +6,7 @@ import android.database.Cursor
 import android.net.Uri
 import android.provider.DocumentsContract
 import androidx.documentfile.provider.DocumentFile
+import dev.susnowy.gallery.logging.RemLog
 import java.io.FileNotFoundException
 
 /**
@@ -42,6 +43,9 @@ class LibraryTree(private val context: Context, val treeUri: Uri) {
         if (relativePath.isEmpty()) rootId else "$rootId/${relativePath.trim('/')}",
     )
 
+    /** The provider's ID for the picked folder. Logged once per scan; the whole URI scheme rests on it. */
+    fun rootDocumentId(): String = rootId
+
     /** Resolves one path, or `null` when it does not exist. */
     fun find(relativePath: String): Child? = query(documentUri(relativePath), relativePath, rootId)
 
@@ -63,7 +67,8 @@ class LibraryTree(private val context: Context, val treeUri: Uri) {
                     }
                 }
             }.orEmpty()
-        }.getOrDefault(emptyList())
+        }.onFailure { RemLog.error(SCOPE, "列举失败 path='$relativePath' uri=$childrenUri", it) }
+            .getOrDefault(emptyList())
     }
 
     /** True when the path exists and is a directory. */
@@ -79,23 +84,40 @@ class LibraryTree(private val context: Context, val treeUri: Uri) {
      * A failed write is not an error the user needs to see — the index is a cache, so the
      * caller can carry on with what it has in memory.
      */
-    fun writeInternal(fileName: String, text: String): Boolean = runCatching {
-        val directory = ensureInternalDirectory() ?: return@runCatching false
-        val target = directory.findFile(fileName)?.takeIf { !it.isDirectory }
-        val uri = target?.uri ?: directory.createFile("text/markdown", fileName)?.uri
-        if (uri == null) return@runCatching false
-        // "wt" truncates, so a shorter replacement never leaves the tail of the old file behind.
-        resolver.openOutputStream(uri, "wt")?.use { stream ->
-            stream.write(text.toByteArray(Charsets.UTF_8))
-            true
-        } ?: false
-    }.getOrDefault(false)
+    fun writeInternal(fileName: String, text: String): Boolean {
+        val result = runCatching {
+            val directory = ensureInternalDirectory() ?: return@runCatching false
+            val target = directory.findFile(fileName)?.takeIf { !it.isDirectory }
+            val uri = target?.uri ?: directory.createFile(MIME_TEXT, fileName)?.uri
+            if (uri == null) return@runCatching false
+            // "wt" truncates, so a shorter replacement never leaves the tail of the old file behind.
+            resolver.openOutputStream(uri, "wt")?.use { stream ->
+                stream.write(text.toByteArray(Charsets.UTF_8))
+                true
+            } ?: false
+        }
+        val succeeded = result.getOrDefault(false)
+        if (succeeded) {
+            RemLog.info(SCOPE, "写入 $INTERNAL_DIR/$fileName 成功 ${text.toByteArray(Charsets.UTF_8).size}B")
+        } else {
+            RemLog.error(
+                SCOPE,
+                "写入 $INTERNAL_DIR/$fileName 失败：${result.exceptionOrNull()?.message ?: "无法创建或打开文件"}",
+                result.exceptionOrNull(),
+            )
+        }
+        return succeeded
+    }
 
     /** Reads one of Rem's own state files, or `null` when it is absent. */
-    fun readInternal(fileName: String): String? = runCatching {
+    fun readInternal(fileName: String): String? {
         val uri = documentUri("$INTERNAL_DIR/$fileName")
-        resolver.openInputStream(uri)?.use { it.readBytes().toString(Charsets.UTF_8) }
-    }.getOrNull()
+        return runCatching {
+            resolver.openInputStream(uri)?.use { it.readBytes().toString(Charsets.UTF_8) }
+        }.onFailure { RemLog.warn(SCOPE, "读取 $INTERNAL_DIR/$fileName 失败 uri=$uri", it) }
+            .getOrNull()
+            .also { RemLog.debug(SCOPE, "读取 $INTERNAL_DIR/$fileName -> ${it?.length ?: -1}B") }
+    }
 
     private fun ensureInternalDirectory(): DocumentFile? {
         val root = DocumentFile.fromTreeUri(context, treeUri) ?: return null
@@ -105,13 +127,25 @@ class LibraryTree(private val context: Context, val treeUri: Uri) {
         return root.createDirectory(INTERNAL_DIR)
     }
 
-    private fun query(uri: Uri, relativePath: String, documentId: String): Child? = runCatching {
-        resolver.query(uri, PROJECTION, null, null, null)?.use { cursor ->
-            if (!cursor.moveToFirst()) return@use null
-            val name = cursor.text(DocumentsContract.Document.COLUMN_DISPLAY_NAME) ?: return@use null
-            cursor.toChild(relativePath, name, documentId)
+    /**
+     * Resolves one path.
+     *
+     * Failures are logged rather than swallowed: a wrong document ID produces an empty list
+     * everywhere, which is indistinguishable from an empty folder unless the reason is recorded.
+     */
+    private fun query(uri: Uri, relativePath: String, documentId: String): Child? {
+        val result = runCatching {
+            resolver.query(uri, PROJECTION, null, null, null)?.use { cursor ->
+                if (!cursor.moveToFirst()) return@use null
+                val name = cursor.text(DocumentsContract.Document.COLUMN_DISPLAY_NAME) ?: return@use null
+                cursor.toChild(relativePath, name, documentId)
+            }
         }
-    }.getOrNull()
+        result.exceptionOrNull()?.let {
+            RemLog.error(SCOPE, "解析失败 path='$relativePath' docId='$documentId' uri=$uri", it)
+        }
+        return result.getOrNull()
+    }
 
     private fun Cursor.toChild(relativePath: String, name: String, id: String): Child {
         val mimeType = text(DocumentsContract.Document.COLUMN_MIME_TYPE)
@@ -133,6 +167,9 @@ class LibraryTree(private val context: Context, val treeUri: Uri) {
 
     companion object {
         const val INTERNAL_DIR = ".gallery"
+
+        private const val SCOPE = "Tree"
+        private const val MIME_TEXT = "text/plain"
 
         private val PROJECTION = arrayOf(
             DocumentsContract.Document.COLUMN_DOCUMENT_ID,

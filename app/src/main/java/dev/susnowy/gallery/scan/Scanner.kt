@@ -1,6 +1,7 @@
 package dev.susnowy.gallery.scan
 
 import android.content.Context
+import dev.susnowy.gallery.logging.RemLog
 import dev.susnowy.gallery.media.MediaProbe
 import dev.susnowy.gallery.model.ALBUM
 import dev.susnowy.gallery.model.COLLECTION
@@ -32,7 +33,24 @@ data class ScanResult(
  */
 class Scanner(private val context: Context, private val tree: LibraryTree) {
 
-    fun scan(cached: Map<String, Entry>): ScanResult = Pass(cached).run()
+    fun scan(cached: Map<String, Entry>): ScanResult {
+        val startedAt = System.currentTimeMillis()
+        RemLog.info(
+            SCOPE,
+            "开始扫描 root='${tree.rootDocumentId()}' 缓存条目=${cached.size}",
+        )
+        val result = Pass(cached).run()
+        RemLog.info(
+            SCOPE,
+            "扫描结束 条目=${result.entries.size} 复用=${if (result.reusedCache) "全部" else "部分"} " +
+                "违规=${result.violations.size} 用时=${System.currentTimeMillis() - startedAt}ms",
+        )
+        result.violations.take(MAX_LOGGED_VIOLATIONS).forEach { RemLog.warn(SCOPE, "违规：$it") }
+        if (result.violations.size > MAX_LOGGED_VIOLATIONS) {
+            RemLog.warn(SCOPE, "另有 ${result.violations.size - MAX_LOGGED_VIOLATIONS} 条违规未逐条记录")
+        }
+        return result
+    }
 
     private inner class Pass(private val cached: Map<String, Entry>) {
         private val violations = mutableListOf<String>()
@@ -41,8 +59,13 @@ class Scanner(private val context: Context, private val tree: LibraryTree) {
 
         fun run(): ScanResult {
             val entries = buildList {
-                addAll(readFiles(tree.list(ALBUM), "相册下不允许建立子文件夹"))
-                for (project in tree.list(COLLECTION)) {
+                val albumChildren = tree.list(ALBUM)
+                RemLog.info(SCOPE, "'$ALBUM' 直属项 ${albumChildren.size}：" + albumChildren.names())
+                addAll(readFiles(albumChildren, "相册下不允许建立子文件夹"))
+
+                val collectionChildren = tree.list(COLLECTION)
+                RemLog.info(SCOPE, "'$COLLECTION' 直属项 ${collectionChildren.size}：" + collectionChildren.names())
+                for (project in collectionChildren) {
                     if (!project.isDirectory) {
                         violations += "${project.path}：画集第一层只能是项目文件夹"
                         continue
@@ -50,7 +73,9 @@ class Scanner(private val context: Context, private val tree: LibraryTree) {
                     if (splitProjectFolder(project.name) == null) {
                         violations += "${project.path}：项目文件夹必须命名为「作者名称-项目名称」"
                     }
-                    addAll(readFiles(tree.list(project.path), "项目文件夹内不允许建立子文件夹"))
+                    val files = tree.list(project.path)
+                    RemLog.debug(SCOPE, "项目 '${project.path}' 内含 ${files.size} 项：" + files.names())
+                    addAll(readFiles(files, "项目文件夹内不允许建立子文件夹"))
                 }
             }
             return ScanResult(
@@ -59,6 +84,8 @@ class Scanner(private val context: Context, private val tree: LibraryTree) {
                 reusedCache = reused == total,
             )
         }
+
+        private fun List<Child>.names(): String = joinToString("、") { it.name }.take(LOG_NAME_LIMIT)
 
         /** Turns one directory listing into entries, recording everything that cannot be one. */
         private fun readFiles(children: List<Child>, nestedMessage: String): List<Entry> =
@@ -105,6 +132,10 @@ class Scanner(private val context: Context, private val tree: LibraryTree) {
     }
 
     private companion object {
+        const val SCOPE = "Scan"
+        const val MAX_LOGGED_VIOLATIONS = 50
+        const val LOG_NAME_LIMIT = 300
+
         val SEQUENCE = Regex("^\\d{4}\\.[^.]+$")
     }
 }
