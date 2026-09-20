@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -77,7 +78,13 @@ fun Scrollbar(
     val trackColor = MaterialTheme.colorScheme.outlineVariant
     val thumbColor = MaterialTheme.colorScheme.primary
 
-    LaunchedEffect(dragging) {
+    /**
+     * The label has to disappear after the finger leaves, not a fixed moment after it arrived.
+     * Keying this on [dragging] alone started one timer at drag start, so a drag longer than
+     * [LABEL_LINGER_MS] hid its own label while the finger was still moving. Keying on the label
+     * too restarts the timer on every movement, which is the behaviour the control is for.
+     */
+    LaunchedEffect(dragging, label) {
         if (dragging) {
             delay(LABEL_LINGER_MS)
             dragging = false
@@ -141,7 +148,14 @@ fun Scrollbar(
         )
         if (dragging && label.primary.isNotEmpty()) {
             Surface(
-                modifier = Modifier.align(Alignment.TopStart),
+                // The track is only TRACK_WIDTH wide, and a Box measures its children against its
+                // own constraints — so the bubble has to be allowed to exceed that width, or every
+                // label is squeezed to its first character. `TopEnd` then grows it leftwards over
+                // the list instead of off the screen edge.
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(end = 8.dp)
+                    .wrapContentWidth(unbounded = true),
                 shape = RoundedCornerShape(8.dp),
                 color = MaterialTheme.colorScheme.inverseSurface,
                 tonalElevation = 3.dp,
