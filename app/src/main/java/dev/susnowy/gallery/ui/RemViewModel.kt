@@ -16,7 +16,6 @@ import dev.susnowy.gallery.model.Project
 import dev.susnowy.gallery.model.splitProjectFolder
 import dev.susnowy.gallery.model.toEntry
 import dev.susnowy.gallery.scan.Scanner
-import dev.susnowy.gallery.storage.LibrarySettings
 import dev.susnowy.gallery.storage.LibraryStore
 import dev.susnowy.gallery.storage.LibraryTree
 import dev.susnowy.gallery.storage.indexOf
@@ -67,8 +66,6 @@ data class UiState(
     val openProject: String? = null,
     val message: String? = null,
     val violations: List<String> = emptyList(),
-    /** Whether `相册/` and `画集/` carry a `.nomedia` marker. */
-    val hideFromSystemGallery: Boolean = false,
 ) {
     /** Album entries in newest-first order, filtered by media type. */
     val visibleAlbum: List<Entry>
@@ -109,7 +106,6 @@ data class UiState(
 class RemViewModel(application: Application) : AndroidViewModel(application) {
 
     private val store = LibraryStore(application)
-    private val settings = LibrarySettings(application)
 
     private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state.asStateFlow()
@@ -151,37 +147,6 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
     fun dismissMessage() = _state.update { it.copy(message = null) }
 
     fun dismissViolations() = _state.update { it.copy(violations = emptyList()) }
-
-    /**
-     * Creates or removes the `.nomedia` markers in `相册/` and `画集/`.
-     *
-     * The switch only flips once the Library actually holds the markers it claims; a provider that
-     * refuses the change leaves the setting where it was and says so.
-     */
-    fun setHideFromSystemGallery(hidden: Boolean) {
-        val current = tree
-        if (current == null) return
-        settings.hideFromSystemGallery = hidden
-        _state.update { it.copy(hideFromSystemGallery = hidden) }
-        viewModelScope.launch {
-            val applied = withContext(Dispatchers.IO) { settings.applyMarkers(current) }
-            if (!applied) {
-                // Put the preference back so it never describes a state the Library is not in.
-                settings.hideFromSystemGallery = !hidden
-                _state.update {
-                    it.copy(
-                        hideFromSystemGallery = !hidden,
-                        message = if (hidden) {
-                            "无法在「相册」和「画集」下建立 .nomedia"
-                        } else {
-                            "无法移除 .nomedia，请手动删除「相册」和「画集」下的该文件"
-                        },
-                    )
-                }
-            }
-            // A marker is a dot file, which the scanner skips, so no rescan is needed.
-        }
-    }
 
     /** Opens one file with whatever system app claims its type. */
     fun open(entry: Entry) {
@@ -278,11 +243,13 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
                     .sortedByDescending(Entry::orderTime),
                 projects = groupProjects(entries),
                 violations = cached?.violations.orEmpty(),
-                hideFromSystemGallery = settings.hideFromSystemGallery,
             )
         }
         // Rewritten on every attach so the Library never carries a stale spec.
-        viewModelScope.launch(Dispatchers.IO) { store.writeRules(current) }
+        viewModelScope.launch(Dispatchers.IO) {
+            store.cleanUpMangledFiles(current)
+            store.writeRules(current)
+        }
         refresh()
     }
 

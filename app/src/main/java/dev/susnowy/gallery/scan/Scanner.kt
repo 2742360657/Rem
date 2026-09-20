@@ -66,6 +66,8 @@ class Scanner(private val context: Context, private val tree: LibraryTree) {
                 val collectionChildren = tree.list(COLLECTION)
                 RemLog.info(SCOPE, "'$COLLECTION' 直属项 ${collectionChildren.size}：" + collectionChildren.names())
                 for (project in collectionChildren) {
+                    // Rem's own markers live here too, and a dot entry is never a project folder.
+                    if (project.name.startsWith('.')) continue
                     if (!project.isDirectory) {
                         violations += "${project.path}：画集第一层只能是项目文件夹"
                         continue

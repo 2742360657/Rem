@@ -99,17 +99,18 @@ class LibraryTree(private val context: Context, val treeUri: Uri) {
     fun exists(relativePath: String): Boolean = find(relativePath) != null
 
     /**
-     * Creates `.gallery/` if needed and writes [fileName] inside it.
+     * Writes one of Rem's own files into `.gallery/`.
      *
-     * Only Rem's own state directory is ever written; media files are read-only to this app.
-     * A failed write is not an error the user needs to see — the index is a cache, so the caller
-     * can carry on with what it has in memory.
+     * The MIME type is deliberately one no provider recognises. A provider maps a MIME type to an
+     * extension and appends it when the name has none, which is how `text/plain` turned
+     * `index.json` into `index.json.txt` — a file Rem could then never read back, so it wrote a
+     * fresh one on every launch instead of updating the existing one.
      */
     fun writeInternal(fileName: String, text: String): Boolean {
         val result = runCatching {
             val directory = ensureInternalDirectory() ?: return@runCatching false
             val target = directory.findFile(fileName)?.takeIf { !it.isDirectory }
-            val uri = target?.uri ?: directory.createFile(MIME_TEXT, fileName)?.uri
+            val uri = target?.uri ?: directory.createFile(OPAQUE_MIME, fileName)?.uri
             if (uri == null) return@runCatching false
             // "wt" truncates, so a shorter replacement never leaves the tail of the old file behind.
             resolver.openOutputStream(uri, "wt")?.use { stream ->
@@ -131,6 +132,25 @@ class LibraryTree(private val context: Context, val treeUri: Uri) {
         return succeeded
     }
 
+    /**
+     * Clears out copies a previous build created under a provider-appended extension.
+     *
+     * Runs once per launch and is cheap when there is nothing to do: it only looks at the one
+     * directory Rem owns.
+     */
+    fun cleanUpMangledNames(fileName: String) {
+        val directory = find(INTERNAL_DIR) ?: return
+        if (!directory.isDirectory) return
+        val children = childrenOf(directory.documentId, directory.path)
+        children.values
+            .filter { it.name.startsWith("$fileName.") || it.name.startsWith("$fileName (") }
+            .forEach { stale ->
+                RemLog.info(SCOPE, "清理被改名的旧文件 $INTERNAL_DIR/${stale.name}")
+                runCatching { DocumentsContract.deleteDocument(resolver, stale.uri) }
+            }
+        listings.remove(directory.documentId)
+    }
+
     /** Reads one of Rem's own state files, or `null` when it is absent. */
     fun readInternal(fileName: String): String? {
         val child = find("$INTERNAL_DIR/$fileName")
@@ -143,52 +163,6 @@ class LibraryTree(private val context: Context, val treeUri: Uri) {
         }.onFailure { RemLog.warn(SCOPE, "读取 $INTERNAL_DIR/$fileName 失败 uri=${child.uri}", it) }
             .getOrNull()
             .also { RemLog.debug(SCOPE, "读取 $INTERNAL_DIR/$fileName -> ${it?.length ?: -1}B") }
-    }
-
-    /**
-     * Puts a zero-byte marker file in one of the browsable directories.
-     *
-     * Used only for `.nomedia`, which is what hides a folder from the system gallery. The file is
-     * created empty and never written to again, so it stays valid.
-     */
-    fun writeMarker(directoryPath: String, fileName: String): Boolean {
-        val directory = find(directoryPath)
-        if (directory == null || !directory.isDirectory) {
-            RemLog.warn(SCOPE, "无法在 '$directoryPath' 建立标记：目录不可用")
-            return false
-        }
-        if (childrenOf(directory.documentId, directory.path).containsKey(fileName)) {
-            return true
-        }
-        val created = runCatching {
-            DocumentsContract.createDocument(resolver, directory.uri, MIME_TEXT, fileName) != null
-        }.getOrElse {
-            RemLog.error(SCOPE, "建立 $directoryPath/$fileName 失败", it)
-            false
-        }
-        if (created) {
-            RemLog.info(SCOPE, "建立标记 $directoryPath/$fileName")
-            listings.remove(directory.documentId)
-        }
-        return created
-    }
-
-    /** Removes a marker file created by [writeMarker]. */
-    fun deleteMarker(directoryPath: String, fileName: String): Boolean {
-        val directory = find(directoryPath)
-        if (directory == null) return true
-        val marker = childrenOf(directory.documentId, directory.path)[fileName] ?: return true
-        val deleted = runCatching {
-            DocumentsContract.deleteDocument(resolver, marker.uri)
-        }.getOrElse {
-            RemLog.warn(SCOPE, "删除 $directoryPath/$fileName 失败", it)
-            false
-        }
-        if (deleted) {
-            RemLog.info(SCOPE, "删除标记 $directoryPath/$fileName")
-            listings.remove(directory.documentId)
-        }
-        return deleted
     }
 
     private fun ensureInternalDirectory(): DocumentFile? {
@@ -267,7 +241,15 @@ class LibraryTree(private val context: Context, val treeUri: Uri) {
         const val INTERNAL_DIR = ".gallery"
 
         private const val SCOPE = "Tree"
-        private const val MIME_TEXT = "text/plain"
+
+        /**
+         * Sent for every file Rem creates.
+         *
+         * A provider maps a MIME type to an extension and appends it when the display name has
+         * none, so this must be a type no provider recognises. `text/plain` would produce
+         * `.nomedia.txt` and `index.json.txt`.
+         */
+        private const val OPAQUE_MIME = "application/x-rem-state"
 
         private val PROJECTION = arrayOf(
             DocumentsContract.Document.COLUMN_DOCUMENT_ID,

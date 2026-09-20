@@ -64,6 +64,18 @@ class LibraryStore(private val context: Context) {
         tree.writeInternal(INDEX_FILE, json.encodeToString(Index.serializer(), index))
 
     /**
+     * Removes copies of Rem's own files that a provider renamed with an appended extension.
+     *
+     * Earlier builds asked for `text/plain` and `text/markdown`, which providers turned into
+     * `index.json.txt` and `RULES.md.txt`. Those copies are dead weight and, worse, they hid the
+     * fact that the cache was never being read. Clearing them once per launch keeps a Library free
+     * of them without a migration step.
+     */
+    fun cleanUpMangledFiles(tree: LibraryTree) {
+        listOf(INDEX_FILE, RULES_FILE).forEach(tree::cleanUpMangledNames)
+    }
+
+    /**
      * Rewrites `RULES.md` with the shipped rules.
      *
      * The document is overwritten on every attach so a Library always carries the current

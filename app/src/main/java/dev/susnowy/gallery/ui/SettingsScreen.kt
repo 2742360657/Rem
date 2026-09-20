@@ -17,7 +17,6 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -27,14 +26,19 @@ import androidx.compose.ui.unit.dp
 /**
  * The settings tab.
  *
- * Deliberately short. Rem has exactly one preference, and everything else here is either a way
- * into the log or a fact about the attached Library, which is more useful to have on screen than
- * buried in a log file.
+ * Deliberately short. Rem has no preferences of its own, so this is a way into the log plus the
+ * facts about the attached Library, which are more useful on screen than buried in a log file.
+ *
+ * A "hide from the system gallery" switch existed here and was removed. It wrote `.nomedia` and
+ * asked the media scanner to re-read the Library, and neither step works on HyperOS 3 (Android 16):
+ * a freshly created `.nomedia` directory is still indexed, existing rows are never removed, and
+ * the Xiaomi gallery aggregates media from its own scan regardless. Hiding an album there is a
+ * Xiaomi feature reached from the gallery itself, not something an app can request through the
+ * standard APIs.
  */
 @Composable
 fun SettingsScreen(
     state: UiState,
-    onHideFromSystemGallery: (Boolean) -> Unit,
     onOpenLog: () -> Unit,
 ) {
     Column(
@@ -42,15 +46,6 @@ fun SettingsScreen(
             .fillMaxSize()
             .verticalScroll(rememberScrollState()),
     ) {
-        SettingSwitch(
-            title = "从系统相册隐藏",
-            description = "在「相册」和「画集」下写入 .nomedia，让这两个目录不再出现在系统相册里。" +
-                "关闭时会移除该文件。Rem 自身的浏览不受影响。",
-            checked = state.hideFromSystemGallery,
-            onCheckedChange = onHideFromSystemGallery,
-        )
-        HorizontalDivider()
-
         SettingRow(
             title = "运行日志",
             description = "记录接入、扫描和打开文件的过程，可分享出来排查问题",
@@ -77,31 +72,6 @@ fun SettingsScreen(
             modifier = Modifier.padding(horizontal = 16.dp),
         )
         Spacer(Modifier.height(24.dp))
-    }
-}
-
-@Composable
-private fun SettingSwitch(
-    title: String,
-    description: String,
-    checked: Boolean,
-    onCheckedChange: (Boolean) -> Unit,
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.bodyLarge)
-            Text(
-                text = description,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        Switch(checked = checked, onCheckedChange = onCheckedChange)
     }
 }
 
