@@ -69,7 +69,9 @@ fun MediaGrid(
                 MediaCell(
                     entry = entry,
                     thumbnail = thumbnail(entry),
-                    onOpen = { index },
+                    // The index travels with the tap so the viewer opens on this cell and pages
+                    // through the same list the grid is showing, without re-deriving either.
+                    onOpen = { onOpen(index) },
                 )
             }
         }

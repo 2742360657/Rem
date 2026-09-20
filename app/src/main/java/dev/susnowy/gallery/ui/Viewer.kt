@@ -1,5 +1,6 @@
 package dev.susnowy.gallery.ui
 
+import android.content.Context
 import android.graphics.Color as AndroidColor
 import android.net.Uri
 import android.view.ViewGroup
@@ -19,11 +20,11 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.OpenInNew
+import androidx.compose.material.icons.automirrored.rounded.VolumeOff
+import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Refresh
-import androidx.compose.material.icons.automirrored.rounded.VolumeOff
-import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -48,7 +49,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
-import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.media3.common.AudioAttributes
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
@@ -69,13 +71,16 @@ import me.saket.telephoto.zoomable.coil3.ZoomableAsyncImage
  * The list arrives whole, so paging left and right is paging through what the grid already showed.
  * The viewer never scans, never re-sorts and never writes to the Library.
  *
- * Two measured rules shape this code more than the layout does:
+ * Three measured rules shape this code:
  *
- * 1. Image requests carry no explicit size. Asking for the original used to fail to decode large
- *    files; leaving the size to the image library makes it downsample. See docs/STATUS.md.
- * 2. The video player is one instance that lives as long as the foreground. It is released when the
- *    viewer leaves the composition — which is exactly what happens when the app goes to the
- *    background — because a paused ExoPlayer still holds its audio track. Rule 5.1.
+ * 1. Image requests carry no explicit size. Asking for the original failed to decode large files;
+ *    leaving the size to the image library makes it downsample. See docs/STATUS.md.
+ * 2. A video is prepared only once the player actually holds a surface. Measured on device:
+ *    preparing before the `SurfaceView` exists leaves the page black for good, while a page whose
+ *    surface already existed — reached by swiping in — plays normally.
+ * 3. The player lives as long as the foreground and is released when the viewer leaves the
+ *    composition, which is what happens when the app goes to the background. A paused ExoPlayer
+ *    still holds its audio track, so pausing alone is not silence. Rule 5.1.
  */
 @Composable
 fun ViewerScreen(
@@ -85,44 +90,79 @@ fun ViewerScreen(
     onClose: () -> Unit,
 ) {
     val context = LocalContext.current
-    val lifecycleOwner = LocalLifecycleOwner.current
 
-    // Built when the viewer enters the foreground and released when it leaves, so no player can
-    // outlive the screen that owns it. `retryToken` rebuilds it after a playback failure.
+    // One player for the whole viewer, created with the viewer and released when it leaves. It is
+    // never stopped or cleared between pages: measured on device, tearing the codec down between
+    // two videos raised `flush() is valid only at Executing states; currently at Released state`
+    // from c2.qti.avc.decoder, and that page stayed black afterwards.
     var retryToken by remember { mutableIntStateOf(0) }
-    val player = remember(lifecycleOwner, retryToken) {
-        ExoPlayer.Builder(context).build().apply { volume = 0f }
-    }
-    DisposableEffect(player) {
+    var player by remember(retryToken) { mutableStateOf<ExoPlayer?>(null) }
+    DisposableEffect(retryToken) {
+        val created = ExoPlayer.Builder(context).build().apply {
+            setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(C.USAGE_MEDIA)
+                    .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
+                    .build(),
+                /* handleAudioFocus = */ true,
+            )
+            volume = 0f
+        }
+        player = created
+        RemLog.info(SCOPE, "创建播放器")
         onDispose {
             RemLog.info(SCOPE, "查看器离开前台，释放播放器")
-            player.release()
+            created.release()
+            player = null
         }
     }
 
     var muted by remember { mutableStateOf(true) }
-    DisposableEffect(player, muted) {
-        player.volume = if (muted) 0f else 1f
-        onDispose { }
-    }
-
-    var failure by remember(player) { mutableStateOf<String?>(null) }
+    var failure by remember(retryToken) { mutableStateOf<String?>(null) }
     var playing by remember { mutableStateOf(false) }
     var duration by remember { mutableIntStateOf(0) }
     var position by remember { mutableIntStateOf(0) }
     var seeking by remember { mutableStateOf(false) }
     var draggedTo by remember { mutableFloatStateOf(0f) }
-    var seekable by remember(player) { mutableStateOf(true) }
+    var seekable by remember(retryToken) { mutableStateOf(true) }
+    var boundPage by remember(retryToken) { mutableIntStateOf(-1) }
+    val viewAttachedState = remember { mutableStateOf(false) }
+    /** Bumped once the surface has had time to settle, so binding runs exactly then. */
+    var attachGeneration by remember { mutableIntStateOf(0) }
+    var renderedFrame by remember { mutableStateOf(false) }
+
+    val pagerState = rememberPagerState(initialPage = request.index) { request.entries.size }
+    val current = request.entries.getOrNull(pagerState.currentPage)
+    val currentIsVideo = current?.mediaType == MediaType.VIDEO
+
+    DisposableEffect(player, muted) {
+        player?.volume = if (muted) 0f else 1f
+        onDispose { }
+    }
 
     DisposableEffect(player) {
+        val active = player ?: return@DisposableEffect onDispose { }
         val listener = object : Player.Listener {
-            override fun onIsPlayingChanged(isPlaying: Boolean) {
-                playing = isPlaying
-                duration = player.duration.takeIf { it > 0 }?.toInt() ?: 0
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                val name = when (playbackState) {
+                    Player.STATE_IDLE -> "IDLE"
+                    Player.STATE_BUFFERING -> "BUFFERING"
+                    Player.STATE_READY -> "READY"
+                    Player.STATE_ENDED -> "ENDED"
+                    else -> "?"
+                }
+                duration = active.duration.takeIf { it > 0 }?.toInt() ?: 0
+                RemLog.info(SCOPE, "state=$name duration=$duration frame=$renderedFrame")
             }
 
-            override fun onPlaybackStateChanged(playbackState: Int) {
-                duration = player.duration.takeIf { it > 0 }?.toInt() ?: 0
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                playing = isPlaying
+                RemLog.info(SCOPE, "isPlaying=$isPlaying volume=${active.volume}")
+            }
+
+            override fun onRenderedFirstFrame() {
+                renderedFrame = true
+                RemLog.info(SCOPE, "首帧已渲染")
             }
 
             override fun onPlayerError(error: PlaybackException) {
@@ -138,38 +178,91 @@ fun ViewerScreen(
                 failure = message
             }
         }
-        player.addListener(listener)
-        onDispose { player.removeListener(listener) }
+        active.addListener(listener)
+        onDispose { active.removeListener(listener) }
     }
 
-    val pagerState = rememberPagerState(initialPage = request.index) { request.entries.size }
-    val current = request.entries.getOrNull(pagerState.currentPage)
+    // Rule 2, first half: nothing is prepared into the player until the video view is attached to
+    // the window, and then only after a short settling delay. Measured on device: preparing into a
+    // `SurfaceView` that has just been attached leaves the page black for good, while the same file
+    // reached by swiping — where the surface already existed — plays normally.
+    //
+    // Nothing in this file clears the attach flag while a video page is on screen. An earlier
+    // version reset it from an effect, and because effects restart at unpredictable moments around
+    // the player's creation, that reset kept erasing the flag the view had just set: the same state
+    // object read true inside the attach callback and false again 30 ms later, so a directly-tapped
+    // video never bound at all.
+    LaunchedEffect(currentIsVideo) {
+        if (!currentIsVideo) {
+            viewAttachedState.value = false
+            return@LaunchedEffect
+        }
+        while (!viewAttachedState.value) {
+            delay(16)
+        }
+        // The view is in the window; give the surface underneath it a moment to become valid.
+        delay(120)
+        attachGeneration++
+    }
 
-    // Only the page on screen plays; swiping to an image pauses the shared player instead of
-    // leaving a video talking over a photo.
-    LaunchedEffect(player, pagerState.currentPage, retryToken) {
-        val target = request.entries.getOrNull(pagerState.currentPage)
+    // Rule 2, second half: if playback is running but no frame has ever been drawn, the output
+    // surface never arrived. Re-preparing is the cheap retry; it is bounded so a file that simply
+    // cannot render does not spin forever.
+    LaunchedEffect(player, boundPage, renderedFrame) {
+        val active = player ?: return@LaunchedEffect
+        if (renderedFrame || boundPage < 0) return@LaunchedEffect
+        delay(1500)
+        if (renderedFrame) return@LaunchedEffect
+        RemLog.warn(SCOPE, "第 $boundPage 页已开始播放但没有渲染出任何画面，重新准备一次")
+        active.prepare()
+    }
+
+    // Bind only when the page has settled and its surface host is attached.
+    LaunchedEffect(
+        player,
+        attachGeneration,
+        pagerState.settledPage,
+        pagerState.isScrollInProgress,
+        retryToken,
+    ) {
+        val active = player ?: return@LaunchedEffect
+        if (pagerState.isScrollInProgress || viewAttachedState.value.not()) return@LaunchedEffect
+        val page = pagerState.settledPage
+        if (boundPage == page) return@LaunchedEffect
+        val target = request.entries.getOrNull(page)
         failure = null
+        // Reset per video: measured on device, FLV turns seeking off after a refused seek, and
+        // without this the next video inherited a disabled bar it had never earned.
         seekable = true
         val uri = target?.let(fileUri)
         when {
             target == null -> Unit
-            target.mediaType != MediaType.VIDEO -> player.pause()
-            // A path the provider can no longer resolve — the file moved, or the grant went away —
-            // is a visible failure with the system-app fallback, not an empty player.
-            uri == null -> failure = "找不到这个文件，可能已被移动或删除"
+            // An image page only pauses the player: a paused player is silent, which is the rule,
+            // and it keeps the codec alive for the next video.
+            target.mediaType != MediaType.VIDEO -> {
+                active.pause()
+                boundPage = -1
+                RemLog.info(SCOPE, "第 $page 页是图片，暂停播放器")
+            }
+            uri == null -> {
+                boundPage = -1
+                failure = "找不到这个文件，可能已被移动或删除"
+            }
             else -> {
-                player.setMediaItem(MediaItem.fromUri(uri))
-                player.prepare()
-                player.playWhenReady = true
+                active.setMediaItem(MediaItem.fromUri(uri))
+                active.prepare()
+                active.playWhenReady = true
+                boundPage = page
+                RemLog.info(SCOPE, "绑定第 $page 页视频 ${target.fileName}")
             }
         }
     }
 
     LaunchedEffect(player, playing, seeking) {
+        val active = player ?: return@LaunchedEffect
         while (playing && !seeking) {
-            position = player.currentPosition.toInt()
-            duration = player.duration.takeIf { it > 0 }?.toInt() ?: duration
+            position = active.currentPosition.toInt()
+            duration = active.duration.takeIf { it > 0 }?.toInt() ?: duration
             delay(500)
         }
     }
@@ -207,7 +300,24 @@ fun ViewerScreen(
                         modifier = Modifier.fillMaxSize(),
                     )
                 }
-                MediaType.VIDEO -> VideoPage(player = player)
+                // Only the settled page owns the surface. Two video pages sharing one player would
+                // keep re-attaching the video output as the pager moves.
+                MediaType.VIDEO -> if (page == pagerState.settledPage) {
+                    VideoPage(
+                        player = player,
+                        onAttached = {
+                            viewAttachedState.value = true
+                        },
+                        onDetached = {
+                            viewAttachedState.value = false
+                            // Leaving the page also forgets the binding, so coming back re-prepares
+                            // instead of showing a surface that no longer has a producer.
+                            boundPage = -1
+                        },
+                    )
+                } else {
+                    Box(Modifier.fillMaxSize())
+                }
                 null -> Unit
             }
         }
@@ -223,31 +333,38 @@ fun ViewerScreen(
             modifier = Modifier.align(Alignment.TopCenter),
         )
 
-        if (current?.mediaType == MediaType.VIDEO && failure == null) {
-            VideoControls(
-                player = player,
-                playing = playing,
-                duration = duration,
-                position = position,
-                seekable = seekable,
-                seeking = seeking,
-                draggedTo = draggedTo,
-                onSeekStart = { seeking = true; draggedTo = it },
-                onSeekFinished = {
-                    player.seekTo(draggedTo.toLong())
-                    position = draggedTo.toInt()
-                    seeking = false
-                },
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .fillMaxWidth(),
-            )
+        if (currentIsVideo && failure == null) {
+            player?.let { active ->
+                VideoControls(
+                    player = active,
+                    playing = playing,
+                    duration = duration,
+                    position = position,
+                    seekable = seekable,
+                    seeking = seeking,
+                    draggedTo = draggedTo,
+                    onSeekStart = { seeking = true; draggedTo = it },
+                    onSeekFinished = {
+                        active.seekTo(draggedTo.toLong())
+                        position = draggedTo.toInt()
+                        seeking = false
+                    },
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth(),
+                )
+            }
         }
 
         failure?.let { message ->
             FailureNotice(
                 message = message,
-                onRetry = { retryToken++ },
+                // Recovery is a new player, not a new media item: a decoder that died cannot be
+                // reused, and retrying on the same instance reproduced the black page.
+                onRetry = {
+                    RemLog.info(SCOPE, "用户重试：重建播放器")
+                    retryToken++
+                },
                 onOpenWith = { current?.let(onOpenWith) },
                 modifier = Modifier.align(Alignment.Center),
             )
@@ -255,25 +372,68 @@ fun ViewerScreen(
     }
 }
 
-/** The video surface. The player belongs to the viewer, not to this page. */
+/**
+ * The video surface, plus the attachment signal the viewer waits for.
+ *
+ * `PlayerView` on its own gives no way to ask whether its output surface exists — `Player` exposes
+ * `setVideoSurface` but no getter — so the signal comes from the view hierarchy instead: the page
+ * reports when its view is attached to the window, and the viewer only feeds the player after that.
+ */
 @Composable
-private fun VideoPage(player: ExoPlayer) {
+private fun VideoPage(
+    player: ExoPlayer?,
+    onAttached: () -> Unit,
+    onDetached: () -> Unit,
+) {
+    if (player == null) {
+        // Observable rather than a black rectangle: this only happens if the surface outlives the
+        // player, which is a bug worth seeing instead of debugging blind.
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Text("播放器已释放", color = Color.White, style = MaterialTheme.typography.bodyMedium)
+        }
+        return
+    }
     AndroidView(
         factory = { context ->
-            PlayerView(context).apply {
-                useController = false
-                resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
-                setShutterBackgroundColor(AndroidColor.TRANSPARENT)
-                layoutParams = FrameLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.MATCH_PARENT,
+            SurfaceHost(context) { attached ->
+                if (attached) onAttached() else onDetached()
+            }.apply {
+                addView(
+                    PlayerView(context).apply {
+                        useController = false
+                        resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                        setShutterBackgroundColor(AndroidColor.TRANSPARENT)
+                    },
+                    FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                    ),
                 )
             }
         },
-        update = { it.player = player },
-        onRelease = { it.player = null },
+        update = { host ->
+            val view = host.getChildAt(0) as PlayerView
+            if (view.player !== player) view.player = player
+        },
+        onRelease = { host -> (host.getChildAt(0) as PlayerView).player = null },
         modifier = Modifier.fillMaxSize(),
     )
+}
+
+/** Reports when the video view is really in the window, which is when a surface can exist. */
+private class SurfaceHost(
+    context: Context,
+    private val onAttachedChanged: (Boolean) -> Unit,
+) : FrameLayout(context) {
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        onAttachedChanged(true)
+    }
+
+    override fun onDetachedFromWindow() {
+        onAttachedChanged(false)
+        super.onDetachedFromWindow()
+    }
 }
 
 /** Play/pause, progress and time. The bar disappears for containers that refuse to seek. */
@@ -371,7 +531,8 @@ private fun ViewerTopBar(
         if (entry?.mediaType == MediaType.VIDEO) {
             IconButton(onClick = onToggleMute) {
                 Icon(
-                    imageVector = if (muted) Icons.AutoMirrored.Rounded.VolumeOff else Icons.AutoMirrored.Rounded.VolumeUp,
+                    imageVector = if (muted) Icons.AutoMirrored.Rounded.VolumeOff
+                    else Icons.AutoMirrored.Rounded.VolumeUp,
                     contentDescription = if (muted) "打开声音" else "静音",
                     tint = Color.White,
                 )
