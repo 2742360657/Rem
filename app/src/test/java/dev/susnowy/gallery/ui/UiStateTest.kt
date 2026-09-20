@@ -28,6 +28,7 @@ class UiStateTest {
         search: String = "",
         filter: MediaFilter = MediaFilter.ALL,
         sortMode: SortMode = SortMode.SEQUENCE,
+        sortAscending: Boolean = false,
     ) = UiState(
         entries = entries,
         folders = folders,
@@ -35,6 +36,7 @@ class UiStateTest {
         search = search,
         filter = filter,
         sortMode = sortMode,
+        sortAscending = sortAscending,
     )
 
     @Test
@@ -89,6 +91,7 @@ class UiStateTest {
             entries = listOf(collection("作者-项目/子/0002.jpg"), collection("作者-项目/子/0001.jpg")),
             folders = listOf("画集/作者-项目", "画集/作者-项目/子"),
             openFolder = "画集/作者-项目/子",
+            sortAscending = true,
         )
         assertFalse(state.showsFolders)
         assertEquals(listOf("0001.jpg", "0002.jpg"), state.folderMedia.map(Entry::fileName))
@@ -103,7 +106,7 @@ class UiStateTest {
     }
 
     @Test
-    fun `sequence order puts numbered files first and unnumbered last`() {
+    fun `descending sequence order puts the highest number first`() {
         val state = state(
             entries = listOf(
                 collection("作者-项目/封面.jpg"),
@@ -115,15 +118,15 @@ class UiStateTest {
             openFolder = "画集/作者-项目",
             sortMode = SortMode.SEQUENCE,
         )
-        // 1 read from zz001_002, then 2, then 10, and the file with no number at all last.
+        // Descending is the default, so the highest number leads and the file without one trails.
         assertEquals(
-            listOf("zz001_002.jpg", "2.jpg", "10.jpg", "封面.jpg"),
+            listOf("封面.jpg", "10.jpg", "2.jpg", "zz001_002.jpg"),
             state.folderMedia.map(Entry::fileName),
         )
     }
 
     @Test
-    fun `name order is natural, so 2 comes before 10`() {
+    fun `ascending name order is natural, so 2 comes before 10`() {
         val state = state(
             entries = listOf(
                 collection("作者-项目/10.jpg"),
@@ -133,6 +136,7 @@ class UiStateTest {
             folders = listOf("画集/作者-项目"),
             openFolder = "画集/作者-项目",
             sortMode = SortMode.NAME,
+            sortAscending = true,
         )
         assertEquals(listOf("1.jpg", "2.jpg", "10.jpg"), state.folderMedia.map(Entry::fileName))
     }
@@ -165,6 +169,48 @@ class UiStateTest {
             sortMode = SortMode.MODIFIED,
         )
         assertEquals(listOf("b.jpg", "c.jpg", "a.jpg"), state.folderMedia.map(Entry::fileName))
+    }
+
+    @Test
+    fun `the direction switch flips every order`() {
+        val entries = listOf(
+            collection("作者-项目/a.jpg", size = 10, modified = 1),
+            collection("作者-项目/b.jpg", size = 30, modified = 3),
+        )
+        val folders = listOf("画集/作者-项目")
+        for (mode in SortMode.entries) {
+            val descending = state(
+                entries = entries,
+                folders = folders,
+                openFolder = "画集/作者-项目",
+                sortMode = mode,
+                sortAscending = false,
+            ).folderMedia.map(Entry::fileName)
+            val ascending = state(
+                entries = entries,
+                folders = folders,
+                openFolder = "画集/作者-项目",
+                sortMode = mode,
+                sortAscending = true,
+            ).folderMedia.map(Entry::fileName)
+            assertEquals("$mode 的两个方向应互为逆序", descending.reversed(), ascending)
+        }
+    }
+
+    @Test
+    fun `a file with no capture time is not treated as the oldest`() {
+        // Missing data must not win the「拍摄时间」order: a file with no reading sorts last in both
+        // directions rather than pretending to be from 1970.
+        val withReading = collection("作者-项目/有.jpg").copy(captured = 1_000L)
+        val without = collection("作者-项目/无.jpg")
+        val ascending = state(
+            entries = listOf(without, withReading),
+            folders = listOf("画集/作者-项目"),
+            openFolder = "画集/作者-项目",
+            sortMode = SortMode.CAPTURED,
+            sortAscending = true,
+        ).folderMedia.map(Entry::fileName)
+        assertEquals(listOf("有.jpg", "无.jpg"), ascending)
     }
 
     @Test
@@ -203,8 +249,8 @@ class UiStateTest {
             folders = listOf("画集/作者-项目", "画集/作者-项目/空"),
             openFolder = "画集/作者-项目",
         )
-        // 子 U+5B50 < 空 U+7A7A, so codepoint order puts 子 first.
-        assertEquals(listOf("子", "空"), state.folderRows.map { it.folder.name })
+        // Folders follow the same direction switch as files; the default is descending.
+        assertEquals(listOf("空", "子"), state.folderRows.map { it.folder.name })
     }
 
     @Test

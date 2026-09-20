@@ -87,6 +87,11 @@ data class UiState(
     val openFolder: String? = null,
     val sortMode: SortMode = SortMode.SEQUENCE,
     val viewMode: ViewMode = ViewMode.GRID,
+    /**
+     * Order direction. The album reads newest first by default because that is what a camera roll
+     * looks like, and every order in the collection can be flipped.
+     */
+    val sortAscending: Boolean = false,
     /** Thumbnail cache size on disk, read off the main thread. Null until it is known. */
     val thumbnailBytes: Long? = null,
     val refreshing: Boolean = false,
@@ -112,13 +117,22 @@ data class UiState(
     /** True while the `.nomedia` marker is being written or removed. */
     val markerBusy: Boolean = false,
 ) {
-    /** Album entries in newest-first order, filtered by media type. */
+    /**
+     * Album entries in capture order, filtered by media type.
+     *
+     * Memoised on the inputs it reads. It used to be a plain getter, and every recomposition — and
+     * there are many while a scan runs — filtered and sorted the whole Library again: on a real
+     * Library of 48 000 files that is tens of milliseconds per call, on the main thread, several
+     * times a second. That is what froze the UI and produced the ANRs.
+     */
+    private val albumMemo = Memo<List<Entry>>()
+
     val visibleAlbum: List<Entry>
-        get() = entries.asSequence()
-            .filter { it.projectFolder == null }
-            .sortedByDescending(Entry::orderTime)
-            .filter { filter.accepts(it.mediaType) }
-            .toList()
+        get() = albumMemo(entries, filter, sortAscending) {
+            val files = entries.filter { it.projectFolder == null && filter.accepts(it.mediaType) }
+            val byTime = files.sortedBy(Entry::orderTime)
+            if (sortAscending) byTime else byTime.asReversed()
+        }
 
     /**
      * Every known folder, once each: the folders the index recorded, plus the ones an entry path
@@ -194,12 +208,14 @@ data class UiState(
      * rule: a folder and a picture never share a level, so a level with subfolders hides its media
      * rather than mixing the two.
      */
+    private val folderRowsMemo = Memo<List<FolderRow>>()
+
     val folderRows: List<FolderRow>
-        get() {
+        get() = folderRowsMemo(entries, folders, openFolder, search, sortAscending) {
             val query = search.trim()
             // The top level has no path of its own; its children are the folders with no parent.
             val parent = openFolder.orEmpty()
-            return childFolders[parent].orEmpty().asSequence()
+            val rows = childFolders[parent].orEmpty().asSequence()
                 .filter { query.isEmpty() || it.name.contains(query, ignoreCase = true) }
                 .map { folder ->
                     val counts = subtreeCounts[folder.path] ?: IntArray(2)
@@ -212,21 +228,26 @@ data class UiState(
                 }
                 .sortedWith(compareBy(NATURAL_ORDER) { it.folder.name })
                 .toList()
+            if (sortAscending) rows else rows.asReversed()
         }
 
     /** True when the current level shows folders instead of media. */
     val showsFolders: Boolean get() = folderRows.isNotEmpty()
+
+    private val folderMediaMemo = Memo<List<Entry>>()
 
     /** The media of the current level, shown only when that level has no subfolders. */
     val folderMedia: List<Entry>
         get() {
             val folder = openFolder ?: return emptyList()
             if (showsFolders) return emptyList()
-            val query = search.trim()
-            val media = entriesIn(folder)
-                .filter { filter.accepts(it.mediaType) }
-                .filter { query.isEmpty() || it.fileName.contains(query, ignoreCase = true) }
-            return media.sortedWith(mediaOrder())
+            return folderMediaMemo(entries, openFolder, search, filter, sortMode, sortAscending) {
+                val query = search.trim()
+                val media = entriesIn(folder)
+                    .filter { filter.accepts(it.mediaType) }
+                    .filter { query.isEmpty() || it.fileName.contains(query, ignoreCase = true) }
+                media.sortedWith(mediaOrder())
+            }
         }
 
     /** Breadcrumbs from the first level down to the open folder, excluding the `画集` root. */
@@ -239,17 +260,25 @@ data class UiState(
     /** The files directly inside one folder. Grouped once per state, not scanned per call. */
     private fun entriesIn(folderPath: String): List<Entry> = entriesByParent[folderPath].orEmpty()
 
-    /** What「序号/名称/拍摄时间/修改时间/文件大小」mean for a list of files. */
-    private fun mediaOrder(): Comparator<Entry> = when (sortMode) {
-        // A name with no number at all sorts after every numbered one.
-        SortMode.SEQUENCE -> compareBy<Entry> { it.sequence == null }
-            .thenBy { it.sequence ?: Long.MAX_VALUE }
-            .thenBy(NATURAL_ORDER) { it.fileName }
-        SortMode.NAME -> compareBy(NATURAL_ORDER) { it.fileName }
-        SortMode.CAPTURED -> compareByDescending<Entry> { it.captured ?: Long.MIN_VALUE }
-            .thenBy(NATURAL_ORDER) { it.fileName }
-        SortMode.MODIFIED -> compareByDescending(Entry::modified).thenBy(NATURAL_ORDER) { it.fileName }
-        SortMode.SIZE -> compareByDescending(Entry::size).thenBy(NATURAL_ORDER) { it.fileName }
+    /**
+     * What「序号/名称/拍摄时间/修改时间/文件大小」mean for a list of files, in the chosen direction.
+     *
+     * A file with no value for the chosen order (no number in its name, no capture time) always
+     * sorts last whichever direction is asked for: it is missing data, not the smallest value.
+     */
+    private fun mediaOrder(): Comparator<Entry> {
+        val ascending = when (sortMode) {
+            SortMode.SEQUENCE -> compareBy<Entry> { it.sequence == null }
+                .thenBy { it.sequence ?: Long.MAX_VALUE }
+                .thenBy(NATURAL_ORDER) { it.fileName }
+            SortMode.NAME -> compareBy(NATURAL_ORDER) { it.fileName }
+            SortMode.CAPTURED -> compareBy<Entry> { it.captured == null }
+                .thenBy { it.captured ?: Long.MAX_VALUE }
+                .thenBy(NATURAL_ORDER) { it.fileName }
+            SortMode.MODIFIED -> compareBy(Entry::modified).thenBy(NATURAL_ORDER) { it.fileName }
+            SortMode.SIZE -> compareBy(Entry::size).thenBy(NATURAL_ORDER) { it.fileName }
+        }
+        return if (sortAscending) ascending else ascending.reversed()
     }
 }
 
@@ -277,6 +306,9 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
 
     /** How many entries the cache file held at the last incremental write. */
     private var lastWritten = 0
+
+    /** When the screen was last refreshed from a progress report. */
+    private var lastPublished = 0L
 
     /** Paths the running pass has actually seen. Anything else is gone from the volume. */
     private val readThisPass = mutableSetOf<String>()
@@ -386,6 +418,13 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
     fun selectSortMode(mode: SortMode) {
         store.sortMode = mode
         _state.update { it.copy(sortMode = mode) }
+    }
+
+    /** Flips the order direction, for both the album and the collection. Remembered. */
+    fun toggleSortDirection() {
+        val ascending = !_state.value.sortAscending
+        store.sortAscending = ascending
+        _state.update { it.copy(sortAscending = ascending) }
     }
 
     /** Remembers the layout. A reading preference, so it survives restarts. */
@@ -593,6 +632,13 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
                         )
                     }
                     RemLog.debug(SCOPE, "进度上报 已读=$scanned 发现=$total 新增=${entries.size}")
+                    // The screen is redrawn at most every few seconds while listing. Piecing it
+                    // together from every report rebuilt the whole grid — and re-derived every list
+                    // — while the reader is already busy with the volume, which is what made the
+                    // progress counter feel like it froze the app.
+                    val now = System.currentTimeMillis()
+                    if (now - lastPublished < UI_PUBLISH_INTERVAL_MS) return
+                    lastPublished = now
                     // Durable now, not at the end of the pass: this callback is the whole reason a
                     // scan killed halfway still leaves its work behind for the next one to reuse.
                     //
@@ -724,7 +770,13 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
         val current = store.tree()
         if (current == null) {
             RemLog.info(SCOPE, "没有已接入的 Library")
-            _state.update { UiState(sortMode = store.sortMode, viewMode = store.viewMode) }
+            _state.update {
+                UiState(
+                    sortMode = store.sortMode,
+                    viewMode = store.viewMode,
+                    sortAscending = store.sortAscending,
+                )
+            }
             return
         }
         tree = current
@@ -758,6 +810,7 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
                 violations = violations,
                 sortMode = store.sortMode,
                 viewMode = store.viewMode,
+                sortAscending = store.sortAscending,
                 hideFromSystemGallery = current.isSystemGalleryHidden(),
                 libraryReadable = readable,
             )
@@ -791,6 +844,31 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
          * that the index is not rewritten constantly.
          */
         const val METADATA_BATCH = 200
+
+        /** How often a running listing refreshes the screen. */
+        const val UI_PUBLISH_INTERVAL_MS = 5000L
+    }
+}
+
+/**
+ * A one-slot memo for a derived list.
+ *
+ * Compose reads these getters several times per composition and recomposes often; without this,
+ * every read re-sorted the whole Library. The key is the identity of the inputs the computation
+ * reads, so a new state object recomputes and an unchanged one does not.
+ */
+private class Memo<T> {
+    private var key: List<Any?>? = null
+    private var value: T? = null
+
+    operator fun invoke(vararg inputs: Any?, compute: () -> T): T {
+        val current = inputs.toList()
+        if (key != current) {
+            value = compute()
+            key = current
+        }
+        @Suppress("UNCHECKED_CAST")
+        return value as T
     }
 }
 

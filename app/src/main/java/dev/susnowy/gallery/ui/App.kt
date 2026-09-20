@@ -30,6 +30,7 @@ import androidx.compose.material3.DrawerDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.rememberScrollState
@@ -151,6 +152,7 @@ fun RemApp(viewModel: RemViewModel = viewModel()) {
                     state = state,
                     onSelectFilter = viewModel::selectFilter,
                     onSelectSort = viewModel::selectSortMode,
+                    onToggleDirection = viewModel::toggleSortDirection,
                     onSelectViewMode = viewModel::selectViewMode,
                 )
             },
@@ -346,6 +348,7 @@ private fun ContentSidebar(
     state: UiState,
     onSelectFilter: (MediaFilter) -> Unit,
     onSelectSort: (SortMode) -> Unit,
+    onToggleDirection: () -> Unit,
     onSelectViewMode: (ViewMode) -> Unit,
 ) {
     ModalDrawerSheet {
@@ -375,6 +378,22 @@ private fun ContentSidebar(
                 options = SortMode.entries.map { it to it.title },
                 selected = state.sortMode,
                 onSelect = onSelectSort,
+            )
+            Row(
+                modifier = Modifier.padding(start = 24.dp, top = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                FilterChip(
+                    selected = state.sortAscending,
+                    onClick = onToggleDirection,
+                    label = { Text(if (state.sortAscending) "升序 ↑" else "降序 ↓") },
+                )
+            }
+            Text(
+                text = "排序与方向同时作用于相册与画集；相册默认按拍摄时间从新到旧。",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(start = 24.dp, end = 24.dp, top = 4.dp),
             )
             SidebarLabel("视图")
             SidebarChips(

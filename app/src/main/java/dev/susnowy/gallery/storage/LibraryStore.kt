@@ -56,6 +56,18 @@ class LibraryStore(private val context: Context) {
             preferences.edit().putString(KEY_SORT_MODE, value.name).apply()
         }
 
+    /**
+     * Order direction, remembered like the order itself.
+     *
+     * The album defaults to newest first — that is what a camera roll looks like — so the stored
+     * default is `false` (descending), and the collection's orders are flipped on top of it.
+     */
+    var sortAscending: Boolean
+        get() = preferences.getBoolean(KEY_SORT_ASCENDING, false)
+        set(value) {
+            preferences.edit().putBoolean(KEY_SORT_ASCENDING, value).apply()
+        }
+
     /** Grid or list. A reading preference, so it lives on the device and survives restarts. */
     var viewMode: ViewMode
         get() = ViewMode.entries.firstOrNull { it.name == preferences.getString(KEY_VIEW_MODE, null) }
@@ -133,6 +145,7 @@ class LibraryStore(private val context: Context) {
         private const val KEY_TREE_URI = "tree_uri"
         private const val KEY_SORT_MODE = "sort_mode"
         private const val KEY_VIEW_MODE = "view_mode"
+        private const val KEY_SORT_ASCENDING = "sort_ascending"
     }
 }
 
