@@ -216,6 +216,18 @@ fun RemApp(viewModel: RemViewModel = viewModel()) {
             ) {
                 if (state.refreshing) {
                     ScanningBar(progress = state.scanProgress)
+                } else {
+                    // The Library is already usable; this only says that capture times are still
+                    // arriving, so a list ordered by modification time today will reorder itself.
+                    val pending = state.metadataPending
+                    if (pending != null && pending > 0) {
+                        Text(
+                            text = "正在后台读取拍摄时间，剩余 $pending 个文件",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 2.dp),
+                        )
+                    }
                 }
                 when {
                     state.tab == Tab.ALBUM -> AlbumScreen(

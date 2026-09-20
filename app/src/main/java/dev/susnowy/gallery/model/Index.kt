@@ -43,17 +43,27 @@ data class Index(
 ) {
     companion object {
         /**
-         * 3 — the collection became a tree with folders of its own, so the cache gained `folders`
-         * and the rules narrowed to directory structure only. A version 2 cache predates both.
+         * 4 — entries record whether their metadata has been read at all.
+         *
+         * A listing pass writes entries without opening any file, so a Library is browsable in
+         * seconds instead of after reading tens of thousands of files. Without this flag a cache
+         * written by that pass is indistinguishable from one whose files simply carry no capture
+         * time, and the catch-up pass would either re-read everything forever or never run.
          */
-        const val VERSION = 3
+        const val VERSION = 4
 
         /** What a file written before the version key was always encoded decodes to. */
         const val LEGACY_VERSION = 1
     }
 }
 
-/** [Entry] as it appears on disk. Optional fields are omitted so the file stays readable. */
+/**
+ * [Entry] as it appears on disk.
+ *
+ * [metadataRead] separates "this file carries no capture time" from "nobody has looked yet". The
+ * listing pass sets it to false for everything it lists; the catch-up pass opens those files and
+ * sets it to true — including when the reading finds nothing, which is a result in itself.
+ */
 @Serializable
 data class StoredEntry(
     val path: String,
@@ -62,15 +72,17 @@ data class StoredEntry(
     val captured: Long? = null,
     val latitude: Double? = null,
     val longitude: Double? = null,
+    val metadataRead: Boolean = false,
 )
 
-fun Entry.toStored(): StoredEntry = StoredEntry(
+fun Entry.toStored(metadataRead: Boolean): StoredEntry = StoredEntry(
     path = path,
     size = size,
     modified = modified,
     captured = captured,
     latitude = place?.latitude,
     longitude = place?.longitude,
+    metadataRead = metadataRead,
 )
 
 fun StoredEntry.toEntry(): Entry = Entry(

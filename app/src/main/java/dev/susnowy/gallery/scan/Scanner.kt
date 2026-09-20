@@ -3,6 +3,7 @@ package dev.susnowy.gallery.scan
 import android.content.Context
 import dev.susnowy.gallery.logging.RemLog
 import dev.susnowy.gallery.media.MediaProbe
+import dev.susnowy.gallery.media.Metadata
 import dev.susnowy.gallery.model.ALBUM
 import dev.susnowy.gallery.model.COLLECTION
 import dev.susnowy.gallery.model.Entry
@@ -10,6 +11,7 @@ import dev.susnowy.gallery.model.MediaType
 import dev.susnowy.gallery.model.splitProjectFolder
 import dev.susnowy.gallery.storage.Child
 import dev.susnowy.gallery.storage.LibraryTree
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -69,13 +71,26 @@ interface ScanSink {
  */
 class Scanner(private val context: Context, private val tree: LibraryTree) {
 
-    suspend fun scan(cached: Map<String, Entry>, sink: ScanSink? = null): ScanResult {
+    /**
+     * Reads the Library's structure.
+     *
+     * With `readMetadata = false` this opens no media file at all: it lists directories and records
+     * size and modification time, which is what makes a Library of tens of thousands of files
+     * browsable in seconds instead of after a per-file metadata pass. The capture times and places
+     * arrive later, from [readMetadata], which is resumable because each entry it finishes is
+     * written back.
+     */
+    suspend fun scan(
+        cached: Map<String, Entry>,
+        sink: ScanSink? = null,
+        readMetadata: Boolean = true,
+    ): ScanResult {
         val startedAt = System.currentTimeMillis()
         // Directory listings are never reused between scans; only the per-file readings are. The
         // listing is the only way a new or removed file becomes visible at all.
         tree.invalidateListings()
         RemLog.info(SCOPE, "开始扫描 root='${tree.rootDocumentId()}' 缓存条目=${cached.size} 并发=$WORKERS")
-        val pass = Pass(cached, sink)
+        val pass = Pass(cached, sink, readMetadata)
         return pass.run().also { result ->
             RemLog.info(
                 SCOPE,
@@ -85,6 +100,33 @@ class Scanner(private val context: Context, private val tree: LibraryTree) {
             )
             logViolations(result.violations)
         }
+    }
+
+    /**
+     * Reads the metadata of one batch of entries.
+     *
+     * Used by the catch-up pass: the listing scan records what exists, and this fills in capture
+     * times and places afterwards, in batches the caller can checkpoint. Entries whose file no
+     * longer resolves come back unchanged, so a Library that changed underneath the pass loses
+     * nothing.
+     */
+    suspend fun readMetadata(entries: List<Entry>): List<Entry> = coroutineScope {
+        entries.map { entry: Entry ->
+            val type = entry.mediaType
+            if (type == null) {
+                CompletableDeferred(entry)
+            } else {
+                async(READERS) {
+                    val child = withContext(Dispatchers.IO) { tree.find(entry.path) }
+                    if (child == null) {
+                        entry
+                    } else {
+                        val metadata = MediaProbe.read(context, child.uri, type)
+                        entry.copy(captured = metadata.captured, place = metadata.place)
+                    }
+                }
+            }
+        }.awaitAll()
     }
 
     private fun logViolations(violations: List<String>) {
@@ -97,6 +139,7 @@ class Scanner(private val context: Context, private val tree: LibraryTree) {
     private inner class Pass(
         private val cached: Map<String, Entry>,
         private val sink: ScanSink?,
+        private val readMetadata: Boolean,
     ) {
         /** Written from concurrent readers, so this list is synchronized. */
         private val violations = Collections.synchronizedList(mutableListOf<String>())
@@ -206,10 +249,7 @@ class Scanner(private val context: Context, private val tree: LibraryTree) {
                 countAndMaybeReport(it)
                 return it
             }
-            val metadata = withContext(READERS) {
-                coroutineContext.ensureActive()
-                MediaProbe.read(context, child.uri, type)
-            }
+            val metadata = if (readMetadata) probe(child.uri, type) else Metadata.NONE
             val entry = Entry(
                 path = child.path,
                 size = child.size,
@@ -220,6 +260,12 @@ class Scanner(private val context: Context, private val tree: LibraryTree) {
             countAndMaybeReport(entry)
             return entry
         }
+
+        private suspend fun probe(uri: android.net.Uri, type: MediaType): Metadata =
+            withContext(READERS) {
+                coroutineContext.ensureActive()
+                MediaProbe.read(context, uri, type)
+            }
 
         private fun countAndMaybeReport(entry: Entry) {
             scanned.incrementAndGet()

@@ -101,6 +101,11 @@ data class UiState(
     val libraryReadable: Boolean = false,
     /** Non-null only while a scan is running. */
     val scanProgress: ScanProgress? = null,
+    /**
+     * How many files are still waiting for their capture time to be read, or null when nothing is
+     * pending. Shown as a quiet hint: the Library is already browsable while this drains.
+     */
+    val metadataPending: Int? = null,
     val message: String? = null,
     val violations: List<String> = emptyList(),
     val hideFromSystemGallery: Boolean = false,
@@ -276,6 +281,15 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
     /** Paths the running pass has actually seen. Anything else is gone from the volume. */
     private val readThisPass = mutableSetOf<String>()
 
+    /**
+     * Paths whose capture time and place have been read.
+     *
+     * Kept across passes and written into the index, which is what makes the metadata pass resumable:
+     * a Library is listed once, and the expensive per-file reading continues from wherever it stopped
+     * instead of starting over.
+     */
+    private val metadataDone = mutableSetOf<String>()
+
     init {
         openAttachedLibrary()
         refreshThumbnailSize()
@@ -284,6 +298,7 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
     fun attach(treeUri: Uri) {
         markerJob?.cancel()
         scanJob?.cancel()
+        metadataJob?.cancel()
         store.attach(treeUri)
         resetLibraryState()
         _state.update { UiState(sortMode = it.sortMode) }
@@ -293,6 +308,7 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
     fun detach() {
         markerJob?.cancel()
         scanJob?.cancel()
+        metadataJob?.cancel()
         tree = null
         store.detach()
         resetLibraryState()
@@ -301,6 +317,7 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun resetLibraryState() {
         known.clear()
+        metadataDone.clear()
         folders = emptyList()
         violations = emptyList()
     }
@@ -426,6 +443,7 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
         }
         if (scanJob?.isActive == true) return
         known.clear()
+        metadataDone.clear()
         folders = emptyList()
         violations = emptyList()
         lastWritten = 0
@@ -503,6 +521,9 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
 
     /** The running scan, if any. Held so a second request cannot start a scan beside it. */
     private var scanJob: Job? = null
+
+    /** The running metadata catch-up pass, if any. One at a time, like the scan itself. */
+    private var metadataJob: Job? = null
 
     /**
      * The index write in flight, if any.
@@ -590,13 +611,17 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
                 // the pass started, which on a resumed Library replaced a large cached index with a
                 // handful of entries — measured on device: 5562 entries became one. A pass that is
                 // interrupted now leaves the previous cache untouched; only real progress overwrites.
-                val result = Scanner(getApplication(), current).scan(cachedSnapshot, sink)
+                // Listing only: no media file is opened, so a Library of tens of thousands of files
+                // becomes browsable in seconds. Capture times follow in the metadata pass below.
+                val result = Scanner(getApplication(), current)
+                    .scan(cachedSnapshot, sink, readMetadata = false)
                 withContext(Dispatchers.IO) { persist(result) }
                 result
             }.fold(
                 onSuccess = {
                     val vanished = known.keys.filterNot { it in readThisPass }
                     vanished.forEach { known.remove(it) }
+                    metadataDone.retainAll { it in readThisPass }
                     if (vanished.isNotEmpty()) {
                         RemLog.info(SCOPE, "本次扫描发现 ${vanished.size} 个文件已不在库中，已从列表移除")
                     }
@@ -607,9 +632,12 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
                             entries = known.values.toList(),
                             folders = folders,
                             violations = violations,
+                            metadataPending = pendingCount(),
                         )
                     }
                     RemLog.info(SCOPE, "刷新完成 条目=${known.size} 文件夹=${folders.size}")
+                    withContext(Dispatchers.IO) { persist() }
+                    startMetadataPass(current)
                 },
                 onFailure = { error ->
                     if (error is CancellationException) throw error
@@ -629,6 +657,54 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** How many entries the index holds whose capture time has not been read yet. */
+    private fun pendingCount(): Int = known.keys.count { it !in metadataDone }
+
+    /**
+     * Reads capture times and places in the background, batch by batch.
+     *
+     * The Library is already usable when this starts — it was listed, not opened. Each batch is
+     * checkpointed to the index, so stopping halfway (app killed, volume removed) costs only the
+     * batch in flight. The folder being viewed is done first, because that is the list the user is
+     * looking at.
+     */
+    private fun startMetadataPass(current: LibraryTree) {
+        if (metadataJob?.isActive == true) return
+        val pending = known.values.filter { it.path !in metadataDone }
+        if (pending.isEmpty()) {
+            _state.update { it.copy(metadataPending = 0) }
+            return
+        }
+        RemLog.info(SCOPE, "开始补齐元数据 待读=${pending.size}")
+        metadataJob = viewModelScope.launch {
+            val visible = _state.value.openFolder
+            val ordered = if (visible == null) {
+                pending
+            } else {
+                pending.sortedByDescending { it.parentFolder == visible }
+            }
+            val scanner = Scanner(getApplication(), current)
+            var read = 0
+            ordered.chunked(METADATA_BATCH).forEach { batch ->
+                val readBatch = runCatching { scanner.readMetadata(batch) }.getOrNull() ?: return@launch
+                readBatch.forEach { entry ->
+                    known[entry.path] = entry
+                    metadataDone += entry.path
+                }
+                read += readBatch.size
+                _state.update {
+                    it.copy(
+                        entries = known.values.toList(),
+                        metadataPending = pendingCount(),
+                    )
+                }
+                // Checkpointed per batch: the index is written with what has been read so far.
+                withContext(Dispatchers.IO) { persist() }
+            }
+            RemLog.info(SCOPE, "元数据补齐完成 本次读=$read 剩余=${pendingCount()}")
+        }
+    }
+
     /** Writes what is known so far. Called before, during and after a pass. */
     private suspend fun persist(result: ScanResult? = null) {
         val current = tree ?: return
@@ -638,6 +714,7 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
                 entries = result?.entries ?: known.values.toList(),
                 folders = result?.folders ?: folders,
                 violations = result?.violations ?: violations,
+                metadataDone = metadataDone,
             ),
         )
     }
@@ -664,7 +741,11 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
 
         val cached = store.readIndex(current)
         known.clear()
-        cached?.entries?.forEach { known[it.path] = it.toEntry() }
+        metadataDone.clear()
+        cached?.entries?.forEach { stored ->
+            known[stored.path] = stored.toEntry()
+            if (stored.metadataRead) metadataDone += stored.path
+        }
         folders = cached?.folders.orEmpty()
         violations = cached?.violations.orEmpty()
         _state.update {
@@ -701,6 +782,15 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
          * the exposure to a lost pass small without writing constantly.
          */
         const val PERSIST_EVERY_ENTRIES = 200
+
+        /**
+         * Files per metadata batch.
+         *
+         * Each batch is checkpointed and pushed to the screen. Two hundred is a few seconds of
+         * reading on a slow volume: often enough that stopping loses almost nothing, rare enough
+         * that the index is not rewritten constantly.
+         */
+        const val METADATA_BATCH = 200
     }
 }
 
