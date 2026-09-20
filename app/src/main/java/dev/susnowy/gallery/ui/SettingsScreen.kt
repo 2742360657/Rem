@@ -40,9 +40,6 @@ import dev.susnowy.gallery.model.ViewMode
 fun SettingsScreen(
     state: UiState,
     onHideFromSystemGallery: (Boolean) -> Unit,
-    onSelectViewMode: (ViewMode) -> Unit,
-    onClearThumbnails: () -> Unit,
-    onRebuildIndex: () -> Unit,
     onOpenLog: () -> Unit,
 ) {
     Column(
@@ -50,6 +47,9 @@ fun SettingsScreen(
             .fillMaxSize()
             .verticalScroll(rememberScrollState()),
     ) {
+        // Display choices (filter, order, view mode) live in the content sidebar, because they
+        // change what the current screen shows. Only settings that are about the app itself belong
+        // here, and each one appears exactly once.
         SettingSwitch(
             title = "从系统相册隐藏",
             description = if (state.attached) {
@@ -64,37 +64,19 @@ fun SettingsScreen(
             onCheckedChange = onHideFromSystemGallery,
         )
         HorizontalDivider()
-        SectionTitle("浏览")
-        SettingChoice(
-            title = "视图模式",
-            description = "网格适合看画面，列表适合按文件名找东西，一行显示更多内容。",
-            options = ViewMode.entries.map { it to it.title },
-            selected = state.viewMode,
-            onSelect = onSelectViewMode,
-        )
-        HorizontalDivider()
-        SectionTitle("缓存")
-        ReadOnlyRow(
-            "缩略图缓存",
-            state.thumbnailBytes?.let(::humanSize) ?: "读取中…",
-        )
+
+        SectionTitle("当前 Library")
+        ReadOnlyRow("名称", state.libraryName.ifEmpty { "未接入" })
+        ReadOnlyRow("目录", state.treeUri?.lastPathSegment?.replace("%3A", "：") ?: "—")
+        ReadOnlyRow("内容", "${state.entries.size} 个文件 · ${state.folders.size} 个文件夹")
+        if (state.violations.isNotEmpty()) {
+            ReadOnlyRow("规范问题", "${state.violations.size} 条（只报告，不修改文件）")
+        }
         Text(
-            text = "缩略图按需生成、可随时删除，删除后再次浏览会重新生成（每张约 10–50 ms）。媒体文件本身不受影响。",
+            text = "库级操作在顶栏右侧的菜单里：重建索引、清空缩略图缓存、更换或断开 Library。",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-        )
-        SettingAction(
-            title = "清空缩略图缓存",
-            description = "只删除缓存目录里的缩略图。",
-            onClick = onClearThumbnails,
-            enabled = state.attached,
-        )
-        SettingAction(
-            title = "重建索引",
-            description = "丢弃扫描缓存并重新读取整个 Library。库内文件被移动或删除过、出现打不开的条目时用这个。",
-            onClick = onRebuildIndex,
-            enabled = state.attached && !state.refreshing,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
         )
         HorizontalDivider()
 
@@ -104,52 +86,8 @@ fun SettingsScreen(
             onClick = onOpenLog,
         )
         HorizontalDivider()
-        SectionTitle("浏览")
-        SettingChoice(
-            title = "视图模式",
-            description = "网格适合看画面，列表适合按文件名找东西，一行显示更多内容。",
-            options = ViewMode.entries.map { it to it.title },
-            selected = state.viewMode,
-            onSelect = onSelectViewMode,
-        )
-        HorizontalDivider()
-        SectionTitle("缓存")
-        ReadOnlyRow(
-            "缩略图缓存",
-            state.thumbnailBytes?.let(::humanSize) ?: "读取中…",
-        )
-        Text(
-            text = "缩略图按需生成、可随时删除，删除后再次浏览会重新生成（每张约 10–50 ms）。媒体文件本身不受影响。",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-        )
-        SettingAction(
-            title = "清空缩略图缓存",
-            description = "只删除缓存目录里的缩略图。",
-            onClick = onClearThumbnails,
-            enabled = state.attached,
-        )
-        SettingAction(
-            title = "重建索引",
-            description = "丢弃扫描缓存并重新读取整个 Library。库内文件被移动或删除过、出现打不开的条目时用这个。",
-            onClick = onRebuildIndex,
-            enabled = state.attached && !state.refreshing,
-        )
-        HorizontalDivider()
 
         Spacer(Modifier.height(8.dp))
-        Text(
-            text = "当前 Library",
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-        )
-        ReadOnlyRow("名称", state.libraryName.ifEmpty { "未接入" })
-        ReadOnlyRow("目录", state.treeUri?.lastPathSegment?.replace("%3A", "：") ?: "—")
-        ReadOnlyRow("媒体", "${state.entries.size} 个媒体文件 · ${state.folders.size} 个文件夹")
-
-        Spacer(Modifier.height(16.dp))
         Text(
             text = "Rem 0.0.4 · 只读取 Library，不改动任何媒体文件",
             style = MaterialTheme.typography.bodySmall,
@@ -219,7 +157,7 @@ private fun SettingRow(title: String, description: String, onClick: () -> Unit) 
 }
 
 @Composable
-private fun ReadOnlyRow(label: String, value: String) {
+internal fun ReadOnlyRow(label: String, value: String) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -246,73 +184,4 @@ private fun SectionTitle(text: String) {
     )
 }
 
-/** A row of mutually exclusive choices, such as the view mode. */
-@Composable
-private fun <T> SettingChoice(
-    title: String,
-    description: String,
-    options: List<Pair<T, String>>,
-    selected: T,
-    onSelect: (T) -> Unit,
-) {
-    Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
-        Text(title, style = MaterialTheme.typography.bodyLarge)
-        Text(
-            text = description,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(top = 2.dp),
-        )
-        Row(
-            Modifier.padding(top = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            options.forEach { (value, label) ->
-                FilterChip(
-                    selected = value == selected,
-                    onClick = { onSelect(value) },
-                    label = { Text(label) },
-                )
-            }
-        }
-    }
-}
 
-/** A settings row that does something when tapped. */
-@Composable
-private fun SettingAction(
-    title: String,
-    description: String,
-    onClick: () -> Unit,
-    enabled: Boolean,
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(enabled = enabled, onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(Modifier.weight(1f)) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.bodyLarge,
-                color = if (enabled) {
-                    MaterialTheme.colorScheme.onSurface
-                } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                },
-            )
-            Text(
-                text = description,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        Icon(
-            imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowRight,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
-}

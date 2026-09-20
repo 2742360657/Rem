@@ -26,8 +26,7 @@ import androidx.compose.material3.NavigationDrawerItem
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.launch
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.DrawerDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.FlowRow
@@ -35,6 +34,8 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -77,13 +78,15 @@ fun RemApp(viewModel: RemViewModel = viewModel()) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val snackbarHostState = remember { SnackbarHostState() }
-    var menuExpanded by remember { mutableStateOf(false) }
     var violationsExpanded by remember { mutableStateOf(false) }
     var logOpen by remember { mutableStateOf(false) }
     // What the viewer is showing, if anything. Every action that changes which Library is loaded
     // clears it first: the list it pages through belongs to the Library that was on screen.
     var viewerRequest by remember { mutableStateOf<ViewerRequest?>(null) }
-    val drawerState = rememberDrawerState(DrawerValue.Closed)
+    // Two drawers with two jobs: content on the left, the Library itself on the right. Neither is
+    // reachable by an accidental swipe in the wrong direction, so the gestures stay predictable.
+    var libraryMenuOpen by remember { mutableStateOf(false) }
+    val contentDrawer = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
@@ -126,18 +129,14 @@ fun RemApp(viewModel: RemViewModel = viewModel()) {
         // Library actions. They used to sit as rows of chips above every screen, which cost the
         // screen space they were meant to help with.
         ModalNavigationDrawer(
-            drawerState = drawerState,
+            drawerState = contentDrawer,
             gesturesEnabled = state.currentFolder == null,
             drawerContent = {
-                RemSidebar(
+                ContentSidebar(
                     state = state,
-                    onSelectTab = { viewModel.selectTab(it); scope.launch { drawerState.close() } },
                     onSelectFilter = viewModel::selectFilter,
                     onSelectSort = viewModel::selectSortMode,
                     onSelectViewMode = viewModel::selectViewMode,
-                    onChangeLibrary = { scope.launch { drawerState.close() }; picker.launch(null) },
-                    onDetachLibrary = { scope.launch { drawerState.close() }; viewModel.detach() },
-                    onOpenLog = { scope.launch { drawerState.close() }; logOpen = true },
                 )
             },
         ) {
@@ -147,7 +146,7 @@ fun RemApp(viewModel: RemViewModel = viewModel()) {
                 TopAppBar(
                     title = { Text(state.libraryName.ifEmpty { "Rem" }) },
                     navigationIcon = {
-                        IconButton(onClick = { scope.launch { drawerState.open() } }) {
+                        IconButton(onClick = { scope.launch { contentDrawer.open() } }) {
                             Icon(Icons.Rounded.Menu, contentDescription = "侧边栏")
                         }
                     },
@@ -161,37 +160,19 @@ fun RemApp(viewModel: RemViewModel = viewModel()) {
                             Icon(Icons.Rounded.Refresh, contentDescription = "重新扫描")
                         }
                         Box {
-                            IconButton(onClick = { menuExpanded = true }) {
-                                Icon(Icons.Rounded.MoreVert, contentDescription = "更多")
+                            IconButton(onClick = { libraryMenuOpen = true }) {
+                                Icon(Icons.Rounded.MoreVert, contentDescription = "库操作")
                             }
-                            // Kept: the sidebar is the main way in now, but a long-press-free
-                            // second path costs nothing and the menu already held Library actions.
-                            DropdownMenu(
-                                expanded = menuExpanded,
-                                onDismissRequest = { menuExpanded = false },
-                            ) {
-                                DropdownMenuItem(
-                                    text = { Text("更换 Library") },
-                                    onClick = {
-                                        menuExpanded = false
-                                        picker.launch(null)
-                                    },
-                                )
-                                DropdownMenuItem(
-                                    text = { Text("断开 Library") },
-                                    onClick = {
-                                        menuExpanded = false
-                                        viewModel.detach()
-                                    },
-                                )
-                                DropdownMenuItem(
-                                    text = { Text("运行日志") },
-                                    onClick = {
-                                        menuExpanded = false
-                                        logOpen = true
-                                    },
-                                )
-                            }
+                            LibraryMenu(
+                                expanded = libraryMenuOpen,
+                                onDismiss = { libraryMenuOpen = false },
+                                state = state,
+                                onChangeLibrary = { libraryMenuOpen = false; picker.launch(null) },
+                                onDetachLibrary = { libraryMenuOpen = false; viewModel.detach() },
+                                onRebuildIndex = { libraryMenuOpen = false; viewModel.rebuildIndex() },
+                                onClearThumbnails = { libraryMenuOpen = false; viewModel.clearThumbnails() },
+                                onOpenLog = { libraryMenuOpen = false; logOpen = true },
+                            )
                         }
                     },
                 )
@@ -244,9 +225,6 @@ fun RemApp(viewModel: RemViewModel = viewModel()) {
                     else -> SettingsScreen(
                         state = state,
                         onHideFromSystemGallery = viewModel::setHideFromSystemGallery,
-                        onSelectViewMode = viewModel::selectViewMode,
-                        onClearThumbnails = viewModel::clearThumbnails,
-                        onRebuildIndex = viewModel::rebuildIndex,
                         onOpenLog = { logOpen = true },
                     )
                 }
@@ -337,15 +315,11 @@ private fun ViolationsDialog(violations: List<String>, onDismiss: () -> Unit) {
  * change what the app is even looking at.
  */
 @Composable
-private fun RemSidebar(
+private fun ContentSidebar(
     state: UiState,
-    onSelectTab: (Tab) -> Unit,
     onSelectFilter: (MediaFilter) -> Unit,
     onSelectSort: (SortMode) -> Unit,
     onSelectViewMode: (ViewMode) -> Unit,
-    onChangeLibrary: () -> Unit,
-    onDetachLibrary: () -> Unit,
-    onOpenLog: () -> Unit,
 ) {
     ModalDrawerSheet {
         Column(Modifier.verticalScroll(rememberScrollState())) {
@@ -363,17 +337,6 @@ private fun RemSidebar(
                 modifier = Modifier.padding(horizontal = 24.dp).padding(bottom = 12.dp),
             )
 
-            Tab.entries.forEach { tab ->
-                NavigationDrawerItem(
-                    label = { Text(tab.title) },
-                    icon = { Icon(tab.icon, contentDescription = null) },
-                    selected = tab == state.tab,
-                    onClick = { onSelectTab(tab) },
-                    modifier = Modifier.padding(horizontal = 12.dp),
-                )
-            }
-
-            HorizontalDivider(Modifier.padding(vertical = 8.dp))
             SidebarLabel("显示")
             SidebarChips(
                 options = MediaFilter.entries.map { it to it.title },
@@ -393,25 +356,6 @@ private fun RemSidebar(
                 onSelect = onSelectViewMode,
             )
 
-            HorizontalDivider(Modifier.padding(vertical = 8.dp))
-            NavigationDrawerItem(
-                label = { Text("更换 Library") },
-                selected = false,
-                onClick = onChangeLibrary,
-                modifier = Modifier.padding(horizontal = 12.dp),
-            )
-            NavigationDrawerItem(
-                label = { Text("断开 Library") },
-                selected = false,
-                onClick = onDetachLibrary,
-                modifier = Modifier.padding(horizontal = 12.dp),
-            )
-            NavigationDrawerItem(
-                label = { Text("运行日志") },
-                selected = false,
-                onClick = onOpenLog,
-                modifier = Modifier.padding(horizontal = 12.dp),
-            )
             Spacer(Modifier.height(16.dp))
         }
     }
@@ -447,5 +391,53 @@ private fun <T> SidebarChips(
                 label = { Text(label) },
             )
         }
+    }
+}
+
+/**
+ * What applies to the Library rather than to the current view.
+ *
+ * A menu anchored to its button, not a drawer: the content choices already own the left edge, and
+ * these are occasional, deliberate actions rather than something to browse.
+ */
+@Composable
+private fun LibraryMenu(
+    expanded: Boolean,
+    onDismiss: () -> Unit,
+    state: UiState,
+    onChangeLibrary: () -> Unit,
+    onDetachLibrary: () -> Unit,
+    onRebuildIndex: () -> Unit,
+    onClearThumbnails: () -> Unit,
+    onOpenLog: () -> Unit,
+) {
+    DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
+        Text(
+            text = state.libraryName.ifEmpty { "未接入 Library" },
+            style = MaterialTheme.typography.titleSmall,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+        )
+        Text(
+            text = "${state.entries.size} 个文件 · ${state.folders.size} 个文件夹" +
+                (state.thumbnailBytes?.let { " · 缩略图 ${humanSize(it)}" } ?: ""),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 16.dp).padding(bottom = 8.dp),
+        )
+        HorizontalDivider()
+        DropdownMenuItem(
+            text = { Text("重建索引") },
+            enabled = state.attached && !state.refreshing,
+            onClick = onRebuildIndex,
+        )
+        DropdownMenuItem(
+            text = { Text("清空缩略图缓存") },
+            enabled = state.attached,
+            onClick = onClearThumbnails,
+        )
+        DropdownMenuItem(text = { Text("运行日志") }, onClick = onOpenLog)
+        HorizontalDivider()
+        DropdownMenuItem(text = { Text("更换 Library") }, onClick = onChangeLibrary)
+        DropdownMenuItem(text = { Text("断开 Library") }, onClick = onDetachLibrary)
     }
 }
