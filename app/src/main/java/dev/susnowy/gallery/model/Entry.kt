@@ -80,14 +80,21 @@ data class Entry(
 data class Folder(val path: String) {
     val name: String get() = path.substringAfterLast('/')
 
-    /** The folder that contains this one, or `null` when this is a first-level folder. */
+    /**
+     * The folder that contains this one: the section for a first-level folder, `null` above that.
+     *
+     * A first-level folder points at its section rather than at nothing, so the tree has one shape
+     * at every depth — `画集` holds the projects, a project holds its subfolders, and a level's
+     * children are always the folders whose parent is that level.
+     *
+     * Treating them as parentless instead grouped every first-level folder together with the
+     * Library's other sections, so asking for the children of the collection root returned `相册`
+     * and `待分类` — which is how the album came to be listed inside the collection.
+     */
     val parent: String?
         get() {
-            // A path looks like `画集/名称` or `画集/名称/子/更深`. There is a parent folder only
-            // once a second separator exists; the one after the section name separates the section.
             val separator = path.lastIndexOf('/')
-            val sectionEnd = path.indexOf('/')
-            return if (sectionEnd < 0 || separator <= sectionEnd) null else path.substring(0, separator)
+            return if (separator <= 0) null else path.substring(0, separator)
         }
 
     /** Every folder between the section root and this one, outermost first, excluding this one. */
@@ -100,6 +107,15 @@ data class Folder(val path: String) {
 /** How a media list is laid out. Applies to the album and to a collection folder alike. */
 enum class ViewMode(val title: String) {
     GRID("网格"),
+
+    /**
+     * The same grid with smaller cells, for seeing more of a folder at once.
+     *
+     * A separate mode rather than a density setting: the two are used for different things — one to
+     * look at pictures, one to find one — and switching between them should be a choice the user
+     * makes once, not a value they have to remember they changed.
+     */
+    COMPACT("紧凑网格"),
     LIST("列表"),
 }
 

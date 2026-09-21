@@ -151,7 +151,11 @@ fun RemApp(viewModel: RemViewModel = viewModel()) {
         // screen space they were meant to help with.
         ModalNavigationDrawer(
             drawerState = contentDrawer,
-            gesturesEnabled = state.currentFolder == null,
+            // Reachable from anywhere. Swiping was disabled inside a collection folder, which meant
+            // the sidebar could not be opened at all while walking the tree — the one place its
+            // order and view choices matter most. The viewer is a separate full-screen surface, so
+            // there is no paging gesture here for the drawer to fight with.
+            gesturesEnabled = true,
             drawerContent = {
                 ContentSidebar(
                     state = state,
@@ -356,6 +360,20 @@ private fun ContentSidebar(
     onToggleDirection: () -> Unit,
     onSelectViewMode: (ViewMode) -> Unit,
 ) {
+    // What the sidebar offers follows where the user is. It used to show every control everywhere,
+    // which promised things that were not true: an order selector in the album, whose order is
+    // fixed at capture time, and a sort that reads as "sort these files" while the level on screen
+    // is a list of folders.
+    val inAlbum = state.tab == Tab.ALBUM
+    val inFolder = state.currentFolder != null
+    // Inside a folder the files are what is being ordered, so every order applies. At the
+    // collection's top level the rows are folders, and only their own two orders mean anything.
+    val sortOptions = if (inFolder) {
+        SortMode.entries
+    } else {
+        listOf(SortMode.NAME, SortMode.SEQUENCE)
+    }
+
     ModalDrawerSheet {
         Column(Modifier.verticalScroll(rememberScrollState())) {
             Text(
@@ -378,28 +396,57 @@ private fun ContentSidebar(
                 selected = state.filter,
                 onSelect = onSelectFilter,
             )
-            SidebarLabel("排序")
-            SidebarChips(
-                options = SortMode.entries.map { it to it.title },
-                selected = state.sortMode,
-                onSelect = onSelectSort,
-            )
-            Row(
-                modifier = Modifier.padding(start = 24.dp, top = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                FilterChip(
-                    selected = state.sortAscending,
-                    onClick = onToggleDirection,
-                    label = { Text(if (state.sortAscending) "升序 ↑" else "降序 ↓") },
+
+            if (!inAlbum) {
+                SidebarLabel("排序")
+                SidebarChips(
+                    options = sortOptions.map { it to it.title },
+                    selected = state.sortMode,
+                    onSelect = onSelectSort,
+                )
+                Row(
+                    modifier = Modifier.padding(start = 24.dp, top = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    FilterChip(
+                        selected = state.sortAscending,
+                        onClick = onToggleDirection,
+                        label = { Text(if (state.sortAscending) "升序 ↑" else "降序 ↓") },
+                    )
+                }
+                Text(
+                    text = if (inFolder) {
+                        "排序作用于当前文件夹里的文件。"
+                    } else {
+                        "在画集顶层，排序作用于项目文件夹。"
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(start = 24.dp, end = 24.dp, top = 4.dp),
+                )
+            } else {
+                // The album's order is fixed at capture time, so there is nothing to choose — but
+                // its direction is real, and hiding the control with the rest would have taken away
+                // a switch that works.
+                SidebarLabel("排序")
+                Row(
+                    modifier = Modifier.padding(start = 24.dp, top = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    FilterChip(
+                        selected = state.sortAscending,
+                        onClick = onToggleDirection,
+                        label = { Text(if (state.sortAscending) "升序 ↑" else "降序 ↓") },
+                    )
+                }
+                Text(
+                    text = "相册固定按拍摄时间排列，这里只切换方向。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(start = 24.dp, end = 24.dp, top = 4.dp),
                 )
             }
-            Text(
-                text = "排序与方向同时作用于相册与画集；相册默认按拍摄时间从新到旧。",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(start = 24.dp, end = 24.dp, top = 4.dp),
-            )
+
             SidebarLabel("视图")
             SidebarChips(
                 options = ViewMode.entries.map { it to it.title },

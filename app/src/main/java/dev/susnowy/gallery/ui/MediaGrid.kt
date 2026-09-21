@@ -35,6 +35,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import coil3.request.ImageRequest
 import dev.susnowy.gallery.model.Entry
@@ -85,11 +86,11 @@ fun MediaGrid(
 
     Box(modifier.fillMaxSize()) {
         LazyVerticalGrid(
-            columns = GridCells.Adaptive(minSize = 108.dp),
+            columns = GridCells.Adaptive(minSize = minCellWidth(viewMode)),
             state = gridState,
             contentPadding = PaddingValues(start = 8.dp, top = 8.dp, end = TRACK_WIDTH, bottom = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
+            horizontalArrangement = Arrangement.spacedBy(cellGap(viewMode)),
+            verticalArrangement = Arrangement.spacedBy(cellGap(viewMode)),
         ) {
             itemsIndexed(entries, key = { _, entry -> entry.path }) { index, entry ->
                 // The index travels with the tap: the viewer opens on this cell and pages through
@@ -137,7 +138,7 @@ private fun MediaList(
             contentPadding = PaddingValues(end = TRACK_WIDTH),
         ) {
             itemsIndexed(entries, key = { _, entry -> entry.path }) { index, entry ->
-                MediaRow(
+                MediaRowItem(
                     entry = entry,
                     thumbnail = thumbnail(entry),
                     onOpen = { onOpen(index) },
@@ -155,9 +156,14 @@ private fun MediaList(
     }
 }
 
-/** One media file as a row. */
+/**
+ * One media file as a row.
+ *
+ * Shared with the collection, which lists a folder's files under its folder rows: a file has to
+ * look the same whether it is alone in its folder or sitting below subfolders.
+ */
 @Composable
-private fun MediaRow(entry: Entry, thumbnail: ImageRequest?, onOpen: () -> Unit) {
+internal fun MediaRowItem(entry: Entry, thumbnail: ImageRequest?, onOpen: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -211,9 +217,23 @@ private fun MediaRow(entry: Entry, thumbnail: ImageRequest?, onOpen: () -> Unit)
     }
 }
 
+/**
+ * How wide a grid cell may get before another column is added.
+ *
+ * One decision, used by every grid: the album, a collection folder, and the media inside a folder
+ * that also holds folders. Two of those scroll inside another list, so they size their cells
+ * themselves, and the number has to agree with [MediaGrid]'s or the same folder would look
+ * different depending on whether it happened to contain a subfolder.
+ */
+internal fun minCellWidth(viewMode: ViewMode): Dp =
+    if (viewMode == ViewMode.COMPACT) 72.dp else 108.dp
+
+/** The gap between cells; the compact grid tightens it as well as the cells. */
+internal fun cellGap(viewMode: ViewMode): Dp =
+    if (viewMode == ViewMode.COMPACT) 2.dp else 6.dp
+
 /** `1.2 MB` — a size a person can compare at a glance. */
-fun humanSize(bytes: Long): String = when {
-    bytes >= 1024L * 1024L * 1024L -> "%.1f GB".format(bytes / 1024.0 / 1024.0 / 1024.0)
+fun humanSize(bytes: Long): String = when {    bytes >= 1024L * 1024L * 1024L -> "%.1f GB".format(bytes / 1024.0 / 1024.0 / 1024.0)
     bytes >= 1024L * 1024L -> "%.1f MB".format(bytes / 1024.0 / 1024.0)
     bytes >= 1024L -> "%.0f KB".format(bytes / 1024.0)
     else -> "$bytes B"

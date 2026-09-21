@@ -74,7 +74,10 @@ class UiStateTest {
     }
 
     @Test
-    fun `a folder with subfolders shows folders and hides its own media`() {
+    fun `a folder with subfolders lists them and still shows its own media`() {
+        // Showing folders instead of media lost files: a project that keeps pictures in a
+        // subfolder and also has some at its top level displayed the folder and dropped the rest,
+        // so those files were in the Library and nowhere on screen.
         val state = state(
             entries = listOf(collection("作者-项目/0001.jpg"), collection("作者-项目/子/0002.jpg")),
             folders = listOf("画集/作者-项目", "画集/作者-项目/子"),
@@ -82,7 +85,34 @@ class UiStateTest {
         )
         assertEquals(listOf("子"), state.folderRows.map { it.folder.name })
         assertTrue(state.showsFolders)
-        assertTrue("同层有子文件夹时该层媒体不显示", state.folderMedia.isEmpty())
+        assertEquals(
+            "同层的媒体要和子文件夹一起列出",
+            listOf("0001.jpg"),
+            state.folderMedia.map(Entry::fileName),
+        )
+    }
+
+    @Test
+    fun `the collection top level is the collection, not the Library root`() {
+        // `相册` and `待分类` are the Library's other sections, and the album has its own tab.
+        // Offering them here made the collection look like it contained the album.
+        val state = state(
+            entries = listOf(album("a.jpg", captured = 1), collection("作者-项目/0001.jpg")),
+            folders = listOf("相册", "待分类", "画集", "画集/作者-项目"),
+        )
+        assertEquals(listOf("作者-项目"), state.folderRows.map { it.folder.name })
+        assertTrue("相册的文件不属于画集", state.folderMedia.isEmpty())
+    }
+
+    @Test
+    fun `the collection top level has no crumb of its own`() {
+        // `画集` is where browsing starts, not somewhere to navigate up into, so there is no step
+        // back to it and no crumb for it.
+        val root = state(folders = listOf("画集", "画集/作者-项目"))
+        assertTrue(root.breadcrumb.isEmpty())
+
+        val inside = state(folders = listOf("画集", "画集/作者-项目"), openFolder = "画集/作者-项目")
+        assertEquals(listOf("作者-项目"), inside.breadcrumb.map { it.name })
     }
 
     @Test

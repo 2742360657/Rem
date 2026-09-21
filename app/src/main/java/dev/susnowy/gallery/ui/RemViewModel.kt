@@ -172,7 +172,13 @@ data class UiState(
      * recomposition of the grid, which on a large collection is work the user can feel.
      */
     private val allFolders: List<Folder> by lazy {
-        (folders + entries.mapNotNull { it.parentFolder }).distinct().map(::Folder)
+        // `画集` itself is included as the tree's root. It is what the collection browses from, so
+        // it has to be a key here even when the index has not reported it — during a pass, entries
+        // arrive before their folder list does. It is never offered as a row of its own (see
+        // `folderRows`), so it is a root and not a navigable child.
+        (folders + entries.mapNotNull { it.parentFolder } + COLLECTION)
+            .distinct()
+            .map(::Folder)
     }
 
     /**
@@ -236,12 +242,21 @@ data class UiState(
      */
     private val folderRowsMemo = Memo<List<FolderRow>>()
 
+    /**
+     * The folder whose contents the collection is showing.
+     *
+     * The top of the collection is the `画集` folder itself, not the Library root. Rooting it at the
+     * root is what put `相册` and `待分类` on screen as if they were projects: they are the Library's
+     * other sections, and one of them has its own tab.
+     */
+    private val scopeFolder: String get() = openFolder ?: COLLECTION
+
     val folderRows: List<FolderRow>
         get() = folderRowsMemo(entries, folders, openFolder, search, sortAscending) {
             val query = search.trim()
-            // The top level has no path of its own; its children are the folders with no parent.
-            val parent = openFolder.orEmpty()
-            val rows = childFolders[parent].orEmpty().asSequence()
+            val rows = childFolders[scopeFolder].orEmpty().asSequence()
+                // The section is the place being browsed, never one of the things inside it.
+                .filter { it.path != COLLECTION }
                 .filter { query.isEmpty() || it.name.contains(query, ignoreCase = true) }
                 .map { folder ->
                     val counts = subtreeCounts[folder.path] ?: IntArray(2)
@@ -257,26 +272,39 @@ data class UiState(
             if (sortAscending) rows else rows.asReversed()
         }
 
-    /** True when the current level shows folders instead of media. */
+    /** True when the current level has folders in it. */
     val showsFolders: Boolean get() = folderRows.isNotEmpty()
 
     private val folderMediaMemo = Memo<List<Entry>>()
 
-    /** The media of the current level, shown only when that level has no subfolders. */
+    /**
+     * The files directly in the current folder.
+     *
+     * Shown whether or not the level also has folders in it. Hiding them was worse than untidy: a
+     * project that keeps its pictures in a subfolder *and* has some at its top level showed the
+     * folder and silently dropped the rest, so files were in the Library and nowhere on screen.
+     * The two are listed together instead — folders first, then the media — which is also what
+     * makes "this folder has both" visible rather than something to discover by opening things.
+     */
     val folderMedia: List<Entry>
-        get() {
-            val folder = openFolder ?: return emptyList()
-            if (showsFolders) return emptyList()
-            return folderMediaMemo(entries, openFolder, search, filter, sortMode, sortAscending) {
-                val query = search.trim()
-                val media = entriesIn(folder)
-                    .filter { filter.accepts(it.mediaType) }
-                    .filter { query.isEmpty() || it.fileName.contains(query, ignoreCase = true) }
-                media.sortedWith(mediaOrder())
-            }
+        get() = folderMediaMemo(entries, openFolder, search, filter, sortMode, sortAscending) {
+            val query = search.trim()
+            // Direct children only: the collection's top level holds folders, and browsing into one
+            // shows that folder's own files. Nothing deeper is listed here — the viewer's rule is
+            // that paging stays inside one folder.
+            val media = entriesIn(scopeFolder)
+                .filter { isInCollection(it.path) }
+                .filter { filter.accepts(it.mediaType) }
+                .filter { query.isEmpty() || it.fileName.contains(query, ignoreCase = true) }
+            media.sortedWith(mediaOrder())
         }
 
-    /** Breadcrumbs from the first level down to the open folder, excluding the `画集` root. */
+    /**
+     * Where the user is below the collection's top level.
+     *
+     * Empty at the top: `画集` is not somewhere to navigate to, and offering it as a crumb made the
+     * one folder the user cannot go "up" into a button that did nothing useful.
+     */
     val breadcrumb: List<Folder>
         get() {
             val folder = currentFolder ?: return emptyList()
@@ -285,6 +313,10 @@ data class UiState(
 
     /** The files directly inside one folder. Grouped once per state, not scanned per call. */
     private fun entriesIn(folderPath: String): List<Entry> = entriesByParent[folderPath].orEmpty()
+
+    /** True when a path is a file below `画集/`, rather than one of the Library's other sections. */
+    internal fun isInCollection(path: String): Boolean =
+        path.startsWith(COLLECTION_PREFIX) && path.indexOf('/', COLLECTION_PREFIX.length) > 0
 
     /**
      * What「序号/名称/拍摄时间/修改时间/文件大小」mean for a list of files, in the chosen direction.
@@ -1173,13 +1205,17 @@ private class Memo<T> {
 /** `作者名称-项目名称` split for a row label, or null when the folder does not follow the rule. */
 fun authorOf(folder: Folder): String? = splitProjectFolder(folder.name)?.first
 
-/** The second line of a folder row: what is inside, without promising an order. */
+/**
+ * The second line of a folder row: what is inside.
+ *
+ * A folder holding both is no longer worth a remark of its own — opening it shows the folders and
+ * the files together, so there is nothing the user has to know in advance.
+ */
 fun FolderRow.detail(): String = buildString {
     if (folderCount > 0) append("$folderCount 个文件夹")
     if (mediaCount > 0) {
         if (isNotEmpty()) append(" · ")
         append("$mediaCount 个媒体文件")
     }
-    if (mixed) append(" · 两者都有，先显示文件夹")
     if (isEmpty()) append("空文件夹")
 }
