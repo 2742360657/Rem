@@ -25,6 +25,10 @@
 
 接入后先展示缓存，再进行后台增量扫描；扫描只读取 `size` 或修改时间变化的文件。应用不修改任何媒体文件。
 
+所有 provider 调用都在 `Dispatchers.IO` 上：目录枚举、元数据读取和索引读写都一样。界面层没有任何
+provider 调用——缩略图与查看器的 document URI 由 `rootId + 相对路径` 直接推导（见 B4），因此组合
+一帧的时间里不会等 U 盘。
+
 ## 画集多级目录与扫描（已实现）
 
 2026-09-20 晚确认并实现的调整，逐项对应：
@@ -34,12 +38,12 @@
 | `画集/` 支持多级目录，层级不限 | `scan/Scanner.kt` 用显式栈深度优先遍历，只读目录、不跟随符号链接式深挖 | 模拟器合成库：`画集/Alice-夏日合集/花絮/原图/raw_001.png` 等两层嵌套文件全部入索引 |
 | 命名自由，违规只报目录结构 | `Scanner.readFiles` 只报不支持的扩展名；第一层命名与 `相册/` 子文件夹仍报 | 3 条违规：`相册/不该有的子文件夹`、`画集/loose-file.jpg`、`画集/Bob-测试项目/notes.txt` |
 | 画集可选排序并记住选择 | `model/SortMode` + `UiState.mediaOrder()`，选择存本机 `rem.library` 的 `sort_mode` | 模拟器点选后 `sort_mode=SIZE` 写入偏好；名称序实测 `1, 2, 10` |
-| 同层不混排 | `UiState.folderRows` / `folderMedia`：该层有子文件夹就只显示文件夹 | 行文案 `2 个文件夹 · 45 个媒体文件 · 两者都有，先显示文件夹` |
+| 同层文件夹与媒体一起显示 | `UiState.folderRows` 与 `folderMedia` 同时非空；`CollectionScreen` 把它们放进同一个 `LazyColumn`，文件夹在前 | 真机画集顶层与项目内均可见；行文案只报数量，不再写「先显示文件夹」 |
 | 扫描增量落盘、可中断续扫 | `ScanSink` 每 400 ms 或每个文件夹结束时上报；`RemViewModel` 在回调里写 `index.json` | 模拟器一次全新扫描上报 3 次（已读 1 → 205 → 312），索引在扫描结束前即已落盘 |
 | 扫描进度可见 | `UiState.scanProgress` + `App.kt` 的 `ScanningBar`，显示 `正在扫描 N / M` | 上报序列见上；`M` 在目录列举后由 200 增长到 312 |
 | 文件夹内计数含下层 | `UiState.subtreeCounts`，每个状态只算一次 | 顶层项目行显示 45 个媒体文件（含两层子文件夹里的 25 个） |
 
-**元数据读取并发**：文件夹内 6 路并发（`Dispatchers.IO.limitedParallelism(6)`）。模拟器 316 文件的合成库全新扫描 **938–2097 ms**；真机（S 盘、未知规模）此前为小时级，但**并发后的真机数字尚未测得**——真机不在手边，这一条是未验证。
+**元数据读取并发**：已从 6 路降到 **2 路**（`Scan.WORKERS`）。真机实测 6 路会把 U 盘打满（`/proc/pressure/io` full avg10 16.6），每个 worker 都排在 provider 锁后面，结果是连续 ANR 而不是更快。真机补齐速率约 **20 文件/秒**（4.8 万文件量级下每小时约 7 万），这是当前最大的时间开销，见 4.2 的缩减方向。
 
 **缩略图**：仍在本机 `cacheDir/thumbnails`，磁盘缓存不设实际上限（Coil 上限设为 512 GB，等于不限）。曾尝试写入 `.gallery/thumbs/`，被 Android 11+ 分区存储以 `EPERM` 拒绝，详见上文说明。
 
@@ -91,6 +95,49 @@
 **已知代价（必须让用户知道）**：续扫不重走已完成的项目，所以**在已有项目文件夹里新增的文件，
 在手机断开期间不会被发现**。要看到这类新增，用「库操作 → 重建索引」。这是刻意的取舍：整库枚举
 是唯一不可缩短的一步，每次刷新都重走等于回到「永远扫不完」。
+
+## 真机联调与主线程阻塞（2026-09-21）
+
+真机（Xiaomi 23127PN0CC / Android 16，S 盘库 4.8 万文件）上出现的「白屏 / 闪退 / 内容黑 / 内容不全」
+是**四个互不相关**的问题，全部与缓存和排序无关：
+
+| 编号 | 问题 | 真机证据 |
+| --- | --- | --- |
+| B1 | **整树遍历跑在主线程** | 系统 ANR 归因直接写 `Pass.readAlbum -> LibraryTree.list -> childrenOf -> ContentResolver.query`；遍历因 UI 无响应被杀，索引只剩走过的部分，表现为「内容不全」 |
+| B2 | `openAttachedLibrary` 在 ViewModel 构造里同步做 provider 调用 | MIUI 抓到主线程停在 `DocumentsContractApi19.exists` 5 秒并判 HANG，一帧未画，表现为纯白屏 |
+| B3 | 库树不是 Compose 状态 | 打开库改为异步后首次组合拿到 null，`remember(context, tree)` 把「永远 null」缓存住，缩略图与查看器全空 |
+| B4 | 推导 document URI 时漏编码路径分隔符 | 用 `Uri.encode(path, "/")` 保留 `/`，而 provider 的 document ID 是整串编码（`%2F`），于是被拒：`Permission Denial … requires an obtain access using ACTION_OPEN_DOCUMENT`；文件夹路径不含斜杠，所以只有文件暴露，表现为内容全黑 |
+
+修法：遍历与元数据分批都移到 `Dispatchers.IO`；`openAttachedLibrary` 改为 suspend 并把 `name`（也是
+document 查询）一并挪进 IO 块；树随 `UiState` 发布；URI 一律经
+`DocumentsContract.buildDocumentUriUsingTree("$rootId/$relativePath")` 构造，缩略图与查看器的组合阶段
+**零 provider 调用**。
+
+**已验证**：启动 385 ms 且主线程只做日志；翻网格、进画集、开关查看器期间 HANG/ANR 计数为 0；相册
+缩略图与查看器（含 EXIF）正常显示；单测 91 用例 0 失败。
+
+**本轮未解决（下次从这里开始）**：
+
+- 索引涨到 **57998 条 / 8.6 MB**（`相册` 之外还吃进了 `画集/盯真` 这类 5 万文件的分支），元数据待补
+  5.2 万条，U 盘在补齐期间被占满，缩略图加载被挤到几乎不动。缩略图空白与权限无关
+  （`requires that you obtain access` 计数为 0）。**方向**：按 4.2 让画集不读拍摄时间/地点，补齐量将从
+  5 万余条降到相册的约 2 千条。
+- 真机重装后出现过一段 `Permission Denial`（09:31:39），随后 `dumpsys activity permissions` 显示授权
+  正常（`mode=0x3 persistable=0x3 persisted=0x3`），当前会话拒绝计数为 0；**重装后授权是否短暂失效未定论**，
+  下次需在重装后立刻验证一次读取。
+- `openAttachedLibrary` 仍会被并发调用两次（`init` 与 `refreshIfVolumeAppeared` 各一次），重复解析
+  8.6 MB 索引；不影响正确性，待收。
+
+## 本轮产品改动（2026-09-21）
+
+- **画集顶层不再列出「相册」**：根因是 `Folder.parent` 把第一层文件夹当成无父节点，于是它们和 Library
+  的其他顶层目录一起挂在空键下，取「画集的子项」就取到了 `相册`。现在 `parent` 指向所属区块
+  （`画集/作者-项目` 的父是 `画集`），树的每一层形状一致。
+- **同层文件夹与媒体一起显示**：原先两者互斥，导致「有子文件夹的项目里，自己的图片在任何位置都看不到」。
+  现在先列文件夹再列该层媒体，共用一个滚动区。
+- **新增「紧凑网格」视图**：与「网格」「列表」并列，单元格更小、间距更紧，用于一屏看更多。
+- **侧边栏随当前位置变化**：相册只给视图与方向（相册排序固定），画集给视图与排序；顶层排的是项目文件夹，
+  因此只提供名称/序号两种；并且侧边栏在任何位置都可用（原先把抽屉手势限制在画集顶层之外）。
 
 
 ## 内置查看器（已实现）
