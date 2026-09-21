@@ -36,7 +36,8 @@ class LibraryTree(private val context: Context, val treeUri: Uri) {
      */
     private val listings = mutableMapOf<String, Map<String, Child>>()
 
-    /** The picked folder itself, resolved by the one document ID that is certainly correct. */
+    /**
+     * The picked folder itself, resolved by the one document ID that is certainly correct. */
     private val rootChild: Child? by lazy { query(documentsUri(rootId), "", rootId) }
 
     /** False once the grant is revoked or the volume is gone. */
@@ -53,11 +54,32 @@ class LibraryTree(private val context: Context, val treeUri: Uri) {
     /** The provider's ID for the picked folder. Logged once per scan; the whole scheme rests on it. */
     fun rootDocumentId(): String = rootId
 
-    /** The document URI an entry's path resolves to, for opening and thumbnail requests. */
-    fun documentUri(relativePath: String): Uri =
-        navigate(relativePath)?.uri ?: documentsUri(rootId)
+    /**
+     * The document URI of a path, without ever touching the provider.
+     *
+     * A document ID in this tree is the root's ID and the path within it, confirmed on device in
+     * the provider's own error text (`docId='FC37-D01F:Rem-lib/相册'` for the folder whose path is
+     * `相册`). Deriving the URI from that costs a string concatenation, which is what makes it
+     * usable while composing a frame: resolving the path instead walks it a level at a time with a
+     * Binder round-trip each, and on a real device that put the main thread inside `childrenOf` for
+     * five seconds — the hang, and the white screen that came with it.
+     *
+     * Built through [DocumentsContract.buildDocumentUriUsingTree], the same call the provider's own
+     * URIs are built with, because the encoding is the whole trick: the document ID is escaped as
+     * one unit, so the separators inside it become `%2F`. Escaping the path while leaving `/` as a
+     * separator produces a URI the provider does not recognise and refuses — measured on device,
+     * `相册/IMG_0001.jpg` written that way came back as `Permission Denial … requires that you
+     * obtain access using ACTION_OPEN_DOCUMENT`, and every thumbnail and viewer page was empty.
+     * Folders hid it, because a folder's path contains no slash.
+     */
+    fun uriFor(relativePath: String): Uri = documentsUri("$rootId/$relativePath")
 
-    /** Resolves one path, or `null` when it does not exist. */
+    /**
+     * Resolves one path, or `null` when it does not exist.
+     *
+     * Never call this while composing — it walks the tree and every level is a provider round-trip.
+     * While composing, [uriFor] is the one to use: it derives the URI without asking anyone.
+     */
     fun find(relativePath: String): Child? {
         if (relativePath.isBlank()) return rootChild
         return navigate(relativePath)

@@ -15,6 +15,7 @@ import dev.susnowy.gallery.logging.RemLog
 import dev.susnowy.gallery.model.COLLECTION
 import dev.susnowy.gallery.model.Entry
 import dev.susnowy.gallery.model.Folder
+import dev.susnowy.gallery.model.Index
 import dev.susnowy.gallery.model.MediaType
 import dev.susnowy.gallery.model.NATURAL_ORDER
 import dev.susnowy.gallery.model.SortMode
@@ -38,6 +39,21 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
+/**
+ * What the provider answered when the Library was opened, gathered off the main thread.
+ *
+ * A carrier for the whole set so the calls happen in one place and one hop, rather than each being
+ * made where it is used — which is how they ended up on the composition thread.
+ */
+private data class OpenProbe(
+    val readable: Boolean,
+    val rootId: String,
+    val name: String,
+    val rootNames: List<String>,
+    val cached: Index?,
+    val hidden: Boolean,
+)
 
 /** The three destinations in the bottom bar. */
 enum class Tab(val title: String, val icon: ImageVector) {
@@ -76,6 +92,15 @@ data class UiState(
     val attached: Boolean = false,
     /** The attached tree, needed to build thumbnail requests and to open files. */
     val treeUri: Uri? = null,
+    /**
+     * The open tree itself, published as state so the UI notices when it arrives.
+     *
+     * The screen needs it to turn a path into a URI, and opening a Library is asynchronous now, so
+     * on the first composition there is no tree yet. A plain property would leave the UI holding
+     * "no tree" for good: Compose has nothing to observe, never recomposes, and every thumbnail and
+     * viewer page stays empty.
+     */
+    val tree: LibraryTree? = null,
     val libraryName: String = "",
     val tab: Tab = Tab.ALBUM,
     val filter: MediaFilter = MediaFilter.ALL,
@@ -368,7 +393,9 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
         // Started here rather than left to first use: `requestWrite` only posts to the channel, so
         // nothing else would ever touch the lazy value and the drain loop would never run.
         writer
-        openAttachedLibrary()
+        // Launched, never called directly. The work is provider calls, and running them here — as
+        // the constructor used to — means the first frame waits for the volume.
+        viewModelScope.launch { openAttachedLibrary() }
         refreshThumbnailSize()
     }
 
@@ -379,7 +406,7 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
         store.attach(treeUri)
         resetLibraryState()
         _state.update { UiState(sortMode = it.sortMode) }
-        openAttachedLibrary()
+        viewModelScope.launch { openAttachedLibrary() }
     }
 
     fun detach() {
@@ -592,8 +619,14 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** The URI of one Library file, for the viewer and for handing a file to another app. */
-    fun documentUri(entry: Entry): Uri? = tree?.find(entry.path)?.uri
+    /**
+     * The URI of one Library file, for the viewer and for thumbnails.
+     *
+     * Safe to call while composing: it reads the recorded URI or derives it from the path, and
+     * never asks the provider. Resolving a path here instead walked it with a round-trip per level,
+     * which is what froze the app on a real device.
+     */
+    fun documentUri(entry: Entry): Uri? = tree?.uriFor(entry.path)
 
     /** Opens one file with whatever system app claims its type. */
     fun open(entry: Entry) {
@@ -768,15 +801,24 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
                 // interrupted now leaves the previous cache untouched; only real progress overwrites.
                 // Listing only: no media file is opened, so a Library of tens of thousands of files
                 // becomes browsable in seconds. Capture times follow in the metadata pass below.
-                val result = Scanner(getApplication(), current)
-                    .scan(
-                        cached = cachedSnapshot,
-                        sink = sink,
-                        readMetadata = false,
-                        // Where the previous pass stopped. Projects listed here are already in
-                        // `known`, so the pass walks only what was never reached.
-                        doneProjects = doneProjects.toList(),
-                    )
+                //
+                // Moved off the main dispatcher, which is where this whole walk used to run. It is
+                // hundreds of provider round-trips over a USB volume, and doing it on the thread
+                // that answers input is what produced the ANR the system attributed to
+                // `Pass.readAlbum -> LibraryTree.list -> childrenOf -> ContentResolver.query` —
+                // with the UI frozen for the minutes the walk needed before it was killed, leaving
+                // an index holding only the part it had reached.
+                val result = withContext(Dispatchers.IO) {
+                    Scanner(getApplication(), current)
+                        .scan(
+                            cached = cachedSnapshot,
+                            sink = sink,
+                            readMetadata = false,
+                            // Where the previous pass stopped. Projects listed here are already in
+                            // `known`, so the pass walks only what was never reached.
+                            doneProjects = doneProjects.toList(),
+                        )
+                }
                 // The pass is the only thing that has actually looked at 画集, so its list of what
                 // is there replaces the resume set. Building that set any other way cannot work:
                 // the old record may name a project that has been deleted (which would keep being
@@ -884,7 +926,11 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
             val scanner = Scanner(getApplication(), current)
             var read = 0
             ordered.chunked(METADATA_BATCH).forEach { batch ->
-                val readBatch = runCatching { scanner.readMetadata(batch) }.getOrNull() ?: return@launch
+                // Off the main dispatcher for the same reason as the listing walk: each batch opens
+                // files on the volume, and the coroutine this runs in is main-dispatched.
+                val readBatch = withContext(Dispatchers.IO) {
+                    runCatching { scanner.readMetadata(batch) }.getOrNull()
+                } ?: return@launch
                 readBatch.forEach { entry ->
                     known[entry.path] = entry
                     metadataDone += entry.path
@@ -964,8 +1010,18 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
         )
     }
 
-    /** Shows the cached index immediately, then starts the refresh in the background. */
-    private fun openAttachedLibrary() {
+    /**
+     * Shows the cached index, then continues whatever reading is outstanding.
+     *
+     * Everything in here talks to the provider, and every one of those calls can block for as long
+     * as the volume takes — on a USB drive that is often seconds, and when the drive is being
+     * inserted or removed it can be longer than any frame will wait. It used to be called straight
+     * from the constructor, which put all of it on the composition thread: measured on a real
+     * device, the system caught the main thread inside `DocumentsContractApi19.exists` for five
+     * seconds while the first frame was being composed, so nothing was ever drawn and the app was
+     * simply a white screen. Suspending, so no caller can accidentally do that again.
+     */
+    private suspend fun openAttachedLibrary() {
         val current = store.tree()
         if (current == null) {
             RemLog.info(SCOPE, "没有已接入的 Library")
@@ -979,18 +1035,31 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         tree = current
-        val readable = current.isAvailable
-        val rootId = current.rootDocumentId()
-        RemLog.info(SCOPE, "打开已接入的 Library root='$rootId' 可读=$readable 名称='${current.name}'")
-
-        // The root listing is what the whole scan rests on, so record exactly what the provider
-        // returns for it. An empty list here explains an empty screen everywhere else.
-        val rootNames = runCatching { current.list("").map { it.name } }
-            .onFailure { RemLog.error(SCOPE, "根目录列举失败", it) }
-            .getOrDefault(emptyList())
+        // One hop off the composition thread for every provider call this needs. The name is in
+        // here too: it looks like a plain property and is another document query, which is exactly
+        // how it ended up on the main thread inside the log line below.
+        val probe = withContext(Dispatchers.IO) {
+            val names = runCatching { current.list("").map { it.name } }
+                .onFailure { RemLog.error(SCOPE, "根目录列举失败", it) }
+                .getOrDefault(emptyList())
+            OpenProbe(
+                readable = runCatching { current.isAvailable }.getOrDefault(false),
+                rootId = current.rootDocumentId(),
+                name = current.name,
+                rootNames = names,
+                cached = store.readIndex(current),
+                hidden = current.isSystemGalleryHidden(),
+            )
+        }
+        val readable = probe.readable
+        val rootNames = probe.rootNames
+        val cached = probe.cached
+        RemLog.info(
+            SCOPE,
+            "打开已接入的 Library root='${probe.rootId}' 可读=$readable 名称='${probe.name}'",
+        )
         RemLog.info(SCOPE, "根目录直属项 ${rootNames.size}：${rootNames.joinToString("、")}")
 
-        val cached = store.readIndex(current)
         known.clear()
         metadataDone.clear()
         doneProjects.clear()
@@ -1007,14 +1076,15 @@ class RemViewModel(application: Application) : AndroidViewModel(application) {
             it.copy(
                 attached = true,
                 treeUri = current.treeUri,
-                libraryName = current.name,
+                tree = current,
+                libraryName = probe.name,
                 entries = known.values.toList(),
                 folders = folders,
                 violations = violations,
                 sortMode = store.sortMode,
                 viewMode = store.viewMode,
                 sortAscending = store.sortAscending,
-                hideFromSystemGallery = current.isSystemGalleryHidden(),
+                hideFromSystemGallery = probe.hidden,
                 libraryReadable = readable,
             )
         }

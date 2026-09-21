@@ -97,7 +97,12 @@ fun RemApp(viewModel: RemViewModel = viewModel()) {
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         uri?.let(viewModel::attach)
     }
-    val thumbnails = rememberThumbnails(context, state.treeUri)
+    // The scan's own tree, so the listing and URI caches behind it are already warm. Building a
+    // second one here meant a provider round-trip per visible cell while composing.
+    // Read from the state, not from a plain accessor: the tree is built on a background thread
+    // when the Library opens, and reading it outside composition state caches the null it had
+    // first, leaving every thumbnail empty.
+    val thumbnails = rememberThumbnails(context, state.tree)
 
     // A removable volume answers with an empty listing for a moment after it is mounted. Watching
     // for that moment means inserting the drive is enough — no detach and re-attach.
